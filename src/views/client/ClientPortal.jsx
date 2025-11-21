@@ -789,15 +789,19 @@ export default function ClientPortal() {
                         <Button variant="text" size="small" onClick={() => handleClearScore(call.id)}>
                           Clear Score
                         </Button>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <IconButton
-                            key={star}
-                            color={call.rating >= star ? 'primary' : 'default'}
-                            onClick={() => handleScoreCall(call.id, star)}
-                          >
-                            ★
-                          </IconButton>
-                        ))}
+                        <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <IconButton
+                              key={star}
+                              size="small"
+                              color={call.rating >= star ? 'primary' : 'default'}
+                              onClick={() => handleScoreCall(call.id, star)}
+                              sx={{ p: 0.5 }}
+                            >
+                              ★
+                            </IconButton>
+                          ))}
+                        </Box>
                       </Stack>
                     </Stack>
                   </CardContent>

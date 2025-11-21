@@ -34,7 +34,7 @@ root.render(
     <App />
   </ConfigProvider>
 );
-
+console.log('MONDAY_API_TOKEN loaded:', !!process.env.MONDAY_API_TOKEN);
 // If you want your app to work offline and load faster, you can change
 // unregister() to register() below. Note this comes with some pitfalls.
 // Learn more about service workers: https://bit.ly/CRA-PWA

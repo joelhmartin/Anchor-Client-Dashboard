@@ -32,6 +32,12 @@ function getToken(settings) {
 async function mondayRequest({ query: gql, variables = {}, settings }) {
   const token = getToken(settings);
   if (!token) throw new Error('Monday token not configured');
+
+  console.log('[monday:request]', {
+    query: gql.split('\n')[0].trim().slice(0, 100) + '...',
+    variables
+  });
+
   const resp = await axios.post(
     'https://api.monday.com/v2',
     { query: gql, variables },
@@ -43,10 +49,22 @@ async function mondayRequest({ query: gql, variables = {}, settings }) {
       timeout: 15000
     }
   );
+
   if (resp.data?.errors) {
     const msg = resp.data.errors[0]?.message || 'Monday API error';
+    console.error('[monday:error]', {
+      errors: resp.data.errors,
+      query: gql.split('\n')[0].trim(),
+      variables
+    });
     throw new Error(msg);
   }
+
+  console.log('[monday:response]', {
+    dataKeys: Object.keys(resp.data?.data || {}),
+    data: resp.data?.data
+  });
+
   return resp.data?.data;
 }
 
@@ -57,9 +75,7 @@ export async function listBoards(settings) {
     variables: { limit: 200 }
   });
   const boards = Array.isArray(data?.boards) ? data.boards : [];
-  return boards
-    .filter((b) => b && b.id && b.name)
-    .map((b) => ({ id: String(b.id), name: b.name }));
+  return boards.filter((b) => b && b.id && b.name).map((b) => ({ id: String(b.id), name: b.name }));
 }
 
 export async function listGroups(boardId, settings) {
@@ -116,6 +132,13 @@ export function buildRequestColumnValues({ settings, profile, form }) {
 }
 
 export async function createRequestItem({ boardId, groupId, name, columnValues, settings }) {
+  console.log('[monday:createItem] Attempting to create item', {
+    boardId,
+    groupId,
+    itemName: name,
+    columnValues
+  });
+
   const data = await mondayRequest({
     settings,
     query: `mutation ($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
@@ -131,26 +154,39 @@ export async function createRequestItem({ boardId, groupId, name, columnValues, 
       columnValues: JSON.stringify(columnValues)
     }
   });
+
+  console.log('[monday:createItem] Item created', {
+    itemId: data?.create_item?.id,
+    itemName: data?.create_item?.name
+  });
+
   return data?.create_item;
 }
 
 export async function listItemsByGroups({ boardId, groupIds = [], settings, columnIds = [] }) {
+  console.log('[monday:listItemsByGroups] Fetching items', {
+    boardId,
+    groupIds,
+    columnIds
+  });
+
   const data = await mondayRequest({
     settings,
-    query: `query ($boardId: [ID!], $groupIds: [String], $columns: [String]) {
+    query: `query ($boardId: [ID!], $groupIds: [String]) {
       boards (ids: $boardId) {
         groups (ids: $groupIds) {
           id
           title
-          items {
-            id
-            name
-            column_values (ids: $columns) {
+          items_page (limit: 100) {
+            items {
               id
-              text
-              value
-              title
-              type
+              name
+              column_values {
+                id
+                text
+                value
+                type
+              }
             }
           }
         }
@@ -158,9 +194,23 @@ export async function listItemsByGroups({ boardId, groupIds = [], settings, colu
     }`,
     variables: {
       boardId: Number(boardId),
-      groupIds,
-      columns: columnIds.length ? columnIds : null
+      groupIds
     }
   });
-  return data?.boards?.[0]?.groups || [];
+
+  const groups = data?.boards?.[0]?.groups || [];
+
+  // Extract items from items_page wrapper
+  const shapedGroups = groups.map((g) => ({
+    id: g.id,
+    title: g.title,
+    items: g.items_page?.items || []
+  }));
+
+  console.log('[monday:listItemsByGroups] Groups fetched', {
+    groupCount: shapedGroups.length,
+    groups: shapedGroups.map((g) => ({ id: g.id, title: g.title, itemCount: g.items?.length || 0 }))
+  });
+
+  return shapedGroups;
 }

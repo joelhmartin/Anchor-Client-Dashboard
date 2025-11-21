@@ -19,7 +19,7 @@ import {
   createRequestItem,
   listItemsByGroups
 } from '../services/monday.js';
-import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache } from '../services/ctm.js';
+import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache, postSaleToCTM } from '../services/ctm.js';
 
 const router = express.Router();
 
@@ -578,7 +578,8 @@ router.post('/requests', async (req, res) => {
     });
 
     let mondayItem = null;
-    if (settings.monday_token && profile.monday_board_id && profile.monday_group_id) {
+    const hasMondayToken = process.env.MONDAY_API_TOKEN || settings.monday_token;
+    if (hasMondayToken && profile.monday_board_id && profile.monday_group_id) {
       const columnValues = buildRequestColumnValues({
         settings,
         profile,
@@ -600,7 +601,7 @@ router.post('/requests', async (req, res) => {
     } else {
       logEvent('requests:create', 'skipping monday submission (missing config)', {
         user: targetUserId,
-        hasToken: !!settings.monday_token,
+        hasToken: !!(process.env.MONDAY_API_TOKEN || settings.monday_token),
         boardId: profile.monday_board_id || null,
         groupId: profile.monday_group_id || null
       });
@@ -637,8 +638,23 @@ router.get('/requests', async (req, res) => {
     const profile = (await query(`SELECT * FROM client_profiles WHERE user_id = $1`, [targetUserId])).rows[0] || {};
     const local = (await query('SELECT * FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [targetUserId])).rows;
 
-    if (settings.monday_token && profile.monday_board_id) {
+    const hasMondayToken = process.env.MONDAY_API_TOKEN || settings.monday_token;
+    
+    logEvent('requests:list', 'Fetching tasks', {
+      user: targetUserId,
+      hasMondayToken: !!hasMondayToken,
+      boardId: profile.monday_board_id || null,
+      activeGroupId: profile.monday_active_group_id || null,
+      completedGroupId: profile.monday_completed_group_id || null
+    });
+
+    if (hasMondayToken && profile.monday_board_id) {
       const groupIds = [profile.monday_active_group_id, profile.monday_completed_group_id].filter(Boolean);
+      
+      if (groupIds.length === 0) {
+        logEvent('requests:list', 'No group IDs configured', { user: targetUserId, boardId: profile.monday_board_id });
+      }
+      
       const groups = await listItemsByGroups({
         boardId: profile.monday_board_id,
         groupIds,
@@ -649,6 +665,13 @@ router.get('/requests', async (req, res) => {
           settings.monday_client_files_column_id
         ].filter(Boolean)
       });
+      
+      logEvent('requests:list', 'Monday groups fetched', {
+        user: targetUserId,
+        groupCount: groups.length,
+        groupIds: groups.map(g => ({ id: g.id, title: g.title, itemCount: g.items?.length || 0 }))
+      });
+      
       const tasks = [];
       groups.forEach((g) => {
         (g.items || []).forEach((item) => {
@@ -668,6 +691,16 @@ router.get('/requests', async (req, res) => {
           });
         });
       });
+      
+      logEvent('requests:list', 'Tasks processed', {
+        user: targetUserId,
+        totalTasks: tasks.length,
+        byGroup: tasks.reduce((acc, t) => {
+          acc[t.group_id] = (acc[t.group_id] || 0) + 1;
+          return acc;
+        }, {})
+      });
+      
       return res.json({
         requests: local,
         tasks,
@@ -677,6 +710,11 @@ router.get('/requests', async (req, res) => {
         }
       });
     }
+
+    logEvent('requests:list', 'Monday integration not configured', {
+      user: targetUserId,
+      reason: !hasMondayToken ? 'No Monday token' : 'No board ID configured'
+    });
 
     res.json({
       requests: local,
@@ -688,6 +726,7 @@ router.get('/requests', async (req, res) => {
     });
   } catch (err) {
     console.error('[requests:list]', err);
+    logEvent('requests:list', 'Error fetching requests', { error: err.message, stack: err.stack });
     res.status(500).json({ message: 'Unable to fetch requests' });
   }
 });
@@ -761,14 +800,107 @@ router.get('/calls', async (req, res) => {
 router.post('/calls/:id/score', async (req, res) => {
   const score = Number(req.body.score);
   const targetUserId = req.portalUserId || req.user.id;
-  await query('UPDATE call_logs SET score=$1 WHERE call_id=$2 AND user_id=$3', [score, req.params.id, targetUserId]);
-  res.json({ message: 'Score saved' });
+  const callId = req.params.id;
+  
+  if (!score || score < 1 || score > 5) {
+    return res.status(400).json({ message: 'Invalid score. Must be between 1 and 5.' });
+  }
+  
+  try {
+    // Save score locally
+    await query('UPDATE call_logs SET score=$1 WHERE call_id=$2 AND user_id=$3', [score, callId, targetUserId]);
+    logEvent('calls:score', 'Score saved locally', { user: targetUserId, callId, score });
+    
+    // Get CTM credentials to post back to CallTrackingMetrics
+    const profileRes = await query(
+      'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
+      [targetUserId]
+    );
+    const profile = profileRes.rows[0] || {};
+    const credentials = {
+      accountId: profile.ctm_account_number,
+      apiKey: profile.ctm_api_key,
+      apiSecret: profile.ctm_api_secret
+    };
+    
+    // Post score to CTM if credentials are configured
+    if (credentials.accountId && credentials.apiKey && credentials.apiSecret) {
+      try {
+        const ctmResponse = await postSaleToCTM(credentials, callId, {
+          score,
+          conversion: 1,
+          value: 0
+        });
+        logEvent('calls:score', 'Score posted to CTM', { user: targetUserId, callId, score, ctmResponse });
+        res.json({ message: 'Score saved and synced to CallTrackingMetrics', rating: score });
+      } catch (ctmErr) {
+        logEvent('calls:score', 'CTM sync failed', { user: targetUserId, callId, error: ctmErr.message });
+        // Don't fail the request if CTM sync fails - score is still saved locally
+        res.json({ 
+          message: 'Score saved locally. Warning: Could not sync to CallTrackingMetrics.', 
+          rating: score,
+          warning: ctmErr.message 
+        });
+      }
+    } else {
+      logEvent('calls:score', 'CTM credentials not configured', { user: targetUserId, callId });
+      res.json({ message: 'Score saved (CallTrackingMetrics not configured)', rating: score });
+    }
+  } catch (err) {
+    console.error('[calls:score]', err);
+    logEvent('calls:score', 'Failed to save score', { user: targetUserId, callId, error: err.message });
+    res.status(500).json({ message: 'Unable to save score' });
+  }
 });
 
 router.delete('/calls/:id/score', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
-  await query('UPDATE call_logs SET score=NULL WHERE call_id=$1 AND user_id=$2', [req.params.id, targetUserId]);
-  res.json({ message: 'Score cleared' });
+  const callId = req.params.id;
+  
+  try {
+    // Clear score locally
+    await query('UPDATE call_logs SET score=NULL WHERE call_id=$1 AND user_id=$2', [callId, targetUserId]);
+    logEvent('calls:score', 'Score cleared locally', { user: targetUserId, callId });
+    
+    // Get CTM credentials to clear score in CallTrackingMetrics
+    const profileRes = await query(
+      'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
+      [targetUserId]
+    );
+    const profile = profileRes.rows[0] || {};
+    const credentials = {
+      accountId: profile.ctm_account_number,
+      apiKey: profile.ctm_api_key,
+      apiSecret: profile.ctm_api_secret
+    };
+    
+    // Clear score in CTM if credentials are configured
+    if (credentials.accountId && credentials.apiKey && credentials.apiSecret) {
+      try {
+        const ctmResponse = await postSaleToCTM(credentials, callId, {
+          score: 0,
+          conversion: 0,
+          value: 0
+        });
+        logEvent('calls:score', 'Score cleared in CTM', { user: targetUserId, callId, ctmResponse });
+        res.json({ message: 'Score cleared and synced to CallTrackingMetrics' });
+      } catch (ctmErr) {
+        logEvent('calls:score', 'CTM clear failed', { user: targetUserId, callId, error: ctmErr.message });
+        // Don't fail the request if CTM sync fails - score is still cleared locally
+        res.json({ 
+          message: 'Score cleared locally. Warning: Could not sync to CallTrackingMetrics.',
+          warning: ctmErr.message 
+        });
+      }
+    } else {
+      logEvent('calls:score', 'CTM credentials not configured for clear', { user: targetUserId, callId });
+      res.json({ message: 'Score cleared (CallTrackingMetrics not configured)' });
+    }
+  } catch (err) {
+    console.error('[calls:score:clear]', err);
+    logEvent('calls:score', 'Failed to clear score', { user: targetUserId, callId, error: err.message });
+    res.status(500).json({ message: 'Unable to clear score' });
+  }
 });
 
 router.post('/calls/reset-cache', requireAdmin, async (_req, res) => {

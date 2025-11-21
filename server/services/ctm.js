@@ -409,3 +409,62 @@ export function buildCallsFromCache(rows = []) {
     .filter(Boolean)
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 }
+
+/**
+ * Posts a sale/score to CallTrackingMetrics for a specific call
+ * This marks the call as starred/scored in the CTM dashboard
+ * 
+ * @param {Object} credentials - CTM API credentials { accountId, apiKey, apiSecret }
+ * @param {string} callId - The CTM call ID
+ * @param {Object} saleData - Sale data to post { score, conversion, value, sale_date }
+ * @returns {Promise<Object>} Response from CTM API
+ */
+export async function postSaleToCTM(credentials, callId, saleData = {}) {
+  const { accountId, apiKey, apiSecret } = credentials;
+  
+  if (!accountId || !apiKey || !apiSecret) {
+    throw new Error('CallTrackingMetrics credentials not configured.');
+  }
+  
+  if (!callId) {
+    throw new Error('Missing call ID for CTM sale posting.');
+  }
+
+  const url = `${CTM_BASE}/api/v1/accounts/${encodeURIComponent(accountId)}/calls/${encodeURIComponent(callId)}/sale`;
+  
+  const payload = {
+    score: saleData.score || 5,
+    conversion: saleData.conversion !== undefined ? saleData.conversion : 1,
+    value: saleData.value || 0,
+    sale_date: saleData.sale_date || new Date().toISOString().slice(0, 10)
+  };
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${apiKey}:${apiSecret}`).toString('base64')}`
+      },
+      timeout: 20000
+    });
+    
+    return response.data;
+  } catch (err) {
+    const status = err.response?.status || 500;
+    const errorData = err.response?.data;
+    const message = errorData?.message || errorData?.error || err.message || 'Failed to update CallTrackingMetrics sale';
+    
+    console.error('[ctm:postSale] Failed to post sale to CTM', {
+      callId,
+      status,
+      error: message,
+      payload
+    });
+    
+    // Re-throw with more context
+    const error = new Error(`CTM API Error (${status}): ${message}`);
+    error.status = status;
+    error.data = errorData;
+    throw error;
+  }
+}

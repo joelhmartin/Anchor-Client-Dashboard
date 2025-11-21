@@ -57,7 +57,7 @@ async function maybeRunMigrations() {
   // eslint-disable-next-line no-console
   console.log('[migrations] ran init.sql');
 }
-
+console.log('MONDAY_API_TOKEN loaded:', !!process.env.MONDAY_API_TOKEN);
 maybeRunMigrations()
   .catch((err) => {
     console.error('[migrations] failed', err);
