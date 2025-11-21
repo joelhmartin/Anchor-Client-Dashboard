@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { query } from '../db.js';
+import { logOutgoingRequest, logOutgoingResponse } from '../logger.js';
 
 const DEFAULT_SETTINGS_KEY = 'monday';
 
@@ -32,6 +33,10 @@ function getToken(settings) {
 async function mondayRequest({ query: gql, variables = {}, settings }) {
   const token = getToken(settings);
   if (!token) throw new Error('Monday token not configured');
+  logOutgoingRequest('monday', {
+    query: gql?.replace(/\s+/g, ' ').trim().slice(0, 500),
+    variables
+  });
   const resp = await axios.post(
     'https://api.monday.com/v2',
     { query: gql, variables },
@@ -43,6 +48,11 @@ async function mondayRequest({ query: gql, variables = {}, settings }) {
       timeout: 15000
     }
   );
+  logOutgoingResponse('monday', {
+    status: resp.status,
+    errors: resp.data?.errors || null,
+    hasData: Boolean(resp.data?.data)
+  });
   if (resp.data?.errors) {
     const msg = resp.data.errors[0]?.message || 'Monday API error';
     throw new Error(msg);
@@ -69,6 +79,26 @@ export async function listGroups(boardId, settings) {
     variables: { boardId: Number(boardId) }
   });
   return data?.boards?.[0]?.groups || [];
+}
+
+async function resolveGroupIds(boardId, groupIds = [], settings) {
+  if (!groupIds?.length) return [];
+  const groups = await listGroups(boardId, settings);
+  if (!Array.isArray(groups) || !groups.length) return [];
+  const titleLookup = new Map();
+  groups.forEach((g) => {
+    if (!g) return;
+    if (g.id) titleLookup.set(String(g.id), String(g.id));
+    if (g.title) titleLookup.set(g.title.toLowerCase(), String(g.id));
+  });
+  return groupIds
+    .map((g) => {
+      if (!g) return null;
+      const asString = String(g).trim();
+      if (!asString) return null;
+      return titleLookup.get(asString) || titleLookup.get(asString.toLowerCase()) || null;
+    })
+    .filter(Boolean);
 }
 
 export async function listColumns(boardId, settings) {
@@ -135,6 +165,8 @@ export async function createRequestItem({ boardId, groupId, name, columnValues, 
 }
 
 export async function listItemsByGroups({ boardId, groupIds = [], settings, columnIds = [] }) {
+  const resolvedGroupIds = await resolveGroupIds(boardId, groupIds, settings);
+  if (!resolvedGroupIds.length) return [];
   const data = await mondayRequest({
     settings,
     query: `query ($boardId: [ID!], $groupIds: [String], $columns: [String]) {
@@ -158,7 +190,7 @@ export async function listItemsByGroups({ boardId, groupIds = [], settings, colu
     }`,
     variables: {
       boardId: Number(boardId),
-      groupIds,
+      groupIds: resolvedGroupIds,
       columns: columnIds.length ? columnIds : null
     }
   });
