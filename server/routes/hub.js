@@ -559,7 +559,7 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
 router.post('/requests', async (req, res) => {
   const { title, description, due_date, rush, person_override } = req.body || {};
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const targetUserId = req.portalUserId || req.user.id;
     const profile = (
       await query(
@@ -632,7 +632,7 @@ router.post('/requests', async (req, res) => {
 
 router.get('/requests', async (req, res) => {
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const targetUserId = req.portalUserId || req.user.id;
     const profile = (await query(`SELECT * FROM client_profiles WHERE user_id = $1`, [targetUserId])).rows[0] || {};
     const local = (await query('SELECT * FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [targetUserId])).rows;
@@ -808,7 +808,7 @@ router.put('/monday/settings', requireAdmin, async (req, res) => {
 
 router.get('/monday/boards', isAdminOrEditor, async (req, res) => {
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const boards = await listBoards(settings);
     res.json({ success: true, boards });
   } catch (err) {
@@ -818,7 +818,7 @@ router.get('/monday/boards', isAdminOrEditor, async (req, res) => {
 
 router.get('/monday/boards/:boardId/groups', isAdminOrEditor, async (req, res) => {
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const groups = await listGroups(req.params.boardId, settings);
     const shaped = Array.isArray(groups)
       ? groups.filter((g) => g && g.id && g.title).map((g) => ({ id: String(g.id), title: g.title }))
@@ -831,7 +831,7 @@ router.get('/monday/boards/:boardId/groups', isAdminOrEditor, async (req, res) =
 
 router.get('/monday/boards/:boardId/columns', isAdminOrEditor, async (req, res) => {
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const columns = await listColumns(req.params.boardId, settings);
     const shaped = Array.isArray(columns)
       ? columns.filter((c) => c && c.id && c.title).map((c) => ({ id: String(c.id), title: c.title, type: c.type }))
@@ -844,7 +844,7 @@ router.get('/monday/boards/:boardId/columns', isAdminOrEditor, async (req, res) 
 
 router.get('/monday/people', isAdminOrEditor, async (_req, res) => {
   try {
-    const settings = await getMondaySettings();
+    const settings = await getMondaySettings({ includeToken: true });
     const people = await listPeople(settings);
     const shaped = Array.isArray(people)
       ? people.filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: p.name, email: p.email }))

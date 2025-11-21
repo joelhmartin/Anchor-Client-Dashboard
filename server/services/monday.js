@@ -3,18 +3,18 @@ import { query } from '../db.js';
 
 const DEFAULT_SETTINGS_KEY = 'monday';
 
-export async function getMondaySettings() {
+export async function getMondaySettings({ includeToken = false } = {}) {
   const { rows } = await query('SELECT value FROM app_settings WHERE key=$1', [DEFAULT_SETTINGS_KEY]);
   const val = rows[0]?.value || {};
-  // Never return token to clients; token is sourced from env
-  if (val.monday_token) {
+  // Never return token to callers unless explicitly requested
+  if (!includeToken && val.monday_token) {
     delete val.monday_token;
   }
   return val;
 }
 
 export async function saveMondaySettings(value) {
-  const existing = await getMondaySettings();
+  const existing = await getMondaySettings({ includeToken: true });
   const merged = { ...existing, ...value };
   await query(
     `INSERT INTO app_settings (key, value, updated_at)
