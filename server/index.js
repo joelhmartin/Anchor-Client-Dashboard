@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import authRouter from './auth.js';
 import { query } from './db.js';
 import hubRouter from './routes/hub.js';
+import { logIncomingRequest, logHttp } from './logger.js';
 
 const app = express();
 const PORT = process.env.API_SERVER_PORT || 4000;
@@ -36,6 +37,20 @@ app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 app.use('/uploads', express.static(UPLOAD_DIR));
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  logIncomingRequest(req);
+  res.on('finish', () => {
+    logHttp('http:response', {
+      method: req.method,
+      path: req.originalUrl || req.url,
+      status: res.statusCode,
+      duration_ms: Date.now() - start
+    });
+  });
+  next();
+});
 
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
 app.use('/api/auth', authRouter);

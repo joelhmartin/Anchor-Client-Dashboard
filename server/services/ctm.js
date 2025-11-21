@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { logOutgoingRequest, logOutgoingResponse } from '../logger.js';
 
 const CTM_BASE = process.env.CTM_API_BASE || 'https://api.calltrackingmetrics.com';
 export const DEFAULT_AI_PROMPT =
@@ -293,7 +294,16 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
   const endDate = new Date().toISOString().slice(0, 10);
   const calls = [];
   for (let page = 1; page <= maxPages; page += 1) {
-    const resp = await axios.get(`${CTM_BASE}/api/v1/accounts/${accountId}/calls`, {
+    const url = `${CTM_BASE}/api/v1/accounts/${accountId}/calls`;
+    const params = {
+      per_page: perPage,
+      page,
+      order: 'desc',
+      start_date: startDate,
+      end_date: endDate
+    };
+    logOutgoingRequest('ctm', { url, params });
+    const resp = await axios.get(url, {
       params: {
         per_page: perPage,
         page,
@@ -307,6 +317,7 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
       },
       timeout: 20000
     });
+    logOutgoingResponse('ctm', { url, status: resp.status, page });
     const payload = Array.isArray(resp.data?.data?.calls)
       ? resp.data.data.calls
       : Array.isArray(resp.data?.calls)
@@ -319,6 +330,36 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
     if (payload.length < perPage) break;
   }
   return calls;
+}
+
+export async function pushScoreToCtm({ credentials, callId, sale = {} }) {
+  const { accountId, apiKey, apiSecret } = credentials || {};
+  if (!accountId || !apiKey || !apiSecret) {
+    throw new Error('CallTrackingMetrics credentials not configured.');
+  }
+  if (!callId) {
+    throw new Error('Missing call reference.');
+  }
+  const url = `${CTM_BASE}/api/v1/accounts/${accountId}/calls/${callId}/sale`;
+  const payload = {
+    score: typeof sale.score === 'number' ? sale.score : 5,
+    conversion: sale.conversion ?? 1,
+    value: sale.value ?? 0,
+    sale_date: sale.sale_date || new Date().toISOString().slice(0, 10)
+  };
+  logOutgoingRequest('ctm-sale', { url, payload });
+  const resp = await axios.post(url, payload, {
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${apiKey}:${apiSecret}`).toString('base64')}`,
+      'Content-Type': 'application/json'
+    },
+    timeout: 20000
+  });
+  logOutgoingResponse('ctm-sale', { url, status: resp.status });
+  if (resp.status >= 400) {
+    throw new Error(`CallTrackingMetrics responded with HTTP ${resp.status}`);
+  }
+  return resp.data || { status: resp.status };
 }
 
 export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT, existingRows = [] }) {

@@ -19,7 +19,7 @@ import {
   createRequestItem,
   listItemsByGroups
 } from '../services/monday.js';
-import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache } from '../services/ctm.js';
+import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache, pushScoreToCtm } from '../services/ctm.js';
 
 const router = express.Router();
 
@@ -760,15 +760,68 @@ router.get('/calls', async (req, res) => {
 
 router.post('/calls/:id/score', async (req, res) => {
   const score = Number(req.body.score);
+  if (Number.isNaN(score)) return res.status(400).json({ message: 'Invalid score' });
   const targetUserId = req.portalUserId || req.user.id;
   await query('UPDATE call_logs SET score=$1 WHERE call_id=$2 AND user_id=$3', [score, req.params.id, targetUserId]);
-  res.json({ message: 'Score saved' });
+
+  const profileRes = await query(
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    [targetUserId]
+  );
+  const credentials = {
+    accountId: profileRes.rows[0]?.ctm_account_number,
+    apiKey: profileRes.rows[0]?.ctm_api_key,
+    apiSecret: profileRes.rows[0]?.ctm_api_secret
+  };
+  if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
+    return res.status(400).json({ message: 'Score saved locally but CallTrackingMetrics credentials are missing.' });
+  }
+  try {
+    const ctm = await pushScoreToCtm({
+      credentials,
+      callId: req.params.id,
+      sale: { score, conversion: 1 }
+    });
+    res.json({ message: 'Score saved', ctm });
+  } catch (err) {
+    console.error('[calls:score:ctm]', err.response?.data || err.message);
+    res.status(502).json({
+      message: 'Score saved locally but failed to sync with CallTrackingMetrics.',
+      error: err.message
+    });
+  }
 });
 
 router.delete('/calls/:id/score', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   await query('UPDATE call_logs SET score=NULL WHERE call_id=$1 AND user_id=$2', [req.params.id, targetUserId]);
-  res.json({ message: 'Score cleared' });
+
+  const profileRes = await query(
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    [targetUserId]
+  );
+  const credentials = {
+    accountId: profileRes.rows[0]?.ctm_account_number,
+    apiKey: profileRes.rows[0]?.ctm_api_key,
+    apiSecret: profileRes.rows[0]?.ctm_api_secret
+  };
+  if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
+    return res.status(400).json({ message: 'Score cleared locally but CallTrackingMetrics credentials are missing.' });
+  }
+  try {
+    const ctm = await pushScoreToCtm({
+      credentials,
+      callId: req.params.id,
+      sale: { score: 0, conversion: 0, value: 0 }
+    });
+    res.json({ message: 'Score cleared', ctm });
+  } catch (err) {
+    console.error('[calls:clear:ctm]', err.response?.data || err.message);
+    res.status(502).json({
+      message: 'Score cleared locally but failed to sync with CallTrackingMetrics.',
+      error: err.message
+    });
+  }
 });
 
 router.post('/calls/reset-cache', requireAdmin, async (_req, res) => {
