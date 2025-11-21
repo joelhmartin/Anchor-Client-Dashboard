@@ -13,7 +13,7 @@ export async function getMondaySettings({ includeToken = false } = {}) {
   return val;
 }
 
-export async function saveMondaySettings(value) {
+export async function saveMondaySettings(value, { includeToken = false } = {}) {
   const existing = await getMondaySettings({ includeToken: true });
   const merged = { ...existing, ...value };
   await query(
@@ -22,7 +22,11 @@ export async function saveMondaySettings(value) {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
     [DEFAULT_SETTINGS_KEY, merged]
   );
-  return merged;
+  if (includeToken) return merged;
+
+  const filtered = { ...merged };
+  delete filtered.monday_token;
+  return filtered;
 }
 
 function getToken(settings) {
