@@ -713,7 +713,7 @@ router.get('/calls', async (req, res) => {
   if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
     const message = 'CallTrackingMetrics credentials not configured for this client.';
     if (cachedCalls.length) {
-      return res.status(400).json({ calls: cachedCalls, stale: true, message });
+      return respondWithCache({ stale: true, message });
     }
     return res.status(400).json({ message });
   }
@@ -760,7 +760,7 @@ router.get('/calls', async (req, res) => {
     console.error('[calls:list]', err);
     const message = err?.message || 'Unable to fetch latest calls. Showing cached data.';
     if (cachedCalls.length) {
-      return res.status(502).json({ calls: cachedCalls, stale: true, message });
+      return respondWithCache({ stale: true, message });
     }
     return res.status(502).json({ message });
   }
