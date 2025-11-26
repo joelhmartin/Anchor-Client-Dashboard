@@ -1,0 +1,134 @@
+import './loadEnv.js';
+
+import cors from 'cors';
+import express from 'express';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import { readFile } from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import cron from 'node-cron';
+
+import authRouter from './auth.js';
+import { query } from './db.js';
+import hubRouter from './routes/hub.js';
+import onboardingRouter from './routes/onboarding.js';
+
+const app = express();
+const PORT = process.env.API_SERVER_PORT || process.env.PORT || 4000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const RUN_MIGRATIONS = process.env.RUN_MIGRATIONS_ON_START ?? (NODE_ENV === 'production' ? 'true' : 'false');
+const UPLOAD_DIR = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads');
+const CLIENT_BUILD_DIR = path.resolve(process.cwd(), 'dist');
+
+const baseCspDirectives = {
+  'default-src': ["'self'"],
+  'script-src': ["'self'"],
+  'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
+  'img-src': ["'self'", 'data:'],
+  'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com']
+};
+
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:4173').split(',').map((o) => o.trim());
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true
+  })
+);
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: baseCspDirectives
+    }
+  })
+);
+
+app.use(express.json());
+app.use(cookieParser());
+app.use('/uploads', express.static(UPLOAD_DIR));
+
+if (NODE_ENV === 'production') {
+  app.use(express.static(CLIENT_BUILD_DIR));
+}
+
+app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
+app.use('/api/auth', authRouter);
+app.use('/api/hub', hubRouter);
+app.use('/api/onboarding', onboardingRouter);
+
+if (NODE_ENV === 'production') {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
+  });
+}
+
+app.use((err, req, res, _next) => {
+  console.error('[server-error]', err);
+  const message = NODE_ENV === 'production' ? 'Unexpected server error' : err.message || 'Unexpected server error';
+  res.status(500).json({ message });
+});
+
+async function maybeRunMigrations() {
+  if (String(RUN_MIGRATIONS).toLowerCase() !== 'true') return;
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const sqlPath = path.join(__dirname, 'sql', 'init.sql');
+  const sql = await readFile(sqlPath, 'utf8');
+  await query(sql);
+  // eslint-disable-next-line no-console
+  console.log('[migrations] ran init.sql');
+}
+
+// Automatic service redaction after 90 days
+async function redactOldServices() {
+  try {
+    const { rows } = await query(`
+      UPDATE client_services 
+      SET redacted_at = NOW()
+      WHERE redacted_at IS NULL 
+        AND agreed_date < NOW() - INTERVAL '90 days'
+      RETURNING id
+    `);
+    if (rows.length > 0) {
+      console.log(`[cron:redact-services] Redacted ${rows.length} service(s) older than 90 days`);
+    }
+  } catch (err) {
+    console.error('[cron:redact-services] Error:', err.message);
+  }
+}
+
+// Schedule daily at 2:00 AM
+cron.schedule(
+  '0 2 * * *',
+  () => {
+    console.log('[cron:redact-services] Running scheduled service redaction');
+    redactOldServices();
+  },
+  {
+    timezone: 'America/New_York' // Adjust to your timezone
+  }
+);
+
+maybeRunMigrations()
+  .catch((err) => {
+    console.error('[migrations] failed', err);
+    process.exit(1);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      // eslint-disable-next-line no-console
+      console.log(`API server listening on http://localhost:${PORT} (${NODE_ENV})`);
+    });
+  });

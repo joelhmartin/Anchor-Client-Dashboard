@@ -1,0 +1,40 @@
+TMJSleepWisconsin.com Website Deployment Instructions
+
+Overview
+
+This package includes the necessary files and instructions to deploy the TNT Dental website for TMJSleepWisconsin.com and its blog. Two installation options are provided: manual file/database setup or import via WP All-in-One Migration.
+
+Website Installation Instructions
+Main Website (tmjsleepwisconsin.com)
+
+Unzip tmjsleepwisconsin.com.zip.
+Upload the contents to the root directory of the new hosting environment.
+
+Blog (tmjsleepwisconsin.com/blog/)
+
+Option 1: Manual Installation
+
+Install a fresh copy of WordPress in the /blog/ directory.
+Unzip wp-content.zip.
+Replace the default /wp-content/ folder with the extracted one.
+Import the included SQL file into the blog's database using phpMyAdmin or your host's database management tool:
+admin_sleepwisconsin_2025-11-14_14-37-28.sql.zip
+Update wp-config.php as needed with new database credentials.
+
+Option 2: WP All-in-One Migration (Recommended)
+
+Install a fresh copy of WordPress in the /blog/ directory.
+Log in to the WordPress admin area.
+Install the All-in-One WP Migration plugin.
+Import the .wpress file:
+www-tmjsleepwisconsin-com-blog-20251114-203541-n3c9xzg3c5sv.wpress
+
+WordPress Admin Login
+Username: tntadmin
+Password: XmrNhE55nzzx4*o#
+Email: support@tntdental.com
+
+Notes
+
+Be sure to update permalinks and general settings after installation.
+Test all pages and blog links after deployment.
