@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
+import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
@@ -19,6 +20,7 @@ import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
 import LinearProgress from '@mui/material/LinearProgress';
 import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
 import Skeleton from '@mui/material/Skeleton';
 import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
@@ -42,15 +44,45 @@ import { deleteDocument, fetchDocuments, markDocumentViewed, uploadDocuments } f
 import { fetchTasksAndRequests, submitRequest } from 'api/requests';
 import { fetchCalls, scoreCall, clearCallScore, clearAndReloadCalls } from 'api/calls';
 import { fetchServices, agreeToService } from 'api/services';
+import {
+  fetchJourneys,
+  createJourney,
+  updateJourney,
+  addJourneyNote,
+  addJourneyStep,
+  updateJourneyStep,
+  deleteJourneyStep,
+  fetchJourneyTemplate,
+  saveJourneyTemplate,
+  applyJourneyTemplate
+} from 'api/journeys';
+import { CLIENT_SYMPTOM_PRESETS } from 'constants/clientPresets';
 
 const SECTION_CONFIG = [
   { value: 'profile', label: 'Profile' },
   { value: 'analytics', label: 'Analytics' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'leads', label: 'Leads' },
+  { value: 'journey', label: 'Client Journey' },
   { value: 'brand', label: 'Brand Assets' },
   { value: 'documents', label: 'Documents' }
 ];
+
+const JOURNEY_STATUS_OPTIONS = ['pending', 'in_progress', 'active_client', 'won', 'lost', 'archived'];
+
+const formatDateInputValue = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 16);
+};
+
+const formatDateDisplay = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString();
+};
 
 const fieldLabels = {
   business_name: 'Business Name',
@@ -125,6 +157,22 @@ export default function ClientPortal() {
   const [serviceDialogOpen, setServiceDialogOpen] = useState(false);
   const [serviceDialogLead, setServiceDialogLead] = useState(null);
   const [selectedServices, setSelectedServices] = useState([]);
+  const [journeys, setJourneys] = useState([]);
+  const [journeysLoading, setJourneysLoading] = useState(false);
+  const [symptomDialog, setSymptomDialog] = useState({ open: false, lead: null, journeyId: null, values: [] });
+  const [symptomSaving, setSymptomSaving] = useState(false);
+  const [stepDialog, setStepDialog] = useState({
+    open: false,
+    journeyId: null,
+    stepId: null,
+    form: { label: '', channel: '', message: '', offset_weeks: 0, due_at: '' }
+  });
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState([]);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [noteDialog, setNoteDialog] = useState({ open: false, journeyId: null, value: '' });
+  const [timelineDialog, setTimelineDialog] = useState({ open: false, journey: null });
 
   const handleCloseRequestDialog = () => {
     setRequestDialogOpen(false);
@@ -137,7 +185,7 @@ export default function ClientPortal() {
     setMessage({ type: '', text: '' });
   }, [tabParam]);
 
-  const triggerMessage = (type, text) => setMessage({ type, text });
+  const triggerMessage = useCallback((type, text) => setMessage({ type, text }), []);
   const currentSection = useMemo(
     () => SECTION_CONFIG.find((section) => section.value === activeTab) || SECTION_CONFIG[0],
     [activeTab]
@@ -205,6 +253,14 @@ export default function ClientPortal() {
       .finally(() => setTasksLoading(false));
   }, []);
 
+  const loadJourneys = useCallback(() => {
+    setJourneysLoading(true);
+    fetchJourneys()
+      .then((data) => setJourneys(Array.isArray(data) ? data : []))
+      .catch((err) => triggerMessage('error', err.message || 'Unable to load client journeys'))
+      .finally(() => setJourneysLoading(false));
+  }, [triggerMessage]);
+
   const loadCalls = useCallback(() => {
     setCallsLoading(true);
     fetchCalls()
@@ -262,7 +318,32 @@ export default function ClientPortal() {
       loadCalls();
       if (services.length === 0) loadServices();
     }
-  }, [activeTab, ensureAnalytics, profile, profileLoading, loadProfile, brand, loadBrand, documents, docsLoading, loadDocuments, requestsData, tasksLoading, loadRequests, calls, callsLoading, loadCalls, services, loadServices]);
+    if ((activeTab === 'journey' || activeTab === 'leads') && !journeys.length && !journeysLoading) {
+      loadJourneys();
+    }
+  }, [
+    activeTab,
+    ensureAnalytics,
+    profile,
+    profileLoading,
+    loadProfile,
+    brand,
+    loadBrand,
+    documents,
+    docsLoading,
+    loadDocuments,
+    requestsData,
+    tasksLoading,
+    loadRequests,
+    calls,
+    callsLoading,
+    loadCalls,
+    services,
+    loadServices,
+    journeys.length,
+    journeysLoading,
+    loadJourneys
+  ]);
 
   const handleProfileSave = async () => {
     if (!profileForm.display_name || !profileForm.email) {
@@ -508,13 +589,15 @@ export default function ClientPortal() {
       console.log('[handleAgreeToService] Service agreement created, now scoring call as 5 stars');
       
       // Auto-score the lead as 5 stars (booked appointment)
-      try {
-        const res = await scoreCall(serviceDialogLead.id, 5);
-        const nextRating = typeof res?.rating === 'number' ? res.rating : 5;
-        updateLocalCallRating(serviceDialogLead.id, nextRating);
-        console.log('[handleAgreeToService] Successfully scored call as 5 stars');
-      } catch (err) {
-        console.error('[handleAgreeToService] Failed to auto-score lead:', err);
+      if (serviceDialogLead.id) {
+        try {
+          const res = await scoreCall(serviceDialogLead.id, 5);
+          const nextRating = typeof res?.rating === 'number' ? res.rating : 5;
+          updateLocalCallRating(serviceDialogLead.id, nextRating);
+          console.log('[handleAgreeToService] Successfully scored call as 5 stars');
+        } catch (err) {
+          console.error('[handleAgreeToService] Failed to auto-score lead:', err);
+        }
       }
       
       triggerMessage('success', `Successfully converted ${serviceDialogLead.caller_name || 'lead'} to active client`);
@@ -524,6 +607,278 @@ export default function ClientPortal() {
       triggerMessage('error', err.message || 'Unable to process service agreement');
     } finally {
       setCallsLoading(false);
+    }
+  };
+
+  const upsertJourney = useCallback((journey) => {
+    if (!journey) return;
+    setJourneys((prev) => {
+      const index = prev.findIndex((item) => item.id === journey.id);
+      if (index === -1) return [journey, ...prev];
+      const clone = [...prev];
+      clone[index] = journey;
+      return clone;
+    });
+  }, []);
+
+  const handleOpenSymptomDialog = (lead, journey = null) => {
+    setSymptomDialog({
+      open: true,
+      lead: lead || null,
+      journeyId: journey?.id || null,
+      values: journey?.symptoms || []
+    });
+  };
+
+  const handleCloseSymptomDialog = () => {
+    setSymptomDialog({ open: false, lead: null, journeyId: null, values: [] });
+  };
+
+  const handleSymptomDialogChange = (_event, values) => {
+    setSymptomDialog((prev) => ({ ...prev, values }));
+  };
+
+  const handleSymptomDialogSave = async () => {
+    const selections = Array.from(
+      new Set(symptomDialog.values.map((value) => String(value || '').trim()).filter(Boolean))
+    );
+    if (!symptomDialog.lead && !symptomDialog.journeyId) {
+      handleCloseSymptomDialog();
+      return;
+    }
+    setSymptomSaving(true);
+    try {
+      let journey;
+      if (symptomDialog.journeyId) {
+        journey = await updateJourney(symptomDialog.journeyId, { symptoms: selections });
+      } else {
+        const payload = {
+          lead_call_id: symptomDialog.lead?.id,
+          client_name: symptomDialog.lead?.caller_name || symptomDialog.lead?.name || '',
+          client_phone: symptomDialog.lead?.caller_number || '',
+          client_email: symptomDialog.lead?.caller_email || '',
+          symptoms: selections
+        };
+        journey = await createJourney(payload);
+      }
+      upsertJourney(journey);
+      triggerMessage('success', 'Client journey updated');
+      handleCloseSymptomDialog();
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to save journey');
+    } finally {
+      setSymptomSaving(false);
+    }
+  };
+
+  const handleJourneyStatusChange = async (journeyId, changes) => {
+    try {
+      const journey = await updateJourney(journeyId, changes);
+      upsertJourney(journey);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to update journey');
+    }
+  };
+
+  const handleOpenNoteDialog = (journey) => {
+    setNoteDialog({ open: true, journeyId: journey.id, value: '' });
+  };
+
+  const handleCloseNoteDialog = () => {
+    setNoteDialog({ open: false, journeyId: null, value: '' });
+  };
+
+  const handleSaveJourneyNote = async () => {
+    const body = noteDialog.value?.trim();
+    if (!body || !noteDialog.journeyId) return;
+    try {
+      const journey = await addJourneyNote(noteDialog.journeyId, body);
+      upsertJourney(journey);
+      triggerMessage('success', 'Note added');
+      handleCloseNoteDialog();
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to add note');
+    }
+  };
+
+  const handleOpenTimelineDialog = (journey) => {
+    setTimelineDialog({ open: true, journey });
+  };
+
+  const handleCloseTimelineDialog = () => setTimelineDialog({ open: false, journey: null });
+
+  const handleJourneyAgreedToService = (journey) => {
+    const pseudoLead = {
+      id: journey.lead_call_key || journey.lead_call_id || `journey-${journey.id}`,
+      caller_name: journey.client_name || '',
+      caller_number: journey.client_phone || '',
+      caller_email: journey.client_email || '',
+      source: 'Client Journey',
+      region: '',
+      category: 'journey',
+      call_time: journey.created_at
+    };
+    setServiceDialogLead(pseudoLead);
+    setSelectedServices([]);
+    setServiceDialogOpen(true);
+  };
+
+  const getJourneyCurrentStep = (journey) => {
+    const sorted = (journey.steps || []).slice().sort((a, b) => a.position - b.position);
+    return sorted.find((step) => !step.completed_at) || null;
+  };
+
+  const handleMarkCurrentStepComplete = (journey) => {
+    const current = getJourneyCurrentStep(journey);
+    if (!current) return;
+    handleToggleStepComplete(journey.id, current);
+  };
+
+  const handleApplyTemplateToJourney = async (journeyId) => {
+    try {
+      const journey = await applyJourneyTemplate(journeyId);
+      upsertJourney(journey);
+      triggerMessage('success', 'Follow-up template applied');
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to apply template');
+    }
+  };
+
+  const handleOpenStepDialog = (journey, step = null) => {
+    setStepDialog({
+      open: true,
+      journeyId: journey.id,
+      stepId: step?.id || null,
+      form: {
+        label: step?.label || '',
+        channel: step?.channel || '',
+        message: step?.message || '',
+        offset_weeks: step?.offset_weeks ?? 0,
+        due_at: formatDateInputValue(step?.due_at)
+      }
+    });
+  };
+
+  const handleCloseStepDialog = () => {
+    setStepDialog({
+      open: false,
+      journeyId: null,
+      stepId: null,
+      form: { label: '', channel: '', message: '', offset_weeks: 0, due_at: '' }
+    });
+  };
+
+  const handleStepFieldChange = (field) => (event) => {
+    const value = field === 'offset_weeks' ? event.target.value : event.target.value;
+    setStepDialog((prev) => ({
+      ...prev,
+      form: { ...prev.form, [field]: value }
+    }));
+  };
+
+  const handleStepDialogSave = async () => {
+    if (!stepDialog.form.label.trim()) {
+      triggerMessage('error', 'Step label is required');
+      return;
+    }
+    const payload = {
+      label: stepDialog.form.label,
+      channel: stepDialog.form.channel,
+      message: stepDialog.form.message,
+      offset_weeks: Number(stepDialog.form.offset_weeks) || 0,
+      due_at: stepDialog.form.due_at || null
+    };
+    try {
+      let journey;
+      if (stepDialog.stepId) {
+        journey = await updateJourneyStep(stepDialog.journeyId, stepDialog.stepId, payload);
+      } else {
+        journey = await addJourneyStep(stepDialog.journeyId, payload);
+      }
+      upsertJourney(journey);
+      handleCloseStepDialog();
+      triggerMessage('success', `Step ${stepDialog.stepId ? 'updated' : 'added'}`);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to save step');
+    }
+  };
+
+  const handleToggleStepComplete = async (journeyId, step) => {
+    try {
+      const journey = await updateJourneyStep(journeyId, step.id, {
+        completed_at: step.completed_at ? null : new Date().toISOString()
+      });
+      upsertJourney(journey);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to update step');
+    }
+  };
+
+  const handleDeleteStep = async (journeyId, stepId) => {
+    if (!window.confirm('Remove this step from the journey?')) return;
+    try {
+      const journey = await deleteJourneyStep(journeyId, stepId);
+      upsertJourney(journey);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to delete step');
+    }
+  };
+
+  const handleOpenTemplateDialog = async () => {
+    setTemplateDialogOpen(true);
+    if (templateDraft.length === 0 && !templateLoading) {
+      setTemplateLoading(true);
+      try {
+        const template = await fetchJourneyTemplate();
+        setTemplateDraft(Array.isArray(template) ? template : []);
+      } catch (err) {
+        triggerMessage('error', err.message || 'Unable to load template');
+      } finally {
+        setTemplateLoading(false);
+      }
+    }
+  };
+
+  const handleTemplateFieldChange = (index, field) => (event) => {
+    const value = field === 'offset_weeks' ? Number(event.target.value) : event.target.value;
+    setTemplateDraft((prev) => {
+      const clone = [...prev];
+      clone[index] = {
+        ...clone[index],
+        [field]: field === 'offset_weeks' ? (Number.isNaN(value) ? 0 : value) : value
+      };
+      return clone;
+    });
+  };
+
+  const handleAddTemplateStep = () => {
+    setTemplateDraft((prev) => [
+      ...prev,
+      { id: `template-${prev.length + 1}`, label: '', channel: '', message: '', offset_weeks: 0 }
+    ]);
+  };
+
+  const handleRemoveTemplateStep = (index) => {
+    setTemplateDraft((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleTemplateSave = async () => {
+    setTemplateSaving(true);
+    try {
+      const sanitized = templateDraft
+        .map((step) => ({
+          ...step,
+          label: (step.label || '').trim()
+        }))
+        .filter((step) => step.label);
+      const template = await saveJourneyTemplate(sanitized);
+      setTemplateDraft(Array.isArray(template) ? template : []);
+      triggerMessage('success', 'Journey template saved');
+      setTemplateDialogOpen(false);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to save template');
+    } finally {
+      setTemplateSaving(false);
     }
   };
 
@@ -557,6 +912,24 @@ export default function ClientPortal() {
       return matchesType && matchesSource && matchesCategory;
     });
   }, [calls, callFilters]);
+
+  const journeyByLeadId = useMemo(() => {
+    const map = new Map();
+    journeys.forEach((journey) => {
+      if (journey.lead_call_id) {
+        map.set(journey.lead_call_id, journey);
+      }
+    });
+    return map;
+  }, [journeys]);
+
+  const symptomOptions = useMemo(() => {
+    if (profile?.client_subtype && CLIENT_SYMPTOM_PRESETS[profile.client_subtype]) {
+      return CLIENT_SYMPTOM_PRESETS[profile.client_subtype];
+    }
+    const presets = Object.values(CLIENT_SYMPTOM_PRESETS || {}).flat();
+    return presets.length ? Array.from(new Set(presets)) : [];
+  }, [profile?.client_subtype]);
 
   return (
     <MainCard title="Client Portal">
@@ -1002,73 +1375,245 @@ export default function ClientPortal() {
                   ))}
                 </>
               )}
-              {!callsLoading && filteredCalls.map((call) => (
-                <Card key={call.id} variant="outlined">
-                  <CardContent>
-                    <Stack spacing={1}>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
-                        <Chip label={(call.category || 'unreviewed').toUpperCase()} color="primary" variant="outlined" />
-                        <Typography sx={{ flex: 1 }}>{call.source || 'Unknown source'}</Typography>
-                        <Typography variant="body2">{call.call_time}</Typography>
-                      </Stack>
-                      <Typography variant="body2">
-                        Caller: <strong>{call.caller_name || 'Unknown'}</strong> &nbsp;&nbsp; Number:{' '}
-                        {call.caller_number || 'N/A'} &nbsp;&nbsp; Region: {call.region || 'N/A'}
-                      </Typography>
-                      <Typography variant="body2">{call.classification_summary || call.message || ''}</Typography>
-                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          href={call.transcript_url || call.recording_url}
-                          target="_blank"
-                          disabled={!call.transcript_url && !call.recording_url}
-                        >
-                          View Transcript
-                        </Button>
-                        <Button 
-                          variant="contained" 
-                          size="small" 
-                          color="success"
-                          onClick={() => handleOpenServiceDialog(call)}
-                        >
-                          Agreed to Service
-                        </Button>
-                        <Button variant="text" size="small" onClick={() => handleClearScore(call.id)} disabled={Boolean(ratingPending[call.id])}>
-                          Clear Score
-                        </Button>
-                        {ratingPending[call.id] ? (
-                          <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <Skeleton key={star} variant="circular" width={28} height={28} />
-                            ))}
-                          </Box>
-                        ) : (
-                          <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <IconButton
-                                key={star}
+              {!callsLoading &&
+                filteredCalls.map((call) => {
+                  const leadJourney = journeyByLeadId.get(call.id);
+                  return (
+                    <Card key={call.id} variant="outlined">
+                      <CardContent>
+                        <Stack spacing={1}>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
+                            <Chip label={(call.category || 'unreviewed').toUpperCase()} color="primary" variant="outlined" />
+                            <Typography sx={{ flex: 1 }}>{call.source || 'Unknown source'}</Typography>
+                            <Typography variant="body2">{call.call_time}</Typography>
+                          </Stack>
+                          <Typography variant="body2">
+                            Caller: <strong>{call.caller_name || 'Unknown'}</strong> &nbsp;&nbsp; Number:{' '}
+                            {call.caller_number || 'N/A'} &nbsp;&nbsp; Region: {call.region || 'N/A'}
+                          </Typography>
+                          <Typography variant="body2">{call.classification_summary || call.message || ''}</Typography>
+                          {leadJourney && (
+                            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                              <Chip
+                                label={`Journey · ${(leadJourney.status || 'pending').replace('_', ' ')}`}
                                 size="small"
-                                color={call.rating >= star ? 'primary' : 'default'}
-                                onClick={() => handleScoreCall(call.id, star)}
-                                sx={{ p: 0.5 }}
-                              >
-                                ★
-                              </IconButton>
-                            ))}
-                          </Box>
-                        )}
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ))}
+                                color={leadJourney.paused ? 'warning' : 'success'}
+                              />
+                              {leadJourney.symptoms?.slice(0, 3).map((symptom) => (
+                                <Chip key={symptom} label={symptom} size="small" variant="outlined" />
+                              ))}
+                              {leadJourney.symptoms?.length > 3 && (
+                                <Chip label={`+${leadJourney.symptoms.length - 3}`} size="small" variant="outlined" />
+                              )}
+                              <Typography variant="caption" color="text.secondary">
+                                Next action:{' '}
+                                {leadJourney.next_action_at ? formatDateDisplay(leadJourney.next_action_at) : 'Not scheduled'}
+                              </Typography>
+                            </Stack>
+                          )}
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              href={call.transcript_url || call.recording_url}
+                              target="_blank"
+                              disabled={!call.transcript_url && !call.recording_url}
+                            >
+                              View Transcript
+                            </Button>
+                            <Button
+                              variant="text"
+                              size="small"
+                              onClick={() => handleOpenSymptomDialog(call, leadJourney)}
+                            >
+                              {leadJourney ? 'Update Journey' : 'Assign Symptoms'}
+                            </Button>
+                            <Button 
+                              variant="contained" 
+                              size="small" 
+                              color="success"
+                              onClick={() => handleOpenServiceDialog(call)}
+                            >
+                              Agreed to Service
+                            </Button>
+                            <Button variant="text" size="small" onClick={() => handleClearScore(call.id)} disabled={Boolean(ratingPending[call.id])}>
+                              Clear Score
+                            </Button>
+                            {ratingPending[call.id] ? (
+                              <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Skeleton key={star} variant="circular" width={28} height={28} />
+                                ))}
+                              </Box>
+                            ) : (
+                              <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <IconButton
+                                    key={star}
+                                    size="small"
+                                    color={call.rating >= star ? 'primary' : 'default'}
+                                    onClick={() => handleScoreCall(call.id, star)}
+                                    sx={{ p: 0.5 }}
+                                  >
+                                    ★
+                                  </IconButton>
+                                ))}
+                              </Box>
+                            )}
+                          </Stack>
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               {!filteredCalls.length && !callsLoading && (
                 <Typography variant="body2" color="text.secondary">
                   No calls to display.
                 </Typography>
               )}
             </Stack>
+          </Stack>
+        )}
+
+        {activeTab === 'journey' && (
+          <Stack spacing={2}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+              <Button variant="contained" onClick={loadJourneys} disabled={journeysLoading}>
+                Refresh Journeys
+              </Button>
+              <Button variant="outlined" onClick={handleOpenTemplateDialog}>
+                Edit Follow-Up Template
+              </Button>
+            </Stack>
+            {journeysLoading && <LinearProgress />}
+            {!journeysLoading && !journeys.length && (
+              <Alert severity="info">Assign symptoms to a lead from the Leads tab to begin a client journey.</Alert>
+            )}
+            {journeys.map((journey) => {
+              const steps = journey.steps || [];
+              const completedSteps = steps.filter((step) => step.completed_at);
+              const currentStep = getJourneyCurrentStep(journey);
+              const nextActionDate = journey.next_action_at
+                ? formatDateDisplay(journey.next_action_at)
+                : currentStep?.due_at
+                ? formatDateDisplay(currentStep.due_at)
+                : 'Not scheduled';
+
+              return (
+                <Card key={journey.id} variant="outlined">
+                  <CardContent>
+                    <Stack spacing={2}>
+                      <Stack
+                        direction={{ xs: 'column', md: 'row' }}
+                        spacing={1}
+                        alignItems={{ xs: 'flex-start', md: 'center' }}
+                      >
+                        <Typography variant="h6">
+                          {journey.client_name || journey.client_phone || journey.client_email || 'Unnamed Lead'}
+                        </Typography>
+                      {journey.paused && (
+                        <Chip label="Paused" color="warning" size="small" />
+                      )}
+                        <Stack direction="row" spacing={1} sx={{ ml: { md: 'auto' } }}>
+                          <Button size="small" onClick={() => handleOpenSymptomDialog(null, journey)}>
+                            Edit Symptoms
+                          </Button>
+                          <Button
+                            size="small"
+                            onClick={() => handleJourneyStatusChange(journey.id, { paused: !journey.paused })}
+                          >
+                            {journey.paused ? 'Resume Journey' : 'Pause Journey'}
+                          </Button>
+                          <Button size="small" onClick={() => handleOpenTimelineDialog(journey)}>
+                            View Client Journey
+                          </Button>
+                        </Stack>
+                      </Stack>
+                      {(journey.client_phone || journey.client_email) && (
+                        <Typography variant="body2" color="text.secondary">
+                          {[journey.client_phone, journey.client_email].filter(Boolean).join(' · ')}
+                        </Typography>
+                      )}
+                      {journey.symptoms?.length > 0 && (
+                        <Stack direction="row" spacing={1} flexWrap="wrap">
+                          {journey.symptoms.map((symptom) => (
+                            <Chip key={`${journey.id}-${symptom}`} label={symptom} size="small" variant="outlined" />
+                          ))}
+                        </Stack>
+                      )}
+                      <Box
+                        sx={{
+                          border: '1px dashed',
+                          borderColor: 'divider',
+                          borderRadius: 2,
+                          p: 2,
+                          bgcolor: currentStep ? 'background.paper' : 'grey.50'
+                        }}
+                      >
+                        <Typography variant="subtitle2" gutterBottom>
+                          {currentStep ? 'Current Follow-Up Step' : 'No Steps Defined'}
+                        </Typography>
+                        {currentStep ? (
+                          <Stack spacing={0.5}>
+                            <Typography variant="body1">{currentStep.label}</Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Channel: {currentStep.channel || 'Not specified'}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Due: {currentStep.due_at ? formatDateDisplay(currentStep.due_at) : 'No due date'}
+                            </Typography>
+                            {currentStep.message && (
+                              <Typography variant="body2" color="text.secondary">
+                                Instructions: {currentStep.message}
+                              </Typography>
+                            )}
+                          </Stack>
+                        ) : (
+                          <Stack spacing={1}>
+                            <Typography variant="body2" color="text.secondary">
+                              No steps yet. Apply your follow-up template to generate the outreach plan.
+                            </Typography>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              onClick={() => handleApplyTemplateToJourney(journey.id)}
+                            >
+                              Apply Follow-Up Template
+                            </Button>
+                          </Stack>
+                        )}
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                          Next contact: {nextActionDate} · Completed {completedSteps.length}/{steps.length} steps
+                        </Typography>
+                      </Box>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                        <Button
+                          variant="contained"
+                          color="success"
+                          disabled={!currentStep}
+                          onClick={() => handleMarkCurrentStepComplete(journey)}
+                        >
+                          Mark Step Complete
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          onClick={() => handleJourneyAgreedToService(journey)}
+                          disabled={!journey.lead_call_key && !journey.lead_call_id}
+                        >
+                          Agreed to Service
+                        </Button>
+                        <Button variant="outlined" onClick={() => handleOpenStepDialog(journey)}>
+                          Add Step
+                        </Button>
+                        <Button variant="outlined" onClick={() => handleOpenNoteDialog(journey)}>
+                          Add Note
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </Stack>
         )}
 
@@ -1332,6 +1877,249 @@ export default function ClientPortal() {
             disabled={selectedServices.length === 0}
           >
             Confirm Agreement ({selectedServices.length} service{selectedServices.length !== 1 ? 's' : ''})
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={symptomDialog.open} onClose={handleCloseSymptomDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>{symptomDialog.journeyId ? 'Update Journey Symptoms' : 'Assign Symptoms to Lead'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Select the symptoms this lead mentioned to start or update their Client Journey.
+            </Typography>
+            <Autocomplete
+              multiple
+              freeSolo
+              options={symptomOptions}
+              value={symptomDialog.values}
+              onChange={handleSymptomDialogChange}
+              renderInput={(params) => <TextField {...params} label="Symptoms" placeholder="Type and press Enter" />}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseSymptomDialog}>Cancel</Button>
+          <Button variant="contained" onClick={handleSymptomDialogSave} disabled={symptomSaving}>
+            {symptomSaving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={stepDialog.open} onClose={handleCloseStepDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>{stepDialog.stepId ? 'Edit Journey Step' : 'Add Journey Step'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Step Label"
+              value={stepDialog.form.label}
+              onChange={handleStepFieldChange('label')}
+              fullWidth
+            />
+            <TextField
+              label="Channel (call, text, email)"
+              value={stepDialog.form.channel}
+              onChange={handleStepFieldChange('channel')}
+              fullWidth
+            />
+            <TextField
+              label="Message / Instructions"
+              value={stepDialog.form.message}
+              onChange={handleStepFieldChange('message')}
+              multiline
+              minRows={3}
+              fullWidth
+            />
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField
+                label="Offset (weeks)"
+                type="number"
+                value={stepDialog.form.offset_weeks}
+                onChange={handleStepFieldChange('offset_weeks')}
+                fullWidth
+              />
+              <TextField
+                label="Due Date"
+                type="datetime-local"
+                value={stepDialog.form.due_at}
+                onChange={handleStepFieldChange('due_at')}
+                InputLabelProps={{ shrink: true }}
+                fullWidth
+              />
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseStepDialog}>Cancel</Button>
+          <Button variant="contained" onClick={handleStepDialogSave}>
+            Save Step
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={noteDialog.open} onClose={handleCloseNoteDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Journey Note</DialogTitle>
+        <DialogContent>
+          <TextField
+            multiline
+            minRows={4}
+            fullWidth
+            value={noteDialog.value}
+            onChange={(e) => setNoteDialog((prev) => ({ ...prev, value: e.target.value }))}
+            placeholder="Record what happened during this outreach."
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseNoteDialog}>Cancel</Button>
+          <Button variant="contained" onClick={handleSaveJourneyNote} disabled={!noteDialog.value?.trim()}>
+            Save Note
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={timelineDialog.open} onClose={handleCloseTimelineDialog} maxWidth="md" fullWidth>
+        <DialogTitle>
+          Journey Timeline{timelineDialog.journey ? ` · ${timelineDialog.journey.client_name || 'Lead'}` : ''}
+        </DialogTitle>
+        <DialogContent dividers>
+          {timelineDialog.journey ? (
+            <Stack spacing={3}>
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Follow-Up Steps
+                </Typography>
+                <Stack spacing={1}>
+                  {(timelineDialog.journey.steps || []).length ? (
+                    timelineDialog.journey.steps.map((step) => (
+                      <Paper key={step.id} variant="outlined" sx={{ p: 1.5 }}>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Chip
+                            label={step.completed_at ? 'Completed' : 'Pending'}
+                            color={step.completed_at ? 'success' : 'default'}
+                            size="small"
+                          />
+                          <Typography variant="subtitle2">{step.label}</Typography>
+                        </Stack>
+                        <Typography variant="body2" color="text.secondary">
+                          {step.channel || 'No channel listed'} ·{' '}
+                          {step.due_at ? formatDateDisplay(step.due_at) : 'No due date'}
+                        </Typography>
+                        {step.message && (
+                          <Typography variant="body2" sx={{ mt: 0.5 }}>
+                            {step.message}
+                          </Typography>
+                        )}
+                        {step.completed_at && (
+                          <Typography variant="caption" color="text.secondary">
+                            Completed {formatDateDisplay(step.completed_at)}
+                          </Typography>
+                        )}
+                      </Paper>
+                    ))
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      No steps added yet.
+                    </Typography>
+                  )}
+                </Stack>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Notes
+                </Typography>
+                <Stack spacing={1}>
+                  {(timelineDialog.journey.notes || []).length ? (
+                    timelineDialog.journey.notes.map((note) => (
+                      <Paper key={note.id} variant="outlined" sx={{ p: 1.5 }}>
+                        <Typography variant="body2">{note.body}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {note.author_name} · {formatDateDisplay(note.created_at)}
+                        </Typography>
+                      </Paper>
+                    ))
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      No notes have been recorded.
+                    </Typography>
+                  )}
+                </Stack>
+              </Box>
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Select a journey to view its timeline.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseTimelineDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={templateDialogOpen} onClose={() => setTemplateDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Client Journey Template</DialogTitle>
+        <DialogContent dividers>
+          {templateLoading ? (
+            <LinearProgress />
+          ) : (
+            <Stack spacing={2}>
+              <Typography variant="body2" color="text.secondary">
+                Edit the default follow-up steps that are applied whenever you assign a lead to the Client Journey.
+              </Typography>
+              {templateDraft.map((step, index) => (
+                <Paper key={step.id || index} variant="outlined" sx={{ p: 2 }}>
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography variant="subtitle2">Step {index + 1}</Typography>
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={() => handleRemoveTemplateStep(index)}
+                      >
+                        Remove
+                      </Button>
+                    </Stack>
+                    <TextField
+                      label="Label"
+                      value={step.label}
+                      onChange={handleTemplateFieldChange(index, 'label')}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Channel"
+                      value={step.channel || ''}
+                      onChange={handleTemplateFieldChange(index, 'channel')}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Message"
+                      value={step.message || ''}
+                      onChange={handleTemplateFieldChange(index, 'message')}
+                      multiline
+                      minRows={2}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Offset Weeks"
+                      type="number"
+                      value={step.offset_weeks ?? 0}
+                      onChange={handleTemplateFieldChange(index, 'offset_weeks')}
+                      fullWidth
+                    />
+                  </Stack>
+                </Paper>
+              ))}
+              <Button variant="outlined" onClick={handleAddTemplateStep}>
+                Add Template Step
+              </Button>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTemplateDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleTemplateSave} disabled={templateSaving}>
+            {templateSaving ? 'Saving…' : 'Save Template'}
           </Button>
         </DialogActions>
       </Dialog>

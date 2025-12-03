@@ -5,37 +5,60 @@ import {
   IconPhoneCalling,
   IconBrush,
   IconFolder,
+  IconFlagCheck,
   IconBriefcase,
   IconUsers,
   IconArticle
 } from '@tabler/icons-react';
 
-const portalTabs = [
-  { value: 'profile', label: 'Profile', icon: IconUser },
-  { value: 'analytics', label: 'Analytics', icon: IconChartInfographic },
-  { value: 'tasks', label: 'Tasks', icon: IconStack2 },
-  { value: 'leads', label: 'Leads', icon: IconPhoneCalling },
-  { value: 'brand', label: 'Brand Assets', icon: IconBrush },
-  { value: 'documents', label: 'Documents', icon: IconFolder }
-];
-
 const portalGroup = {
   id: 'portal-nav-group',
   title: 'Client Portal',
   type: 'group',
-  children: portalTabs.map(({ value, label, icon }) => ({
-    id: `portal-${value}`,
-    title: label,
-    type: 'item',
-    url: `/portal?tab=${value}`,
-    icon,
-    isActive: ({ search, pathname }) => {
-      if (pathname !== '/portal') return false;
-      const params = new URLSearchParams(search);
-      const tabValue = params.get('tab') || 'profile';
-      return tabValue === value;
+  children: [
+    {
+      id: 'portal-profile',
+      title: 'Profile',
+      type: 'item',
+      url: '/portal?tab=profile',
+      icon: IconUser
+    },
+    {
+      id: 'portal-analytics',
+      title: 'Analytics',
+      type: 'item',
+      url: '/portal?tab=analytics',
+      icon: IconChartInfographic
+    },
+    {
+      id: 'portal-tasks',
+      title: 'Tasks',
+      type: 'item',
+      url: '/portal?tab=tasks',
+      icon: IconStack2
+    },
+    {
+      id: 'portal-brand',
+      title: 'Brand Assets',
+      type: 'item',
+      url: '/portal?tab=brand',
+      icon: IconBrush
+    },
+    {
+      id: 'portal-services',
+      title: 'Services',
+      type: 'item',
+      url: '/services',
+      icon: IconBriefcase
+    },
+    {
+      id: 'portal-documents',
+      title: 'Documents',
+      type: 'item',
+      url: '/portal?tab=documents',
+      icon: IconFolder
     }
-  }))
+  ]
 };
 
 const clientManagementGroup = {
@@ -44,19 +67,34 @@ const clientManagementGroup = {
   type: 'group',
   children: [
     {
+      id: 'portal-leads',
+      title: 'Leads',
+      type: 'item',
+      url: '/portal?tab=leads',
+      icon: IconPhoneCalling
+    },
+    {
+      id: 'portal-journey',
+      title: 'Client Journey',
+      type: 'item',
+      url: '/portal?tab=journey',
+      icon: IconFlagCheck
+    },
+    {
       id: 'active-clients',
       title: 'Active Clients',
       type: 'item',
       url: '/active-clients',
       icon: IconUsers
-    },
-    {
-      id: 'services',
-      title: 'Services',
-      type: 'item',
-      url: '/services',
-      icon: IconBriefcase
-    },
+    }
+  ]
+};
+
+const contentGroup = {
+  id: 'content-group',
+  title: 'My Content',
+  type: 'group',
+  children: [
     {
       id: 'blogs',
       title: 'Blog Posts',
@@ -68,7 +106,7 @@ const clientManagementGroup = {
 };
 
 const portalMenu = {
-  items: [portalGroup, clientManagementGroup]
+  items: [portalGroup, clientManagementGroup, contentGroup]
 };
 
 export default portalMenu;

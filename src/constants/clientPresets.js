@@ -1,41 +1,41 @@
 const TMJ_AND_SLEEP_SERVICES = [
-  'Jaw Pain',
   'TMJ',
-  'Snoring',
-  'Clenching',
   'CPAP',
   'Sleep Apnea',
-  'Headaches, Jaw Pain',
-  'Headaches',
-  'Sleep Apnea, Snoring',
-  'Headaches, Neck, Jaw Pain',
-  'Jaw Popping',
-  'CPAP, Snoring',
-  'Popping',
   'Appliance',
   'Pediatric',
-  'Teeth Grinding',
-  'Locked Jaw',
-  'Unknown',
-  'Insomnia',
-  'OSA & TMJ',
-  'Ear',
   'Nightlase',
   'Sleep Study',
   'Nuvola',
   'Botox',
   'Oral Surgery',
-  'Insurance',
-  'Headaches, Popping',
-  'Clicking',
-  'Sleep Apnea, Clicking, Popping',
-  'Sleep Apnea, CPAP',
-  'Neck Pain',
-  'Google Ads Conversion: Leads',
-  'Jaw Pain, Ringing',
-  'Ringing',
-  'Popping, Ringing'
 ];
+
+export const TMJ_AND_SLEEP_SYMPTOMS = [
+  'Jaw Pain',
+  'Snoring',
+  'Clenching',
+  'Headaches',
+  'Sleep Apnea',
+  'Headaches',
+  'Jaw Popping',
+  'Popping',
+  'Teeth Grinding',
+  'Locked Jaw',
+  'Insomnia',
+  'Ear',
+  'Ringing',
+  'Clicking',
+  'Neck Pain',
+  'Jaw Pain',
+  'Ringing',
+  'Popping'
+];
+
+export const CLIENT_SYMPTOM_PRESETS = {
+  tmj_sleep: TMJ_AND_SLEEP_SYMPTOMS
+};
+
 
 export const CLIENT_TYPE_PRESETS = [
   {
@@ -144,4 +144,62 @@ export const CLIENT_TYPE_PRESETS = [
 
 export function findClientTypePreset(value) {
   return CLIENT_TYPE_PRESETS.find((preset) => preset.value === value);
+}
+
+const envPrompt =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEFAULT_AI_PROMPT) ||
+  (typeof process !== 'undefined' && process.env?.VITE_DEFAULT_AI_PROMPT);
+export const AI_PROMPT_BASE =
+  envPrompt ||
+  'You are an assistant that classifies call transcripts for service businesses. Possible categories: warm (promising lead), very_good (ready to book), voicemail, unanswered, negative, spam, neutral. Return a short JSON object like {"category":"warm","summary":"One sentence summary"}';
+
+const formatServiceLine = (services = []) => {
+  const cleaned = services.filter(Boolean);
+  if (!cleaned.length) return '';
+  return `Services include ${cleaned.join(', ')}.`;
+};
+
+const promptFor = (typeLabel, services = []) =>
+  `${AI_PROMPT_BASE} Focus the tone and examples on ${typeLabel} clients. ${formatServiceLine(services)}`;
+
+function collectServices(typeValue, subtypeValue) {
+  const typeEntry = CLIENT_TYPE_PRESETS.find((entry) => entry.value === typeValue);
+  if (!typeEntry) return [];
+  if (subtypeValue) {
+    const subtypeEntry = typeEntry.subtypes?.find((sub) => sub.value === subtypeValue);
+    if (subtypeEntry?.services?.length) {
+      return subtypeEntry.services;
+    }
+  }
+  return typeEntry.subtypes?.flatMap((sub) => sub.services || []) || [];
+}
+
+export const CLIENT_AI_PROMPTS = {
+  medical: {
+    description: 'medical practices',
+    default: promptFor('medical practices', collectServices('medical')),
+    dental: promptFor('dental clinics', collectServices('medical', 'dental')),
+    tmj_sleep: promptFor('TMJ & Sleep Therapy centers', collectServices('medical', 'tmj_sleep')),
+    med_spa: promptFor('medical spas', collectServices('medical', 'med_spa')),
+    chiropractic: promptFor('chiropractic care studios', collectServices('medical', 'chiropractic'))
+  },
+  home_service: {
+    description: 'home services',
+    default: promptFor('home service businesses', collectServices('home_service')),
+    roofing: promptFor('roofing contractors', collectServices('home_service', 'roofing')),
+    plumbing: promptFor('plumbing companies', collectServices('home_service', 'plumbing')),
+    hvac: promptFor('HVAC firms', collectServices('home_service', 'hvac'))
+  },
+  food_service: {
+    description: 'food and hospitality businesses',
+    default: promptFor('food service operations', collectServices('food_service'))
+  }
+};
+
+export function getAiPromptForClient(type = 'medical', subtype) {
+  const typeGroup = CLIENT_AI_PROMPTS[type] || CLIENT_AI_PROMPTS.medical;
+  if (subtype && typeGroup[subtype]) {
+    return typeGroup[subtype];
+  }
+  return typeGroup.default;
 }

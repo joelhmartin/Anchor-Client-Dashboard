@@ -42,14 +42,13 @@ import CardContent from '@mui/material/CardContent';
 import Step from '@mui/material/Step';
 import StepLabel from '@mui/material/StepLabel';
 import Stepper from '@mui/material/Stepper';
-import { IconTrash } from '@tabler/icons-react';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import { createClient, fetchClients, updateClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import client from 'api/client';
-import { CLIENT_TYPE_PRESETS } from 'constants/clientPresets';
+import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPresets';
 import { fetchClientServices, saveClientServices } from 'api/services';
 
 const EMPTY_SERVICE_LIST = Object.freeze([]);
@@ -115,7 +114,6 @@ export default function AdminHub() {
   const [clientServices, setClientServices] = useState([]);
   const [clientServicesLoading, setClientServicesLoading] = useState(false);
   const [clientServicesReady, setClientServicesReady] = useState(false);
-  const [customServiceName, setCustomServiceName] = useState('');
   const presetSubtypeAppliedRef = useRef(null);
   const fileInputRef = useRef(null);
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
@@ -177,7 +175,6 @@ export default function AdminHub() {
   useEffect(() => {
     if (!editing?.id) {
       setClientServices([]);
-      setCustomServiceName('');
       setClientServicesLoading(false);
       setClientServicesReady(false);
       return;
@@ -185,7 +182,6 @@ export default function AdminHub() {
     let active = true;
     setClientServicesLoading(true);
     setClientServicesReady(false);
-    setCustomServiceName('');
     fetchClientServices(editing.id)
       .then((services) => {
         if (!active) return;
@@ -237,77 +233,17 @@ export default function AdminHub() {
     presetSubtypeAppliedRef.current = editing.client_subtype;
   }, [clientServicesReady, editing?.client_subtype, availablePresetServices]);
 
+  useEffect(() => {
+    if (!isAdmin || !editing) return;
+    const prompt = getAiPromptForClient(editing.client_type, editing.client_subtype);
+    if (!editing.ai_prompt || editing.ai_prompt === prompt) {
+      setEditing((prev) => (prev ? { ...prev, ai_prompt: prompt } : prev));
+    }
+  }, [editing?.client_type, editing?.client_subtype, editing?.ai_prompt, isAdmin]);
+
   const sortedClients = useMemo(() => {
     return [...clients].sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
   }, [clients]);
-
-  const activeServices = useMemo(() => clientServices.filter((service) => service.active !== false), [clientServices]);
-
-  const isPresetChecked = (name) => activeServices.some((service) => serviceNameKey(service.name) === serviceNameKey(name));
-
-  const handleTogglePresetService = (name) => {
-    const formatted = formatServiceLabel(name);
-    if (!formatted) return;
-    const key = serviceNameKey(formatted);
-    setClientServices((prev) => {
-      const idx = prev.findIndex((service) => serviceNameKey(service.name) === key);
-      if (idx >= 0) {
-        const next = [...prev];
-        const target = next[idx];
-        const isActive = target.active !== false;
-        next[idx] = { ...target, active: !isActive, name: formatted };
-        return next;
-      }
-      return [...prev, buildNewServiceDraft(formatted, { isPreset: true })];
-    });
-  };
-
-  const handleAddCustomService = () => {
-    const formatted = formatServiceLabel(customServiceName);
-    if (!formatted) return;
-    const key = serviceNameKey(formatted);
-    setClientServices((prev) => {
-      const idx = prev.findIndex((service) => serviceNameKey(service.name) === key);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], active: true, name: formatted };
-        return next;
-      }
-      return [...prev, buildNewServiceDraft(formatted)];
-    });
-    setCustomServiceName('');
-  };
-
-  const handleCustomServiceKeyDown = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      handleAddCustomService();
-    }
-  };
-
-  const handleServiceFieldChange = (localId, key) => (event) => {
-    const value = event.target.value;
-    setClientServices((prev) =>
-      prev.map((service) => {
-        if (service.localId !== localId) return service;
-        return { ...service, [key]: value };
-      })
-    );
-  };
-
-  const handleServiceRemove = (localId) => {
-    setClientServices((prev) =>
-      prev
-        .map((service) => {
-          if (service.localId !== localId) return service;
-          if (service.id) {
-            return { ...service, active: false };
-          }
-          return null;
-        })
-        .filter(Boolean)
-    );
-  };
 
   if (initializing) return null;
   if (!canAccessHub) return <Navigate to="/" replace />;
@@ -708,122 +644,17 @@ export default function AdminHub() {
           </TextField>
         </Grid>
       </Grid>
-      <Stack spacing={1}>
-        <Typography variant="subtitle2">Preset Services</Typography>
-        {availablePresetServices.length ? (
-          <FormGroup row sx={{ gap: 1, flexWrap: 'wrap' }}>
-            {availablePresetServices.map((serviceName) => (
-              <FormControlLabel
-                key={serviceName}
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={isPresetChecked(serviceName)}
-                    onChange={() => handleTogglePresetService(serviceName)}
-                  />
-                }
-                label={<Typography variant="body2">{serviceName}</Typography>}
-                sx={{
-                  m: 0,
-                  border: '1px solid',
-                  borderColor: 'divider',
-                  borderRadius: 1,
-                  px: 1.25,
-                  py: 0.5
-                }}
-              />
-            ))}
-          </FormGroup>
-        ) : (
-          <Typography variant="body2" color="text.secondary">
-            Select a subtype to see recommended services.
-          </Typography>
-        )}
-      </Stack>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+      {clientServicesLoading && <LinearProgress />}
+      {isAdmin && (
         <TextField
-          label="Add custom service"
-          placeholder="e.g., Campaign Management"
-          value={customServiceName}
-          onChange={(e) => setCustomServiceName(e.target.value)}
-          onKeyDown={handleCustomServiceKeyDown}
-          fullWidth
+          label="AI Prompt"
+          value={editing.ai_prompt || ''}
+          onChange={handleEditChange('ai_prompt')}
+          multiline
+          minRows={4}
+          helperText="Prompt used for CTM lead classification"
         />
-        <Button
-          variant="contained"
-          onClick={handleAddCustomService}
-          disabled={!customServiceName.trim()}
-          sx={{ minWidth: { sm: 180 } }}
-        >
-          Add Service
-        </Button>
-      </Stack>
-      {clientServicesLoading ? (
-        <LinearProgress />
-      ) : activeServices.length ? (
-        <Stack spacing={1}>
-          {activeServices.map((service) => {
-            const isPresetService =
-              service.isPreset ||
-              availablePresetServices.some((name) => serviceNameKey(name) === serviceNameKey(service.name));
-            return (
-              <Paper key={service.localId} variant="outlined" sx={{ p: 2 }}>
-                <Grid container spacing={2} alignItems="center">
-                  <Grid item xs={12} md={4}>
-                    <Typography variant="subtitle2">{service.name}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {isPresetService ? 'Preset service' : 'Custom service'}
-                    </Typography>
-                  </Grid>
-                <Grid item xs={12} md={4}>
-                  <TextField
-                    label="Base Price"
-                    type="number"
-                    value={service.base_price}
-                    onChange={handleServiceFieldChange(service.localId, 'base_price')}
-                    InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
-                  <Button
-                    color="error"
-                    size="small"
-                    startIcon={<IconTrash size={16} />}
-                    onClick={() => handleServiceRemove(service.localId)}
-                  >
-                    Remove
-                  </Button>
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    label="Description (optional)"
-                    multiline
-                    minRows={2}
-                    value={service.description}
-                    onChange={handleServiceFieldChange(service.localId, 'description')}
-                    fullWidth
-                  />
-                </Grid>
-              </Grid>
-              </Paper>
-            );
-          })}
-        </Stack>
-      ) : (
-        <Alert severity="info">Select or add services to configure pricing.</Alert>
       )}
-      <Typography variant="caption" color="text.secondary">
-        Services sync with the client&apos;s portal when you save changes above. Unchecked presets will be deactivated automatically.
-      </Typography>
-      <TextField
-        label="AI Prompt"
-        value={editing.ai_prompt || ''}
-        onChange={handleEditChange('ai_prompt')}
-        multiline
-        minRows={4}
-        helperText="Prompt used for CTM lead classification"
-      />
       <FormControlLabel
         control={
           <Switch

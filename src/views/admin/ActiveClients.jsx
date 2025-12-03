@@ -27,6 +27,16 @@ function ActiveClientRow({ client }) {
   const activeServices = client.services?.filter((s) => !s.redacted_at) || [];
   const historicalServices = client.services?.filter((s) => s.redacted_at) || [];
   const totalRevenue = client.services?.reduce((sum, s) => sum + (parseFloat(s.agreed_price) || 0), 0) || 0;
+  const journeySummary = client.journey_id
+    ? {
+        id: client.journey_id,
+        status: client.journey_status,
+        paused: client.journey_paused,
+        symptoms: Array.isArray(client.journey_symptoms) ? client.journey_symptoms : [],
+        next_action_at: client.journey_next_action_at
+      }
+    : null;
+  const journeySymptoms = journeySummary?.symptoms || [];
 
   return (
     <>
@@ -65,6 +75,31 @@ function ActiveClientRow({ client }) {
           )}
         </TableCell>
         <TableCell>
+          {journeySummary ? (
+            <Stack spacing={0.5}>
+              <Chip
+                label={(journeySummary.status || 'pending').replace('_', ' ')}
+                size="small"
+                color={journeySummary.paused ? 'warning' : 'success'}
+              />
+              {journeySymptoms.length > 0 && (
+                <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                  {journeySymptoms.slice(0, 3).map((symptom) => (
+                    <Chip key={`${client.id}-${symptom}`} label={symptom} size="small" variant="outlined" />
+                  ))}
+                  {journeySymptoms.length > 3 && (
+                    <Chip size="small" variant="outlined" label={`+${journeySymptoms.length - 3}`} />
+                  )}
+                </Stack>
+              )}
+            </Stack>
+          ) : (
+            <Typography variant="caption" color="text.secondary">
+              —
+            </Typography>
+          )}
+        </TableCell>
+        <TableCell>
           <Typography variant="body2" color="text.secondary">
             {client.source || '—'}
           </Typography>
@@ -79,7 +114,7 @@ function ActiveClientRow({ client }) {
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
+        <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={7}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box sx={{ margin: 2 }}>
               <Typography variant="h6" gutterBottom>
@@ -147,6 +182,22 @@ function ActiveClientRow({ client }) {
                   <Typography variant="caption" component="pre" sx={{ whiteSpace: 'pre-wrap' }}>
                     {JSON.stringify(client.funnel_data, null, 2)}
                   </Typography>
+                </Box>
+              )}
+              {journeySummary && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2">Client Journey</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Status: {(journeySummary.status || 'pending').replace('_', ' ')}
+                    {journeySummary.next_action_at && ` · Next action ${new Date(journeySummary.next_action_at).toLocaleString()}`}
+                  </Typography>
+                  {journeySymptoms.length > 0 && (
+                    <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 1 }}>
+                      {journeySymptoms.map((symptom) => (
+                        <Chip key={`${client.id}-detail-${symptom}`} label={symptom} size="small" variant="outlined" />
+                      ))}
+                    </Stack>
+                  )}
                 </Box>
               )}
             </Box>
@@ -303,6 +354,7 @@ export default function ActiveClients() {
                   <TableCell />
                   <TableCell>Client</TableCell>
                   <TableCell>Active Services</TableCell>
+                  <TableCell>Journey</TableCell>
                   <TableCell>Source</TableCell>
                   <TableCell align="right">Total Revenue</TableCell>
                   <TableCell>Client Since</TableCell>
@@ -320,4 +372,3 @@ export default function ActiveClients() {
     </MainCard>
   );
 }
-

@@ -48,6 +48,336 @@ const APP_BASE_URL =
     (process.env.NODE_ENV === 'production' ? process.env.CLIENT_APP_URL : process.env.VITE_APP_BASE_NAME) ||
     'http://localhost:3000').replace(/\/$/, '');
 const ONBOARDING_TOKEN_TTL_HOURS = parseInt(process.env.ONBOARDING_TOKEN_TTL_HOURS || '72', 10);
+const JOURNEY_TEMPLATE_KEY_PREFIX = 'journey_template';
+const JOURNEY_STATUS_OPTIONS = ['pending', 'in_progress', 'active_client', 'won', 'lost', 'archived'];
+
+const DEFAULT_JOURNEY_TEMPLATE = [
+  {
+    id: 'week-2-follow-up',
+    label: 'Week 2 Call + Text/Email',
+    channel: 'call,text,email',
+    offset_weeks: 2,
+    message:
+      'First follow-up after consult. Encourage the exam, highlight diagnosis, treatment plan, and financing options.',
+    tone: 'supportive'
+  },
+  {
+    id: 'week-4-follow-up',
+    label: 'Week 4 Call + Text/Email',
+    channel: 'call,text,email',
+    offset_weeks: 4,
+    message: 'Second follow-up. Remind them the exam is 2 hours, $450, includes full diagnosis & plan.',
+    tone: 'educational'
+  },
+  {
+    id: 'week-6-follow-up',
+    label: 'Week 6 Call + Text/Email',
+    channel: 'call,text,email',
+    offset_weeks: 6,
+    message: 'Third follow-up. Offer clarity on treatment, emphasize payment flexibility.',
+    tone: 'encouraging'
+  },
+  {
+    id: 'week-8-follow-up',
+    label: 'Week 8 Call + Text/Email',
+    channel: 'call,text,email',
+    offset_weeks: 8,
+    message: 'Fourth follow-up. Reinforce importance of exam to understand symptoms.',
+    tone: 'empathetic'
+  },
+  {
+    id: 'week-10-follow-up',
+    label: 'Week 10 Call + Text/Email',
+    channel: 'call,text,email',
+    offset_weeks: 10,
+    message: 'Fifth follow-up. Keep the door open, invite questions about timing or financing.',
+    tone: 'reassuring'
+  },
+  {
+    id: 'week-12-follow-up',
+    label: 'Week 12 Final Follow-Up',
+    channel: 'call,text,email',
+    offset_weeks: 12,
+    message: 'Final touchpoint inviting them to schedule when ready, remind of value of exam.',
+    tone: 'open'
+  }
+];
+
+function sanitizeSymptomList(values) {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set();
+  return values
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      if (!value) return false;
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function sanitizeJourneySteps(rawSteps = []) {
+  if (!Array.isArray(rawSteps)) return [];
+  return rawSteps
+    .map((step, index) => {
+      const label = String(step?.label || '').trim();
+      if (!label) return null;
+      const offsetWeeksRaw = Number(step?.offset_weeks);
+      const offsetWeeks = Number.isFinite(offsetWeeksRaw) ? offsetWeeksRaw : 0;
+      const channel = String(step?.channel || '').trim();
+      const message = String(step?.message || '').trim();
+      return {
+        id: step?.id || `journey-step-${index + 1}`,
+        label,
+        channel,
+        message,
+        offset_weeks: offsetWeeks,
+        tone: step?.tone ? String(step.tone) : undefined
+      };
+    })
+    .filter(Boolean);
+}
+
+async function getJourneyTemplate(ownerId) {
+  const key = `${JOURNEY_TEMPLATE_KEY_PREFIX}:${ownerId}`;
+  const { rows } = await query('SELECT value FROM app_settings WHERE key=$1', [key]);
+  const raw = rows[0]?.value;
+  if (Array.isArray(raw)) {
+    return sanitizeJourneySteps(raw);
+  }
+  if (raw && Array.isArray(raw.steps)) {
+    return sanitizeJourneySteps(raw.steps);
+  }
+  return DEFAULT_JOURNEY_TEMPLATE;
+}
+
+async function saveJourneyTemplate(ownerId, steps) {
+  const key = `${JOURNEY_TEMPLATE_KEY_PREFIX}:${ownerId}`;
+  const nextSteps = sanitizeJourneySteps(steps);
+  await query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, { steps: nextSteps }]
+  );
+  return nextSteps;
+}
+
+async function seedJourneySteps(journeyId, ownerId) {
+  await ensureJourneyTables();
+  const templateSteps = await getJourneyTemplate(ownerId);
+  if (!templateSteps.length) return;
+  const now = Date.now();
+  await Promise.all(
+    templateSteps.map((step, index) => {
+      const offsetWeeks = Number.isFinite(step.offset_weeks) ? step.offset_weeks : 0;
+      const dueAt = offsetWeeks
+        ? new Date(now + offsetWeeks * 7 * 24 * 60 * 60 * 1000)
+        : null;
+      return query(
+        `INSERT INTO client_journey_steps (journey_id, position, label, channel, message, offset_weeks, due_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [journeyId, index, step.label, step.channel || null, step.message || null, offsetWeeks, dueAt]
+      );
+    })
+  );
+}
+
+async function fetchJourneysForOwner(ownerId, filters = {}) {
+  await ensureJourneyTables();
+  const params = [ownerId];
+  const conditions = ['owner_user_id = $1'];
+  if (filters.id) {
+    params.push(filters.id);
+    conditions.push(`id = $${params.length}`);
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`status = $${params.length}`);
+  }
+  const sql = `SELECT *
+               FROM client_journeys
+               ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+               ORDER BY created_at DESC`;
+  const { rows } = await query(sql, params);
+  if (!rows.length) {
+    return filters.id ? null : [];
+  }
+  const journeyIds = rows.map((row) => row.id);
+  const stepsRes = await query(
+    `SELECT id, journey_id, position, label, channel, message, offset_weeks, due_at, completed_at, notes, created_at
+     FROM client_journey_steps
+     WHERE journey_id = ANY($1::uuid[])
+     ORDER BY position ASC, created_at ASC`,
+    [journeyIds]
+  );
+  const notesRes = await query(
+    `SELECT cjn.id,
+            cjn.journey_id,
+            cjn.author_id,
+            cjn.body,
+            cjn.created_at,
+            u.first_name,
+            u.last_name,
+            u.email
+     FROM client_journey_notes cjn
+     LEFT JOIN users u ON u.id = cjn.author_id
+     WHERE cjn.journey_id = ANY($1::uuid[])
+     ORDER BY cjn.created_at DESC`,
+    [journeyIds]
+  );
+  const stepMap = new Map();
+  stepsRes.rows.forEach((step) => {
+    if (!stepMap.has(step.journey_id)) stepMap.set(step.journey_id, []);
+    stepMap.get(step.journey_id).push({
+      id: step.id,
+      position: step.position,
+      label: step.label,
+      channel: step.channel,
+      message: step.message,
+      offset_weeks: step.offset_weeks,
+      due_at: step.due_at,
+      completed_at: step.completed_at,
+      notes: step.notes
+    });
+  });
+  const noteMap = new Map();
+  notesRes.rows.forEach((note) => {
+    if (!noteMap.has(note.journey_id)) noteMap.set(note.journey_id, []);
+    const authorName =
+      [note.first_name, note.last_name].filter(Boolean).join(' ').trim() ||
+      note.email ||
+      'Unknown';
+    noteMap.get(note.journey_id).push({
+      id: note.id,
+      author_id: note.author_id,
+      author_name: authorName,
+      body: note.body,
+      created_at: note.created_at
+    });
+  });
+  const shaped = rows.map((row) => ({
+    ...row,
+    symptoms: Array.isArray(row.symptoms) ? row.symptoms : [],
+    steps: stepMap.get(row.id) || [],
+    notes: noteMap.get(row.id) || []
+  }));
+  return filters.id ? shaped[0] || null : shaped;
+}
+
+async function fetchJourneyForOwner(ownerId, journeyId) {
+  return fetchJourneysForOwner(ownerId, { id: journeyId });
+}
+
+async function attachJourneyMetaToCalls(ownerId, calls = []) {
+  await ensureJourneyTables();
+  if (!calls?.length) return calls;
+  const { rows } = await query(
+    `SELECT id, lead_call_key, symptoms, status, paused, next_action_at
+     FROM client_journeys
+     WHERE owner_user_id = $1
+       AND lead_call_key IS NOT NULL`,
+    [ownerId]
+  );
+  const map = new Map();
+  rows.forEach((row) => {
+    map.set(row.lead_call_key, {
+      id: row.id,
+      status: row.status,
+      paused: row.paused,
+      next_action_at: row.next_action_at,
+      symptoms: Array.isArray(row.symptoms) ? row.symptoms : []
+    });
+  });
+  return calls.map((call) => {
+    const journey = map.get(call.id);
+    if (!journey) return call;
+    return { ...call, journey };
+  });
+}
+
+function parseDateValue(value) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+async function resolveLeadCallLink(ownerId, callIdentifier) {
+  const key = typeof callIdentifier === 'string' ? callIdentifier.trim() : '';
+  if (!key) {
+    return { leadCallKey: null, leadCallUuid: null };
+  }
+  const { rows } = await query('SELECT id FROM call_logs WHERE user_id = $1 AND call_id = $2 LIMIT 1', [ownerId, key]);
+  return {
+    leadCallKey: key,
+    leadCallUuid: rows[0]?.id || null
+  };
+}
+
+let hasEnsuredJourneyTables = false;
+async function ensureJourneyTables() {
+  if (hasEnsuredJourneyTables) return;
+  const { rows } = await query(`SELECT to_regclass('public.client_journeys') AS table_name`);
+  if (!rows[0]?.table_name) {
+    await query(`
+      CREATE TABLE IF NOT EXISTS client_journeys (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        lead_call_id UUID REFERENCES call_logs(id) ON DELETE SET NULL,
+        lead_call_key TEXT REFERENCES call_logs(call_id) ON DELETE SET NULL,
+        active_client_id UUID REFERENCES active_clients(id) ON DELETE SET NULL,
+        client_name TEXT,
+        client_phone TEXT,
+        client_email TEXT,
+        symptoms JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status TEXT NOT NULL DEFAULT 'pending',
+        paused BOOLEAN NOT NULL DEFAULT FALSE,
+        next_action_at TIMESTAMPTZ,
+        notes_summary TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_journeys_owner ON client_journeys(owner_user_id);
+      CREATE INDEX IF NOT EXISTS idx_client_journeys_status ON client_journeys(status);
+      CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
+      CREATE TABLE IF NOT EXISTS client_journey_steps (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        journey_id UUID NOT NULL REFERENCES client_journeys(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0,
+        label TEXT NOT NULL,
+        channel TEXT,
+        message TEXT,
+        offset_weeks INTEGER DEFAULT 0,
+        due_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        notes TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_journey_steps_journey ON client_journey_steps(journey_id);
+      CREATE TABLE IF NOT EXISTS client_journey_notes (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        journey_id UUID NOT NULL REFERENCES client_journeys(id) ON DELETE CASCADE,
+        author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_journey_notes_journey ON client_journey_notes(journey_id);
+    `);
+  } else {
+    await query(`
+      ALTER TABLE client_journeys
+        ADD COLUMN IF NOT EXISTS lead_call_key TEXT;
+      CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
+      UPDATE client_journeys cj
+      SET lead_call_key = cl.call_id
+      FROM call_logs cl
+      WHERE cj.lead_call_key IS NULL AND cj.lead_call_id = cl.id;
+    `);
+  }
+  hasEnsuredJourneyTables = true;
+}
 
 function logEvent(scope, message, payload = {}) {
   const stamp = new Date().toISOString();
@@ -1378,7 +1708,8 @@ router.get('/requests', async (req, res) => {
 router.get('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
-  const cachedCalls = buildCallsFromCache(cached.rows);
+  let cachedCalls = buildCallsFromCache(cached.rows);
+  cachedCalls = await attachJourneyMetaToCalls(targetUserId, cachedCalls);
 
   const respondWithCache = (extra = {}) => res.json({ calls: cachedCalls, ...extra });
 
@@ -1457,7 +1788,9 @@ router.get('/calls', async (req, res) => {
     }
 
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
-    return res.json({ calls: buildCallsFromCache(refreshed.rows) });
+    let shaped = buildCallsFromCache(refreshed.rows);
+    shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
+    return res.json({ calls: shaped });
   } catch (err) {
     console.error('[calls:list]', err);
     return respondWithCache({ stale: true, message: 'Unable to fetch latest calls. Showing cached data.' });
@@ -1734,14 +2067,461 @@ router.delete('/calls', async (req, res) => {
     
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
     logEvent('calls:clear-all', 'Calls reloaded', { user: targetUserId, newCount: refreshed.rows.length });
+    let shaped = buildCallsFromCache(refreshed.rows);
+    shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
     res.json({ 
       message: `Successfully cleared and reloaded ${freshCalls.length} call(s)`,
-      calls: buildCallsFromCache(refreshed.rows) 
+      calls: shaped 
     });
   } catch (err) {
     console.error('[calls:clear-all]', err);
     logEvent('calls:clear-all', 'Failed to clear/reload calls', { user: targetUserId, error: err.message });
     res.status(500).json({ message: 'Unable to clear and reload calls' });
+  }
+});
+
+// ================================
+// CLIENT JOURNEYS & SYMPTOMS
+// ================================
+
+router.get('/journey-template', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  try {
+    await ensureJourneyTables();
+    const template = await getJourneyTemplate(ownerId);
+    res.json({ template });
+  } catch (err) {
+    console.error('[journeys:template:get]', err);
+    res.status(500).json({ message: 'Unable to load journey template' });
+  }
+});
+
+router.put('/journey-template', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  try {
+    await ensureJourneyTables();
+    const steps = Array.isArray(req.body.steps) ? req.body.steps : [];
+    const template = await saveJourneyTemplate(ownerId, steps);
+    res.json({ template });
+  } catch (err) {
+    console.error('[journeys:template:save]', err);
+    res.status(500).json({ message: 'Unable to save journey template' });
+  }
+});
+
+router.get('/journeys', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  try {
+    await ensureJourneyTables();
+    const filters = {};
+    if (req.query.status && JOURNEY_STATUS_OPTIONS.includes(req.query.status)) {
+      filters.status = req.query.status;
+    }
+    const journeys = await fetchJourneysForOwner(ownerId, filters);
+    res.json({ journeys });
+  } catch (err) {
+    console.error('[journeys:list]', err);
+    res.status(500).json({ message: 'Unable to load client journeys' });
+  }
+});
+
+router.get('/journeys/:id', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  try {
+    await ensureJourneyTables();
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    if (!journey) {
+      return res.status(404).json({ message: 'Journey not found' });
+    }
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:get]', err);
+    res.status(500).json({ message: 'Unable to load journey' });
+  }
+});
+
+router.post('/journeys', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const {
+    lead_call_id,
+    active_client_id,
+    client_name,
+    client_phone,
+    client_email,
+    symptoms = [],
+    status = 'pending',
+    next_action_at,
+    notes_summary
+  } = req.body || {};
+
+  if (!client_name && !client_phone && !client_email && !lead_call_id) {
+    return res.status(400).json({ message: 'Client name or contact info is required' });
+  }
+
+  const normalizedSymptoms = sanitizeSymptomList(symptoms);
+  const symptomsJsonPayload = JSON.stringify(normalizedSymptoms);
+  const desiredStatus = JOURNEY_STATUS_OPTIONS.includes(status) ? status : 'pending';
+  const nextActionAt = parseDateValue(next_action_at);
+
+  const findExisting = async (callKey) => {
+    if (callKey) {
+      const { rows } = await query(
+        'SELECT id FROM client_journeys WHERE owner_user_id = $1 AND lead_call_key = $2 LIMIT 1',
+        [ownerId, callKey]
+      );
+      if (rows.length) return rows[0].id;
+    }
+    if (active_client_id) {
+      const { rows } = await query(
+        'SELECT id FROM client_journeys WHERE owner_user_id = $1 AND active_client_id = $2 LIMIT 1',
+        [ownerId, active_client_id]
+      );
+      if (rows.length) return rows[0].id;
+    }
+    return null;
+  };
+
+  await ensureJourneyTables();
+  const { leadCallKey, leadCallUuid } = await resolveLeadCallLink(ownerId, lead_call_id);
+  const journeyId = await findExisting(leadCallKey);
+  await query('BEGIN');
+  try {
+    let resultingId = journeyId;
+    let newlyCreatedJourneyId = null;
+    if (journeyId) {
+      await query(
+        `UPDATE client_journeys
+         SET client_name = COALESCE($1, client_name),
+             client_phone = COALESCE($2, client_phone),
+             client_email = COALESCE($3, client_email),
+             symptoms = $4,
+             status = $5,
+             next_action_at = COALESCE($6, next_action_at),
+             notes_summary = COALESCE($7, notes_summary),
+             lead_call_key = COALESCE($8, lead_call_key),
+             lead_call_id = COALESCE($9, lead_call_id),
+             updated_at = NOW()
+         WHERE id = $10 AND owner_user_id = $11`,
+        [
+          client_name || null,
+          client_phone || null,
+          client_email || null,
+          symptomsJsonPayload,
+          desiredStatus,
+          nextActionAt,
+          notes_summary || null,
+          leadCallKey,
+          leadCallUuid,
+          journeyId,
+          ownerId
+        ]
+      );
+    } else {
+      const insert = await query(
+        `INSERT INTO client_journeys (
+           owner_user_id,
+           lead_call_id,
+           lead_call_key,
+           active_client_id,
+           client_name,
+           client_phone,
+           client_email,
+           symptoms,
+           status,
+           paused,
+           next_action_at,
+           notes_summary
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10,$11)
+         RETURNING id`,
+        [
+          ownerId,
+          leadCallUuid,
+          leadCallKey,
+          active_client_id || null,
+          client_name || null,
+          client_phone || null,
+          client_email || null,
+          symptomsJsonPayload,
+          desiredStatus,
+          nextActionAt,
+          notes_summary || null
+        ]
+      );
+      resultingId = insert.rows[0].id;
+      newlyCreatedJourneyId = resultingId;
+    }
+    await query('COMMIT');
+    let journey = await fetchJourneyForOwner(ownerId, resultingId);
+    if (newlyCreatedJourneyId) {
+      await seedJourneySteps(newlyCreatedJourneyId, ownerId);
+      journey = await fetchJourneyForOwner(ownerId, resultingId);
+    }
+    res.json({ journey });
+  } catch (err) {
+    await query('ROLLBACK');
+    console.error('[journeys:create]', err);
+    res.status(500).json({ message: 'Unable to save client journey' });
+  }
+});
+
+router.put('/journeys/:id', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  const fields = [];
+  const params = [];
+  let paramIndex = 1;
+
+  if (req.body.client_name !== undefined) {
+    fields.push(`client_name = $${paramIndex++}`);
+    params.push(req.body.client_name || null);
+  }
+  if (req.body.client_phone !== undefined) {
+    fields.push(`client_phone = $${paramIndex++}`);
+    params.push(req.body.client_phone || null);
+  }
+  if (req.body.client_email !== undefined) {
+    fields.push(`client_email = $${paramIndex++}`);
+    params.push(req.body.client_email || null);
+  }
+  if (Array.isArray(req.body.symptoms)) {
+    fields.push(`symptoms = $${paramIndex++}`);
+    params.push(JSON.stringify(sanitizeSymptomList(req.body.symptoms)));
+  }
+  if (req.body.status) {
+    if (!JOURNEY_STATUS_OPTIONS.includes(req.body.status)) {
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+    fields.push(`status = $${paramIndex++}`);
+    params.push(req.body.status);
+  }
+  if (req.body.paused !== undefined) {
+    fields.push(`paused = $${paramIndex++}`);
+    params.push(Boolean(req.body.paused));
+  }
+  if (req.body.next_action_at !== undefined) {
+    fields.push(`next_action_at = $${paramIndex++}`);
+    params.push(parseDateValue(req.body.next_action_at));
+  }
+  if (req.body.notes_summary !== undefined) {
+    fields.push(`notes_summary = $${paramIndex++}`);
+    params.push(req.body.notes_summary || null);
+  }
+
+  if (!fields.length) {
+    return res.status(400).json({ message: 'No updates supplied' });
+  }
+
+  try {
+    await ensureJourneyTables();
+    params.push(id);
+    params.push(ownerId);
+    const result = await query(
+      `UPDATE client_journeys
+       SET ${fields.join(', ')}, updated_at = NOW()
+       WHERE id = $${paramIndex++} AND owner_user_id = $${paramIndex}
+       RETURNING id`,
+      params
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Journey not found' });
+    }
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:update]', err);
+    res.status(500).json({ message: 'Unable to update journey' });
+  }
+});
+
+async function ensureJourneyOwnership(journeyId, ownerId) {
+  await ensureJourneyTables();
+  const { rows } = await query('SELECT id FROM client_journeys WHERE id = $1 AND owner_user_id = $2 LIMIT 1', [
+    journeyId,
+    ownerId
+  ]);
+  return rows.length > 0;
+}
+
+router.post('/journeys/:id/steps', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  const { label, channel, message, offset_weeks, due_at, position } = req.body || {};
+  if (!label) {
+    return res.status(400).json({ message: 'Label is required' });
+  }
+  const owns = await ensureJourneyOwnership(id, ownerId);
+  if (!owns) {
+    return res.status(404).json({ message: 'Journey not found' });
+  }
+  const offsetWeeks = Number.isFinite(Number(offset_weeks)) ? Number(offset_weeks) : 0;
+  let targetPosition = Number.isFinite(Number(position)) ? Number(position) : null;
+  if (targetPosition === null) {
+    const posRes = await query('SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM client_journey_steps WHERE journey_id = $1', [id]);
+    targetPosition = posRes.rows[0]?.next_pos || 0;
+  }
+  try {
+    await ensureJourneyTables();
+    await query(
+      `INSERT INTO client_journey_steps (journey_id, position, label, channel, message, offset_weeks, due_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, targetPosition, label, channel || null, message || null, offsetWeeks, parseDateValue(due_at)]
+    );
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:steps:create]', err);
+    res.status(500).json({ message: 'Unable to add step' });
+  }
+});
+
+router.put('/journeys/:id/steps/:stepId', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id, stepId } = req.params;
+  const owns = await ensureJourneyOwnership(id, ownerId);
+  if (!owns) {
+    return res.status(404).json({ message: 'Journey not found' });
+  }
+  const fields = [];
+  const params = [];
+  let paramIndex = 1;
+  if (req.body.label !== undefined) {
+    fields.push(`label = $${paramIndex++}`);
+    params.push(req.body.label || null);
+  }
+  if (req.body.channel !== undefined) {
+    fields.push(`channel = $${paramIndex++}`);
+    params.push(req.body.channel || null);
+  }
+  if (req.body.message !== undefined) {
+    fields.push(`message = $${paramIndex++}`);
+    params.push(req.body.message || null);
+  }
+  if (req.body.notes !== undefined) {
+    fields.push(`notes = $${paramIndex++}`);
+    params.push(req.body.notes || null);
+  }
+  if (req.body.offset_weeks !== undefined) {
+    fields.push(`offset_weeks = $${paramIndex++}`);
+    params.push(Number.isFinite(Number(req.body.offset_weeks)) ? Number(req.body.offset_weeks) : 0);
+  }
+  if (req.body.due_at !== undefined) {
+    fields.push(`due_at = $${paramIndex++}`);
+    params.push(parseDateValue(req.body.due_at));
+  }
+  if (req.body.completed_at !== undefined) {
+    fields.push(`completed_at = $${paramIndex++}`);
+    params.push(parseDateValue(req.body.completed_at));
+  }
+  if (req.body.position !== undefined) {
+    fields.push(`position = $${paramIndex++}`);
+    params.push(Number.isFinite(Number(req.body.position)) ? Number(req.body.position) : 0);
+  }
+  if (!fields.length) {
+    return res.status(400).json({ message: 'No updates supplied' });
+  }
+  try {
+    await ensureJourneyTables();
+    params.push(stepId, id);
+    const result = await query(
+      `UPDATE client_journey_steps
+       SET ${fields.join(', ')}
+       WHERE id = $${paramIndex++} AND journey_id = $${paramIndex}
+       RETURNING id`,
+      params
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Step not found' });
+    }
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:steps:update]', err);
+    res.status(500).json({ message: 'Unable to update step' });
+  }
+});
+
+router.delete('/journeys/:id/steps/:stepId', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id, stepId } = req.params;
+  const owns = await ensureJourneyOwnership(id, ownerId);
+  if (!owns) {
+    return res.status(404).json({ message: 'Journey not found' });
+  }
+  try {
+    await ensureJourneyTables();
+    const result = await query('DELETE FROM client_journey_steps WHERE id = $1 AND journey_id = $2', [stepId, id]);
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Step not found' });
+    }
+    await query(
+      `WITH ordered AS (
+         SELECT id, ROW_NUMBER() OVER (ORDER BY position, created_at) - 1 AS new_pos
+         FROM client_journey_steps
+         WHERE journey_id = $1
+       )
+       UPDATE client_journey_steps c
+       SET position = ordered.new_pos
+       FROM ordered
+       WHERE c.id = ordered.id`,
+      [id]
+    );
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:steps:delete]', err);
+    res.status(500).json({ message: 'Unable to delete step' });
+  }
+});
+
+router.post('/journeys/:id/notes', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const authorId = req.user.id;
+  const { id } = req.params;
+  const { body } = req.body || {};
+  if (!body || !body.trim()) {
+    return res.status(400).json({ message: 'Note body is required' });
+  }
+  const owns = await ensureJourneyOwnership(id, ownerId);
+  if (!owns) {
+    return res.status(404).json({ message: 'Journey not found' });
+  }
+  try {
+    await ensureJourneyTables();
+    await query('INSERT INTO client_journey_notes (journey_id, author_id, body) VALUES ($1,$2,$3)', [
+      id,
+      authorId,
+      body.trim()
+    ]);
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:notes:create]', err);
+    res.status(500).json({ message: 'Unable to add note' });
+  }
+});
+
+router.post('/journeys/:id/apply-template', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  await ensureJourneyTables();
+  const owns = await ensureJourneyOwnership(id, ownerId);
+  if (!owns) {
+    return res.status(404).json({ message: 'Journey not found' });
+  }
+  const existingSteps = await query('SELECT id FROM client_journey_steps WHERE journey_id = $1 LIMIT 1', [id]);
+  if (existingSteps.rows.length) {
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    return res.json({ journey });
+  }
+  try {
+    await seedJourneySteps(id, ownerId);
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:apply-template]', err);
+    res.status(500).json({ message: 'Unable to apply template' });
   }
 });
 
@@ -1851,9 +2631,16 @@ router.delete('/services/:id', async (req, res) => {
 router.get('/active-clients', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   try {
-    const { rows } = await query(`
+    await ensureJourneyTables();
+    const { rows } = await query(
+      `
       SELECT 
         ac.*,
+        journey.id AS journey_id,
+        journey.status AS journey_status,
+        journey.paused AS journey_paused,
+        journey.symptoms AS journey_symptoms,
+        journey.next_action_at AS journey_next_action_at,
         COALESCE(
           json_agg(
             json_build_object(
@@ -1869,12 +2656,21 @@ router.get('/active-clients', async (req, res) => {
           '[]'
         ) as services
       FROM active_clients ac
+      LEFT JOIN LATERAL (
+        SELECT id, status, paused, symptoms, next_action_at
+        FROM client_journeys
+        WHERE active_client_id = ac.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) journey ON true
       LEFT JOIN client_services cs ON ac.id = cs.active_client_id
       LEFT JOIN services s ON cs.service_id = s.id
       WHERE ac.owner_user_id = $1
-      GROUP BY ac.id
+      GROUP BY ac.id, journey.id, journey.status, journey.paused, journey.symptoms, journey.next_action_at
       ORDER BY ac.created_at DESC
-    `, [userId]);
+    `,
+      [userId]
+    );
     res.json({ active_clients: rows });
   } catch (err) {
     logEvent('active-clients:list', 'Error fetching active clients', { error: err.message, userId });
@@ -1903,6 +2699,7 @@ router.post('/clients/:leadId/agree-to-service', async (req, res) => {
   }
 
   try {
+    await ensureJourneyTables();
     const profileRes = await query(
       'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id = $1 LIMIT 1',
       [userId]
@@ -1997,6 +2794,20 @@ router.post('/clients/:leadId/agree-to-service', async (req, res) => {
     const attributionList = Array.from(attributionSources);
     if (attributionList.length) {
       await query('UPDATE active_clients SET source = $1 WHERE id = $2', [attributionList.join(', '), activeClientId]);
+    }
+
+    if (leadId) {
+      await query(
+        `UPDATE client_journeys
+         SET active_client_id = $1,
+             status = CASE
+               WHEN status IS NULL OR status = 'pending' THEN 'active_client'
+               ELSE status
+             END,
+             updated_at = NOW()
+         WHERE owner_user_id = $2 AND lead_call_key = $3`,
+        [activeClientId, userId, leadId]
+      );
     }
 
     res.json({ success: true, active_client_id: activeClientId });

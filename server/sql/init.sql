@@ -151,6 +151,52 @@ CREATE TABLE IF NOT EXISTS active_clients (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Client Journey tracking
+CREATE TABLE IF NOT EXISTS client_journeys (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lead_call_id UUID REFERENCES call_logs(id) ON DELETE SET NULL,
+  lead_call_key TEXT REFERENCES call_logs(call_id) ON DELETE SET NULL,
+  active_client_id UUID REFERENCES active_clients(id) ON DELETE SET NULL,
+  client_name TEXT,
+  client_phone TEXT,
+  client_email TEXT,
+  symptoms JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending',
+  paused BOOLEAN NOT NULL DEFAULT FALSE,
+  next_action_at TIMESTAMPTZ,
+  notes_summary TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_client_journeys_owner ON client_journeys(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_client_journeys_status ON client_journeys(status);
+CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
+
+CREATE TABLE IF NOT EXISTS client_journey_steps (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  journey_id UUID NOT NULL REFERENCES client_journeys(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  label TEXT NOT NULL,
+  channel TEXT,
+  message TEXT,
+  offset_weeks INTEGER DEFAULT 0,
+  due_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_client_journey_steps_journey ON client_journey_steps(journey_id);
+
+CREATE TABLE IF NOT EXISTS client_journey_notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  journey_id UUID NOT NULL REFERENCES client_journeys(id) ON DELETE CASCADE,
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_client_journey_notes_journey ON client_journey_notes(journey_id);
+
 -- Client Services (junction table with pricing and service history)
 CREATE TABLE IF NOT EXISTS client_services (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -215,6 +261,12 @@ ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_name TEXT;
 ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_phone TEXT;
 ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_email TEXT;
 ALTER TABLE client_services ADD COLUMN IF NOT EXISTS agreed_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS lead_call_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
+UPDATE client_journeys cj
+SET lead_call_key = cl.call_id
+FROM call_logs cl
+WHERE cj.lead_call_key IS NULL AND cj.lead_call_id = cl.id;
 
 -- Create indexes AFTER adding columns
 CREATE INDEX IF NOT EXISTS idx_services_user ON services(user_id);

@@ -1,0 +1,75 @@
+; Domain: anchorcorps.com
+; Exported (y-m-d hh:mm:ss): 2025-12-02 09:13:14
+;
+; This file is intended for use for informational and archival
+; purposes ONLY and MUST be edited before use on a production
+; DNS server.
+;
+; In particular, you must update the SOA record with the correct
+; authoritative name server and contact e-mail address information,
+; and add the correct NS records for the name servers which will
+; be authoritative for this domain.
+;
+; For further information, please consult the BIND documentation
+; located on the following website:
+;
+; http://www.isc.org/
+;
+; And RFC 1035:
+;
+; http://www.ietf.org/rfc/rfc1035.txt
+;
+; Please note that we do NOT offer technical support for any use
+; of this zone data, the BIND name server, or any other third-
+; party DNS software.
+;
+; Use at your own risk.
+
+
+$ORIGIN anchorcorps.com.
+
+; SOA Record
+@	3600	 IN 	SOA	ns31.domaincontrol.com.	dns.jomax.net. (
+					2025120201
+					28800
+					7200
+					604800
+					3600
+					) 
+
+; A Record
+@	600	 IN 	A	162.159.134.42
+
+; TXT Record
+@	3600	 IN 	TXT	"google-site-verification=a5twMJ1zW3C71EqG2y6gywjt-rGknhawbugJt115-cw"
+@	3600	 IN 	TXT	"google-site-verification=IMBVV8GT-C3dIKR6MNR-CVRdapQh0aXqXp0ERHnoXd8"
+@   3600  IN  TXT  "v=spf1 include:_spf.google.com include:spf.mailjet.com ~all"
+
+dc-aa8e722993._spfm	3600	 IN 	TXT	"v=spf1 include:_spf.google.com ~all"
+google._domainkey	3600	 IN 	TXT	"v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAh/Sj7kssGFHAebeTgYAVpuAOufgvapn++7fB36T8YQ4chEOhv/WkXKQIkD1fESbIAGtHCjCGqQev842CxHXc4PvefFiJ7Hx729rdb13YTLVtjzW4y044bEz931vS5+ZNSC9X5dwGmUYLxSyk8BB4C9IGXag5v524/ogwBrzLoo7lyalNoa6PgF0usUW15Cre0"	"LJaDy4AwtuLWPtqGq8XieuQ549o8+A6doN4FVvvxFNWpHx4uJya9SNYuryG82ftibBY+8lmEGdSGco0/+eowKbP5IHYTNdnJ26WhgvzI9TErca8A7JnKBWintpm0xHfBw0zxtD6vEV8+178eqLIwQIDAQAB"
+mailjet._7bda22a7	3600	 IN 	TXT	"7bda22a7cb1b31b6f2682e5b79644df9"
+mailjet._domainkey	3600	 IN 	TXT	"k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlAnfPoWdY8FwLClCMif5OhVmKERlcdyhGIAOoVQ6/HJ7HA7GpNOJb6hefkqh8u+FOgejrob8MOziQWNAU0WobO/nlZNm4mLfLhB2qOv7ZqT0wGyLF93mWgRcKtgSuZjiigDHyIJ+A6foeuiH7VMCRs2rMKXPemxFqPgnz1SHAf9JL2O+2O/CinAtmMtVb/k3i1SZF+Su2I"	"Ub0AukN+9pBss/mE0Xs+u95EQFWdGWTsPgrgCWJNbhlYgOc25PSLPldItSGixK2FHc9G175GP+uXhoqjlXXNQVwEeKZA/x+3+AEA3ojvMtdVVxTsjX2E4RVO5CH9hWooZ54e3heV1QGQIDAQAB"
+mg	3600	 IN 	TXT	"v=spf1 include:mailgun.org ~all"
+mx._domainkey.mg	3600	 IN 	TXT	"k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDcA7RnisBbTxHL3ub3pgWLZ5CplHI53pcQjzLnjkhi55GUOx3YkYl2wp0Z4sVs8TNOSIutfPiGD+SjY6HHQSZgVOpp5WJtXwnssZzvy0+EeyW/TZKHLl3/SNZb4isFYf7k2WVBR6eXaUEGBWfB8hZU8R3k0tzVKWJqXSLXk5jNuQIDAQAB"
+_cf-custom-hostname	3600	 IN 	TXT	"182da8b2-4d90-4662-a511-73d1e9e5aa13"
+
+; CNAME Record
+email.mg	3600	 IN 	CNAME	mailgun.org.
+www	3600	 IN 	CNAME	@
+_acme-challenge	3600	 IN 	CNAME	anchorcorps.com.kinstavalidation.app.
+_domainconnect	3600	 IN 	CNAME	_domainconnect.gd.domaincontrol.com.
+
+; NS Record
+@	3600	 IN 	NS	ns31.domaincontrol.com.
+@	3600	 IN 	NS	ns32.domaincontrol.com.
+
+; MX Record
+@	3600	 IN 	MX	1	aspmx.l.google.com.
+@	3600	 IN 	MX	10	alt3.aspmx.l.google.com.
+@	3600	 IN 	MX	10	alt4.aspmx.l.google.com.
+@	3600	 IN 	MX	5	alt1.aspmx.l.google.com.
+mail	3600	 IN 	MX	1	smtp.google.com.
+mail	3600	 IN 	MX	15	6uif4ok4jwfqsae73hwgnjtetmdexufg7rfv5bpthwsx6sh7spvq.mx-verification.google.com.
+mg	3600	 IN 	MX	10	mxa.mailgun.org.
+mg	3600	 IN 	MX	10	mxb.mailgun.org.
+
