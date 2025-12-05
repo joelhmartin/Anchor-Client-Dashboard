@@ -18,10 +18,10 @@ import IconButton from '@mui/material/IconButton';
 import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 
 import MainCard from 'ui-component/cards/MainCard';
-import { fetchActiveClients, redactOldServices } from 'api/services';
+import { archiveActiveClient, fetchActiveClients, redactOldServices } from 'api/services';
 import { fetchProfile } from 'api/profile';
 
-function ActiveClientRow({ client }) {
+function ActiveClientRow({ client, onArchive }) {
   const [open, setOpen] = useState(false);
 
   const activeServices = client.services?.filter((s) => !s.redacted_at) || [];
@@ -111,6 +111,11 @@ function ActiveClientRow({ client }) {
           <Typography variant="body2" color="text.secondary">
             {new Date(client.agreed_date).toLocaleDateString()}
           </Typography>
+        </TableCell>
+        <TableCell align="right">
+          <Button size="small" color="error" onClick={() => onArchive(client)}>
+            Archive
+          </Button>
         </TableCell>
       </TableRow>
       <TableRow>
@@ -259,6 +264,27 @@ export default function ActiveClients() {
     }
   };
 
+  const handleArchiveClient = useCallback(
+    async (client) => {
+      if (!client?.id) return;
+      const label = client.client_name || client.client_email || 'this client';
+      if (!window.confirm(`Move ${label} to the archive? They can be restored later.`)) {
+        return;
+      }
+      try {
+        setLoading(true);
+        await archiveActiveClient(client.id);
+        setMessage({ type: 'success', text: `${label} archived` });
+        await loadClients();
+      } catch (err) {
+        setMessage({ type: 'error', text: err.message || 'Unable to archive client' });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadClients]
+  );
+
   const totalRevenue = clients.reduce((sum, client) => {
     const clientRevenue = client.services?.reduce((s, srv) => s + (parseFloat(srv.agreed_price) || 0), 0) || 0;
     return sum + clientRevenue;
@@ -358,11 +384,12 @@ export default function ActiveClients() {
                   <TableCell>Source</TableCell>
                   <TableCell align="right">Total Revenue</TableCell>
                   <TableCell>Client Since</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {clients.map((client) => (
-                  <ActiveClientRow key={client.id} client={client} />
+                  <ActiveClientRow key={client.id} client={client} onArchive={handleArchiveClient} />
                 ))}
               </TableBody>
             </Table>

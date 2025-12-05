@@ -3,10 +3,6 @@ import PropTypes from 'prop-types';
 import { useTheme } from '@mui/material/styles';
 import Avatar from '@mui/material/Avatar';
 import Chip from '@mui/material/Chip';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemAvatar from '@mui/material/ListItemAvatar';
-import ListItemText from '@mui/material/ListItemText';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
@@ -63,43 +59,39 @@ export default function NotificationList({ notifications = [], onSelect, loading
   }
 
   return (
-    <List sx={{ width: '100%', maxWidth: { xs: 300, md: 330 }, py: 0 }}>
+    <Box sx={{ width: '100%', maxWidth: { xs: 300, md: 330 } }}>
       {notifications.map((notification) => (
         <ListItemWrapper key={notification.id} onClick={() => onSelect?.(notification)}>
-          <ListItem
-            alignItems="center"
-            disablePadding
-            secondaryAction={
-              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'flex-end' }}>
-                <Typography variant="caption">{formatTimestamp(notification.created_at)}</Typography>
-              </Stack>
-            }
-          >
-            <ListItemAvatar>
-              <Avatar
-                sx={{
-                  color: 'primary.dark',
-                  bgcolor: 'primary.light'
-                }}
-              >
-                <IconBell stroke={1.5} size="20px" />
-              </Avatar>
-            </ListItemAvatar>
-            <ListItemText primary={<Typography variant="subtitle1">{notification.title}</Typography>} />
-          </ListItem>
-          <Stack sx={{ gap: 1.5, pl: 7, pt: 1 }}>
-            {notification.body && (
-              <Typography variant="subtitle2" color="text.secondary">
-                {notification.body}
+          <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Avatar
+              sx={{
+                color: 'primary.dark',
+                bgcolor: 'primary.light',
+                width: 36,
+                height: 36
+              }}
+            >
+              <IconBell stroke={1.5} size="18px" />
+            </Avatar>
+            <Stack spacing={0.5} sx={{ flex: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                {formatTimestamp(notification.created_at)}
               </Typography>
-            )}
-            {notification.status !== 'read' && (
-              <Chip label="Unread" color="error" size="small" sx={{ width: 'min-content' }} />
-            )}
+              {notification.body && (
+                <Typography variant="body2" color="text.primary" sx={{ fontSize: '0.85rem' }}>
+                  {notification.body}
+                </Typography>
+              )}
+              {!notification.body && (
+                <Typography variant="body2" color="text.primary" sx={{ fontSize: '0.85rem' }}>
+                  {notification.title}
+                </Typography>
+              )}
+            </Stack>
           </Stack>
         </ListItemWrapper>
       ))}
-    </List>
+    </Box>
   );
 }
 

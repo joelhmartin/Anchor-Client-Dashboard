@@ -41,3 +41,11 @@ export function saveJourneyTemplate(steps) {
 export function applyJourneyTemplate(journeyId) {
   return client.post(`/hub/journeys/${journeyId}/apply-template`).then((res) => res.data.journey);
 }
+
+export function archiveJourney(journeyId) {
+  return client.post(`/hub/journeys/${journeyId}/archive`).then((res) => res.data.journey);
+}
+
+export function restoreJourney(journeyId, payload = {}) {
+  return client.post(`/hub/journeys/${journeyId}/unarchive`, payload).then((res) => res.data.journey);
+}

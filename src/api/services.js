@@ -16,8 +16,9 @@ export function deleteService(id) {
   return client.delete(`/hub/services/${id}`).then((res) => res.data);
 }
 
-export function fetchActiveClients() {
-  return client.get('/hub/active-clients').then((res) => res.data.active_clients);
+export function fetchActiveClients(status = 'active') {
+  const params = status ? { status } : undefined;
+  return client.get('/hub/active-clients', { params }).then((res) => res.data.active_clients);
 }
 
 export function agreeToService(userId, payload) {
@@ -26,6 +27,14 @@ export function agreeToService(userId, payload) {
 
 export function redactOldServices() {
   return client.post('/hub/active-clients/redact-services').then((res) => res.data);
+}
+
+export function archiveActiveClient(id) {
+  return client.post(`/hub/active-clients/${id}/archive`).then((res) => res.data);
+}
+
+export function restoreActiveClient(id) {
+  return client.post(`/hub/active-clients/${id}/unarchive`).then((res) => res.data);
 }
 
 export function applyServicePreset(clientId, services) {

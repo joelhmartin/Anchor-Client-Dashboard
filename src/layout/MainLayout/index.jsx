@@ -14,7 +14,6 @@ import Header from './Header';
 import Sidebar from './Sidebar';
 import MainContentStyled from './MainContentStyled';
 import Loader from 'ui-component/Loader';
-import Breadcrumbs from 'ui-component/extended/Breadcrumbs';
 
 import useConfig from 'hooks/useConfig';
 import { handlerDrawerOpen, useGetMenuMaster } from 'api/menu';
@@ -61,8 +60,6 @@ export default function MainLayout() {
       {/* main content */}
       <MainContentStyled {...{ borderRadius, open: drawerOpen }}>
         <Box sx={{ ...{ px: { xs: 0 } }, minHeight: 'calc(100vh - 128px)', display: 'flex', flexDirection: 'column' }}>
-          {/* breadcrumb */}
-          <Breadcrumbs />
           <Outlet />
           <Footer />
         </Box>

@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS active_clients (
   funnel_data JSONB NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ
 );
 
 -- Client Journey tracking
@@ -162,12 +163,14 @@ CREATE TABLE IF NOT EXISTS client_journeys (
   client_phone TEXT,
   client_email TEXT,
   symptoms JSONB NOT NULL DEFAULT '[]'::jsonb,
+  symptoms_redacted BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'pending',
   paused BOOLEAN NOT NULL DEFAULT FALSE,
   next_action_at TIMESTAMPTZ,
   notes_summary TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_client_journeys_owner ON client_journeys(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_client_journeys_status ON client_journeys(status);
@@ -260,8 +263,11 @@ ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS owner_user_id UUID REFERENCE
 ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_name TEXT;
 ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_phone TEXT;
 ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS client_email TEXT;
+ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE client_services ADD COLUMN IF NOT EXISTS agreed_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS lead_call_key TEXT;
+ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS symptoms_redacted BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
 UPDATE client_journeys cj
 SET lead_call_key = cl.call_id

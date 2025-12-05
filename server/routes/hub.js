@@ -188,6 +188,8 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
   await ensureJourneyTables();
   const params = [ownerId];
   const conditions = ['owner_user_id = $1'];
+  const showArchivedOnly = filters.archived === true;
+  const includeArchived = filters.includeArchived === true;
   if (filters.id) {
     params.push(filters.id);
     conditions.push(`id = $${params.length}`);
@@ -195,6 +197,11 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
   if (filters.status) {
     params.push(filters.status);
     conditions.push(`status = $${params.length}`);
+  }
+  if (showArchivedOnly) {
+    conditions.push('archived_at IS NOT NULL');
+  } else if (!includeArchived) {
+    conditions.push('archived_at IS NULL');
   }
   const sql = `SELECT *
                FROM client_journeys
@@ -267,7 +274,7 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
 }
 
 async function fetchJourneyForOwner(ownerId, journeyId) {
-  return fetchJourneysForOwner(ownerId, { id: journeyId });
+  return fetchJourneysForOwner(ownerId, { id: journeyId, includeArchived: true });
 }
 
 async function attachJourneyMetaToCalls(ownerId, calls = []) {
@@ -277,7 +284,8 @@ async function attachJourneyMetaToCalls(ownerId, calls = []) {
     `SELECT id, lead_call_key, symptoms, status, paused, next_action_at
      FROM client_journeys
      WHERE owner_user_id = $1
-       AND lead_call_key IS NOT NULL`,
+       AND lead_call_key IS NOT NULL
+       AND archived_at IS NULL`,
     [ownerId]
   );
   const map = new Map();
@@ -332,12 +340,14 @@ async function ensureJourneyTables() {
         client_phone TEXT,
         client_email TEXT,
         symptoms JSONB NOT NULL DEFAULT '[]'::jsonb,
+        symptoms_redacted BOOLEAN NOT NULL DEFAULT FALSE,
         status TEXT NOT NULL DEFAULT 'pending',
         paused BOOLEAN NOT NULL DEFAULT FALSE,
         next_action_at TIMESTAMPTZ,
         notes_summary TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        archived_at TIMESTAMPTZ
       );
       CREATE INDEX IF NOT EXISTS idx_client_journeys_owner ON client_journeys(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_client_journeys_status ON client_journeys(status);
@@ -368,7 +378,9 @@ async function ensureJourneyTables() {
   } else {
     await query(`
       ALTER TABLE client_journeys
-        ADD COLUMN IF NOT EXISTS lead_call_key TEXT;
+        ADD COLUMN IF NOT EXISTS lead_call_key TEXT,
+        ADD COLUMN IF NOT EXISTS symptoms_redacted BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
       CREATE INDEX IF NOT EXISTS idx_client_journeys_lead_call_key ON client_journeys(lead_call_key);
       UPDATE client_journeys cj
       SET lead_call_key = cl.call_id
@@ -377,6 +389,13 @@ async function ensureJourneyTables() {
     `);
   }
   hasEnsuredJourneyTables = true;
+}
+
+let hasEnsuredActiveClientArchive = false;
+async function ensureActiveClientArchiveColumn() {
+  if (hasEnsuredActiveClientArchive) return;
+  await query(`ALTER TABLE active_clients ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  hasEnsuredActiveClientArchive = true;
 }
 
 function logEvent(scope, message, payload = {}) {
@@ -547,6 +566,8 @@ router.get('/profile', async (req, res) => {
 
 router.put('/profile', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
+  const isSelfUpdate = req.user.id === userId;
+  const canOverridePassword = !isSelfUpdate && req.user.role === 'admin';
   const { first_name, last_name, email, password, new_password, monthly_revenue_goal } = req.body || {};
   const updates = [];
   const params = [];
@@ -567,11 +588,13 @@ router.put('/profile', async (req, res) => {
   }
   try {
     if (new_password) {
-      if (!password) return res.status(400).json({ message: 'Current password required' });
-      const { rows } = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
-      const hash = rows[0]?.password_hash;
-      const valid = hash && (await bcrypt.compare(password, hash));
-      if (!valid) return res.status(400).json({ message: 'Current password incorrect' });
+      if (!canOverridePassword) {
+        if (!password) return res.status(400).json({ message: 'Current password required' });
+        const { rows } = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+        const hash = rows[0]?.password_hash;
+        const valid = hash && (await bcrypt.compare(password, hash));
+        if (!valid) return res.status(400).json({ message: 'Current password incorrect' });
+      }
       updates.push('password_hash = $' + (params.length + 1));
       params.push(await bcrypt.hash(new_password, 12));
     }
@@ -607,7 +630,8 @@ router.put('/profile', async (req, res) => {
 router.post('/profile/avatar', uploadAvatar.single('avatar'), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
   const url = publicUrl(req.file.path);
-  await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, req.user.id]);
+  const targetUserId = req.portalUserId || req.user.id;
+  await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, targetUserId]);
   res.json({ avatar_url: url });
 });
 
@@ -1725,10 +1749,20 @@ router.get('/calls', async (req, res) => {
   };
 
   if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
+    logEvent('calls:list', 'CTM credentials missing for client', {
+      userId: targetUserId,
+      hasAccount: !!credentials.accountId,
+      hasKey: !!credentials.apiKey,
+      hasSecret: !!credentials.apiSecret
+    });
     return respondWithCache({ message: 'CallTrackingMetrics credentials not configured for this client.' });
   }
 
   try {
+    logEvent('calls:list', 'Pulling calls from CTM', {
+      userId: targetUserId,
+      promptLength: (profile.ai_prompt || DEFAULT_AI_PROMPT)?.length || 0
+    });
     const freshCalls = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
@@ -2114,6 +2148,9 @@ router.get('/journeys', async (req, res) => {
   try {
     await ensureJourneyTables();
     const filters = {};
+    if (req.query.archived === 'true') {
+      filters.archived = true;
+    }
     if (req.query.status && JOURNEY_STATUS_OPTIONS.includes(req.query.status)) {
       filters.status = req.query.status;
     }
@@ -2332,6 +2369,63 @@ router.put('/journeys/:id', async (req, res) => {
   } catch (err) {
     console.error('[journeys:update]', err);
     res.status(500).json({ message: 'Unable to update journey' });
+  }
+});
+
+router.post('/journeys/:id/archive', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  try {
+    await ensureJourneyTables();
+    const result = await query(
+      `UPDATE client_journeys
+       SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+       WHERE id = $1 AND owner_user_id = $2
+       RETURNING id`,
+      [id, ownerId]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Journey not found' });
+    }
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:archive]', err);
+    res.status(500).json({ message: 'Unable to archive journey' });
+  }
+});
+
+router.post('/journeys/:id/unarchive', async (req, res) => {
+  const ownerId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  const desiredStatus = req.body?.status;
+  const statusUpdate =
+    desiredStatus && JOURNEY_STATUS_OPTIONS.includes(desiredStatus) && desiredStatus !== 'archived'
+      ? desiredStatus
+      : null;
+  try {
+    await ensureJourneyTables();
+    const params = [id, ownerId];
+    let setClause = 'archived_at = NULL, updated_at = NOW()';
+    if (statusUpdate) {
+      params.push(statusUpdate);
+      setClause = `archived_at = NULL, status = $3, updated_at = NOW()`;
+    }
+    const result = await query(
+      `UPDATE client_journeys
+       SET ${setClause}
+       WHERE id = $1 AND owner_user_id = $2
+       RETURNING id`,
+      params
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Journey not found' });
+    }
+    const journey = await fetchJourneyForOwner(ownerId, id);
+    res.json({ journey });
+  } catch (err) {
+    console.error('[journeys:unarchive]', err);
+    res.status(500).json({ message: 'Unable to restore journey' });
   }
 });
 
@@ -2632,6 +2726,9 @@ router.get('/active-clients', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   try {
     await ensureJourneyTables();
+    await ensureActiveClientArchiveColumn();
+    const showArchived = req.query.status === 'archived';
+    const archiveClause = showArchived ? 'ac.archived_at IS NOT NULL' : 'ac.archived_at IS NULL';
     const { rows } = await query(
       `
       SELECT 
@@ -2666,6 +2763,7 @@ router.get('/active-clients', async (req, res) => {
       LEFT JOIN client_services cs ON ac.id = cs.active_client_id
       LEFT JOIN services s ON cs.service_id = s.id
       WHERE ac.owner_user_id = $1
+        AND ${archiveClause}
       GROUP BY ac.id, journey.id, journey.status, journey.paused, journey.symptoms, journey.next_action_at
       ORDER BY ac.created_at DESC
     `,
@@ -2675,6 +2773,62 @@ router.get('/active-clients', async (req, res) => {
   } catch (err) {
     logEvent('active-clients:list', 'Error fetching active clients', { error: err.message, userId });
     res.status(500).json({ message: 'Unable to fetch active clients' });
+  }
+});
+
+router.post('/active-clients/:id/archive', async (req, res) => {
+  const userId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  try {
+    await ensureActiveClientArchiveColumn();
+    const result = await query(
+      `UPDATE active_clients
+       SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+       WHERE id = $1 AND owner_user_id = $2
+       RETURNING id`,
+      [id, userId]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Active client not found' });
+    }
+    await query(
+      `UPDATE client_journeys
+       SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+       WHERE active_client_id = $1 AND owner_user_id = $2`,
+      [id, userId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    logEvent('active-clients:archive', 'Error archiving client', { error: err.message, userId, id });
+    res.status(500).json({ message: 'Unable to archive client' });
+  }
+});
+
+router.post('/active-clients/:id/unarchive', async (req, res) => {
+  const userId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  try {
+    await ensureActiveClientArchiveColumn();
+    const result = await query(
+      `UPDATE active_clients
+       SET archived_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND owner_user_id = $2
+       RETURNING id`,
+      [id, userId]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Active client not found' });
+    }
+    await query(
+      `UPDATE client_journeys
+       SET archived_at = NULL, updated_at = NOW()
+       WHERE active_client_id = $1 AND owner_user_id = $2`,
+      [id, userId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    logEvent('active-clients:unarchive', 'Error restoring client', { error: err.message, userId, id });
+    res.status(500).json({ message: 'Unable to restore client' });
   }
 });
 
@@ -2832,8 +2986,18 @@ router.post('/active-clients/redact-services', async (req, res) => {
         )
       RETURNING id
     `, [userId]);
+    const { rowCount: journeyRedacted } = await query(
+      `UPDATE client_journeys
+       SET symptoms = '[]'::jsonb,
+           symptoms_redacted = TRUE,
+           updated_at = NOW()
+       WHERE symptoms_redacted = FALSE
+         AND created_at < NOW() - INTERVAL '90 days'
+         AND owner_user_id = $1`,
+      [userId]
+    );
     logEvent('active-clients:redact', 'Services redacted', { count: rows.length, userId });
-    res.json({ success: true, redacted_count: rows.length });
+    res.json({ success: true, services_redacted: rows.length, journeys_redacted: journeyRedacted });
   } catch (err) {
     logEvent('active-clients:redact', 'Error redacting services', { error: err.message, userId });
     res.status(500).json({ message: 'Unable to redact services' });

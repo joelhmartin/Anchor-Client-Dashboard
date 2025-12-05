@@ -43,7 +43,7 @@ import { fetchBrand, saveBrand } from 'api/brand';
 import { deleteDocument, fetchDocuments, markDocumentViewed, uploadDocuments } from 'api/documents';
 import { fetchTasksAndRequests, submitRequest } from 'api/requests';
 import { fetchCalls, scoreCall, clearCallScore, clearAndReloadCalls } from 'api/calls';
-import { fetchServices, agreeToService } from 'api/services';
+import { fetchServices, agreeToService, fetchActiveClients, restoreActiveClient } from 'api/services';
 import {
   fetchJourneys,
   createJourney,
@@ -54,7 +54,9 @@ import {
   deleteJourneyStep,
   fetchJourneyTemplate,
   saveJourneyTemplate,
-  applyJourneyTemplate
+  applyJourneyTemplate,
+  archiveJourney,
+  restoreJourney
 } from 'api/journeys';
 import { CLIENT_SYMPTOM_PRESETS } from 'constants/clientPresets';
 
@@ -64,6 +66,7 @@ const SECTION_CONFIG = [
   { value: 'tasks', label: 'Tasks' },
   { value: 'leads', label: 'Leads' },
   { value: 'journey', label: 'Client Journey' },
+  { value: 'archive', label: 'Archive' },
   { value: 'brand', label: 'Brand Assets' },
   { value: 'documents', label: 'Documents' }
 ];
@@ -119,6 +122,7 @@ export default function ClientPortal() {
 
   const [analyticsUrl, setAnalyticsUrl] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsFetched, setAnalyticsFetched] = useState(false);
 
   const [profile, setProfile] = useState(null);
   const [profileForm, setProfileForm] = useState({ display_name: '', email: '', password: '', password_confirm: '', monthly_revenue_goal: '' });
@@ -173,6 +177,10 @@ export default function ClientPortal() {
   const [templateSaving, setTemplateSaving] = useState(false);
   const [noteDialog, setNoteDialog] = useState({ open: false, journeyId: null, value: '' });
   const [timelineDialog, setTimelineDialog] = useState({ open: false, journey: null });
+  const [archivedJourneys, setArchivedJourneys] = useState([]);
+  const [archivedClients, setArchivedClients] = useState([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveLoaded, setArchiveLoaded] = useState(false);
 
   const handleCloseRequestDialog = () => {
     setRequestDialogOpen(false);
@@ -192,13 +200,16 @@ export default function ClientPortal() {
   );
 
   const ensureAnalytics = useCallback(() => {
-    if (analyticsUrl !== null || analyticsLoading) return;
+    if (analyticsFetched || analyticsLoading) return;
     setAnalyticsLoading(true);
     fetchAnalyticsUrl()
-      .then((url) => setAnalyticsUrl(url))
+      .then((url) => setAnalyticsUrl(url || null))
       .catch((err) => triggerMessage('error', err.message || 'Unable to load analytics'))
-      .finally(() => setAnalyticsLoading(false));
-  }, [analyticsUrl, analyticsLoading]);
+      .finally(() => {
+        setAnalyticsFetched(true);
+        setAnalyticsLoading(false);
+      });
+  }, [analyticsFetched, analyticsLoading, triggerMessage]);
 
   const loadProfile = useCallback(() => {
     setProfileLoading(true);
@@ -302,11 +313,80 @@ export default function ClientPortal() {
     }
   }, []);
 
+  const loadArchiveData = useCallback(async () => {
+    setArchiveLoading(true);
+    try {
+      const [archivedJourneyList, archivedClientList] = await Promise.all([
+        fetchJourneys({ archived: true }),
+        fetchActiveClients('archived')
+      ]);
+      setArchivedJourneys(Array.isArray(archivedJourneyList) ? archivedJourneyList : []);
+      setArchivedClients(Array.isArray(archivedClientList) ? archivedClientList : []);
+      setArchiveLoaded(true);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to load archive');
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, [triggerMessage]);
+
+  const handleArchiveJourney = useCallback(
+    async (journey) => {
+      if (!journey?.id) return;
+      const label = journey.client_name || journey.client_phone || journey.client_email || 'this lead';
+      if (!window.confirm(`Move ${label}'s journey to the archive?`)) return;
+      try {
+        await archiveJourney(journey.id);
+        triggerMessage('success', `${label}'s journey archived`);
+        await loadJourneys();
+        if (activeTab === 'archive') {
+          await loadArchiveData();
+        } else {
+          setArchiveLoaded(false);
+        }
+      } catch (err) {
+        triggerMessage('error', err.message || 'Unable to archive journey');
+      }
+    },
+    [activeTab, loadArchiveData, loadJourneys, triggerMessage]
+  );
+
+  const handleRestoreJourney = useCallback(
+    async (journey) => {
+      if (!journey?.id) return;
+      try {
+        await restoreJourney(journey.id);
+        triggerMessage('success', 'Journey restored');
+        await loadJourneys();
+        await loadArchiveData();
+      } catch (err) {
+        triggerMessage('error', err.message || 'Unable to restore journey');
+      }
+    },
+    [loadArchiveData, loadJourneys, triggerMessage]
+  );
+
+  const handleRestoreClient = useCallback(
+    async (client) => {
+      if (!client?.id) return;
+      const label = client.client_name || client.client_email || client.client_phone || 'this client';
+      try {
+        await restoreActiveClient(client.id);
+        triggerMessage('success', `${label} restored`);
+        await loadArchiveData();
+      } catch (err) {
+        triggerMessage('error', err.message || 'Unable to restore client');
+      }
+    },
+    [loadArchiveData, triggerMessage]
+  );
+
   const loadServices = useCallback(() => {
     fetchServices()
       .then((data) => setServices(data.filter((s) => s.active !== false)))
       .catch((err) => triggerMessage('error', err.message || 'Unable to load services'));
   }, []);
+
 
   useEffect(() => {
     if (activeTab === 'analytics') ensureAnalytics();
@@ -318,8 +398,8 @@ export default function ClientPortal() {
       loadCalls();
       if (services.length === 0) loadServices();
     }
-    if ((activeTab === 'journey' || activeTab === 'leads') && !journeys.length && !journeysLoading) {
-      loadJourneys();
+    if (activeTab === 'archive' && !archiveLoaded && !archiveLoading) {
+      loadArchiveData();
     }
   }, [
     activeTab,
@@ -340,10 +420,16 @@ export default function ClientPortal() {
     loadCalls,
     services,
     loadServices,
-    journeys.length,
-    journeysLoading,
-    loadJourneys
+    archiveLoaded,
+    archiveLoading,
+    loadArchiveData
   ]);
+
+  useEffect(() => {
+    if (activeTab === 'journey' && !journeys.length && !journeysLoading) {
+      loadJourneys();
+    }
+  }, [activeTab, journeys.length, journeysLoading, loadJourneys]);
 
   const handleProfileSave = async () => {
     if (!profileForm.display_name || !profileForm.email) {
@@ -1534,13 +1620,18 @@ export default function ClientPortal() {
                           {[journey.client_phone, journey.client_email].filter(Boolean).join(' · ')}
                         </Typography>
                       )}
-                      {journey.symptoms?.length > 0 && (
-                        <Stack direction="row" spacing={1} flexWrap="wrap">
-                          {journey.symptoms.map((symptom) => (
-                            <Chip key={`${journey.id}-${symptom}`} label={symptom} size="small" variant="outlined" />
-                          ))}
-                        </Stack>
-                      )}
+            {journey.symptoms?.length > 0 && (
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                {journey.symptoms.map((symptom) => (
+                  <Chip key={`${journey.id}-${symptom}`} label={symptom} size="small" variant="outlined" />
+                ))}
+              </Stack>
+            )}
+            {journey.symptoms_redacted && (
+              <Typography variant="caption" color="text.secondary">
+                Symptoms redacted after 90 days.
+              </Typography>
+            )}
                       <Box
                         sx={{
                           border: '1px dashed',
@@ -1608,12 +1699,132 @@ export default function ClientPortal() {
                         <Button variant="outlined" onClick={() => handleOpenNoteDialog(journey)}>
                           Add Note
                         </Button>
+                        <Button variant="outlined" color="error" onClick={() => handleArchiveJourney(journey)}>
+                          Archive Journey
+                        </Button>
                       </Stack>
                     </Stack>
                   </CardContent>
                 </Card>
               );
             })}
+          </Stack>
+        )}
+        {activeTab === 'archive' && (
+          <Stack spacing={3}>
+            {archiveLoading && <LinearProgress />}
+            <Card variant="outlined">
+              <CardContent>
+                <Stack spacing={2}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="h6">Archived Journeys</Typography>
+                    <Button variant="text" size="small" onClick={loadArchiveData} disabled={archiveLoading}>
+                      Refresh
+                    </Button>
+                  </Stack>
+                  {archivedJourneys.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No archived journeys.
+                    </Typography>
+                  ) : (
+                    archivedJourneys.map((journey) => (
+                      <Box
+                        key={journey.id}
+                        sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2 }}
+                      >
+                        <Stack
+                          direction={{ xs: 'column', sm: 'row' }}
+                          spacing={1}
+                          justifyContent="space-between"
+                          alignItems={{ xs: 'flex-start', sm: 'center' }}
+                        >
+                          <Box>
+                            <Typography variant="subtitle1">
+                              {journey.client_name || journey.client_phone || journey.client_email || 'Unnamed Lead'}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Archived {journey.archived_at ? formatDateDisplay(journey.archived_at) : 'unknown'}
+                            </Typography>
+                          </Box>
+                          <Stack direction="row" spacing={1}>
+                            <Button size="small" onClick={() => handleRestoreJourney(journey)}>
+                              Restore
+                            </Button>
+                          </Stack>
+                        </Stack>
+                        {journey.symptoms?.length > 0 && (
+                          <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                            {journey.symptoms.map((symptom) => (
+                              <Chip key={`${journey.id}-archived-${symptom}`} label={symptom} size="small" variant="outlined" />
+                            ))}
+                          </Stack>
+                        )}
+                        {journey.status && (
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                            Status before archive: {journey.status.replace('_', ' ')}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+            <Card variant="outlined">
+              <CardContent>
+                <Stack spacing={2}>
+                  <Typography variant="h6">Archived Active Clients</Typography>
+                  {archivedClients.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No archived clients.
+                    </Typography>
+                  ) : (
+                    archivedClients.map((client) => (
+                      <Box
+                        key={client.id}
+                        sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2 }}
+                      >
+                        <Stack
+                          direction={{ xs: 'column', sm: 'row' }}
+                          spacing={1}
+                          justifyContent="space-between"
+                          alignItems={{ xs: 'flex-start', sm: 'center' }}
+                        >
+                          <Box>
+                            <Typography variant="subtitle1">{client.client_name || 'Unknown Client'}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Archived {client.archived_at ? formatDateDisplay(client.archived_at) : 'unknown'}
+                            </Typography>
+                            {[client.client_phone, client.client_email]
+                              .filter(Boolean)
+                              .map((value) => (
+                                <Typography key={value} variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                  {value}
+                                </Typography>
+                              ))}
+                          </Box>
+                          <Stack direction="row" spacing={1}>
+                            <Button size="small" onClick={() => handleRestoreClient(client)}>
+                              Restore
+                            </Button>
+                          </Stack>
+                        </Stack>
+                        {client.services?.length > 0 && (
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 1 }}>
+                            {client.services
+                              .filter((s) => !s.redacted_at)
+                              .slice(0, 4)
+                              .map((service) => (
+                                <Chip key={`${client.id}-${service.id}`} label={service.service_name} size="small" />
+                              ))}
+                          </Stack>
+                        )}
+                      </Box>
+                    ))
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
           </Stack>
         )}
 

@@ -8,7 +8,8 @@ import {
   IconFlagCheck,
   IconBriefcase,
   IconUsers,
-  IconArticle
+  IconArticle,
+  IconArchive
 } from '@tabler/icons-react';
 
 const portalGroup = {
@@ -79,6 +80,13 @@ const clientManagementGroup = {
       type: 'item',
       url: '/portal?tab=journey',
       icon: IconFlagCheck
+    },
+    {
+      id: 'portal-archive',
+      title: 'Archive',
+      type: 'item',
+      url: '/portal?tab=archive',
+      icon: IconArchive
     },
     {
       id: 'active-clients',
