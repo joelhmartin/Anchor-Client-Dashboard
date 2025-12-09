@@ -10,7 +10,9 @@ export async function createNotification({ userId, title, body, linkUrl, meta = 
      VALUES ($1,$2,$3,$4,$5) RETURNING *`,
     [userId, title, body || null, linkUrl || null, JSON.stringify(meta || {})]
   );
-  return rows[0];
+  const notification = rows[0];
+  await emailNotificationToUser(userId, notification);
+  return notification;
 }
 
 export async function createNotificationsForAdmins(payload) {
@@ -71,5 +73,28 @@ export async function notifyAdminsByEmail({ subject, text, html }) {
     subject,
     text,
     html
+  });
+}
+
+async function emailNotificationToUser(userId, notification) {
+  if (!isMailgunConfigured()) return;
+  const { rows } = await query('SELECT email, first_name, last_name FROM users WHERE id = $1 LIMIT 1', [userId]);
+  const user = rows[0];
+  if (!user?.email) return;
+  const name =
+    [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || user.email.split('@')[0] || 'there';
+  const subject = `Anchor Hub Notification: ${notification.title}`;
+  const bodyText = `${name},\n\n${notification.body || notification.title}\n\n${
+    notification.link_url ? `View: ${notification.link_url}\n\n` : ''
+  }- Anchor Hub`;
+  const bodyHtml = `<p>Hi ${name},</p>
+<p>${notification.body || notification.title}</p>
+${notification.link_url ? `<p><a href="${notification.link_url}" target="_blank" rel="noopener">View details</a></p>` : ''}
+<p>- Anchor Hub</p>`;
+  await sendMailgunMessage({
+    to: [user.email],
+    subject,
+    text: bodyText,
+    html: bodyHtml
   });
 }

@@ -1819,6 +1819,28 @@ router.get('/calls', async (req, res) => {
           })
         );
       }
+
+      const attentionCalls = freshCalls.filter((item) => item.notifyNeedsAttention);
+      if (attentionCalls.length) {
+        await Promise.all(
+          attentionCalls.map(({ call }) =>
+            createNotification({
+              userId: targetUserId,
+              title: 'Voicemail needs attention',
+              body: `${call.caller_name || call.caller_number || 'A caller'} left a voicemail requesting services. Summary: ${
+                call.classification_summary || 'Review the voicemail details.'
+              }`,
+              linkUrl: '/portal?tab=leads',
+              meta: {
+                call_id: call.id,
+                caller_name: call.caller_name,
+                caller_number: call.caller_number,
+                category: call.category
+              }
+            })
+          )
+        );
+      }
     }
 
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
@@ -2064,7 +2086,15 @@ router.delete('/calls', async (req, res) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
           return query(
             `INSERT INTO call_logs (user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT (call_id) DO UPDATE SET
+               direction=EXCLUDED.direction,
+               from_number=EXCLUDED.from_number,
+               to_number=EXCLUDED.to_number,
+               started_at=EXCLUDED.started_at,
+               duration_sec=EXCLUDED.duration_sec,
+               score=EXCLUDED.score,
+               meta=EXCLUDED.meta`,
             [
               targetUserId,
               call.id,

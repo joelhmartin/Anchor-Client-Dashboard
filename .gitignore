@@ -13,6 +13,7 @@
 
 # testing
 /coverage
+application_default_credentials.json
 
 # production
 /build

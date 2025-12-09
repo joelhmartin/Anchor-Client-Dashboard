@@ -1,9 +1,10 @@
 import axios from 'axios';
+import { generateAiResponse } from './ai.js';
 
 const CTM_BASE = process.env.CTM_API_BASE || 'https://api.calltrackingmetrics.com';
 export const DEFAULT_AI_PROMPT =
   process.env.DEFAULT_AI_PROMPT ||
-  'You are an assistant that classifies call transcripts for Renting or Buying A Home using your realtor company, Aragona & Associates. Possible categories: warm (promising lead), very_hot (ready to book), voicemail (reached voicemail or unanswered), unanswered (no conversation), negative (unhappy caller), spam (irrelevant/sales), neutral (general inquiry). Return a short JSON object like {"category":"warm","summary":"One sentence summary"}.';
+  'You are an assistant that classifies call transcripts for Renting or Buying A Home using your realtor company, Aragona & Associates. Categories: warm (promising live lead), very_hot (ready to book now), voicemail (voicemail with no actionable details), needs_attention (caller left a voicemail indicating they want services or next steps), unanswered (no conversation occurred), negative (unhappy caller or not a fit), spam (irrelevant/sales), neutral (general inquiry). Respond ONLY with JSON like {"category":"needs_attention","summary":"One sentence summary"}.';
 
 const MAX_CALLS = Number(process.env.CTM_MAX_CALLS || 200);
 const CLASSIFY_LIMIT = Number(process.env.CTM_CLASSIFY_LIMIT || 40);
@@ -12,6 +13,7 @@ const CATEGORY_MAP = {
   very_hot: 'very_good',
   'very-hot': 'very_good',
   hot: 'very_good',
+  needs_attention: 'needs_attention',
   voicemail: 'voicemail',
   unanswered: 'unanswered',
   negative: 'negative',
@@ -36,6 +38,7 @@ function getAutoStarRating(category) {
       return 2;
     case 'warm':
     case 'very_good':
+    case 'needs_attention':
       return 3;
     case 'voicemail':
     case 'unanswered':
@@ -246,6 +249,27 @@ function mapCategory(value) {
   return CATEGORY_MAP[slug] || (slug || 'unreviewed');
 }
 
+const CATEGORY_PATTERNS = [
+  { key: 'needs_attention', phrases: ['needs_attention', 'needs attention', 'attention needed'] },
+  { key: 'very_hot', phrases: ['very hot', 'ready to book', 'booked appointment'] },
+  { key: 'warm', phrases: ['warm', 'interested lead', 'promising lead'] },
+  { key: 'voicemail', phrases: ['voicemail', 'voice mail'] },
+  { key: 'unanswered', phrases: ['unanswered', 'no answer', 'no response'] },
+  { key: 'negative', phrases: ['negative', 'not interested', 'unhappy'] },
+  { key: 'spam', phrases: ['spam', 'telemarketer', 'scam', 'robocall'] },
+  { key: 'neutral', phrases: ['neutral', 'general inquiry', 'info request'] }
+];
+
+function inferCategoryFromText(text = '') {
+  const lower = text.toLowerCase();
+  for (const entry of CATEGORY_PATTERNS) {
+    if (entry.phrases.some((phrase) => lower.includes(phrase))) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
 export async function classifyContent(prompt, transcript, message) {
   const content = transcript || message;
   if (!content) {
@@ -255,41 +279,21 @@ export async function classifyContent(prompt, transcript, message) {
       category: 'unreviewed'
     };
   }
-  const apiKey = process.env.OPEN_AI_API_KEY;
-  if (!apiKey) {
-    return {
-      classification: 'unreviewed',
-      summary: 'AI classification unavailable (missing API key).',
-      category: 'unreviewed'
-    };
-  }
+  const payloadPreview = content.slice(0, 500);
   try {
-    const body = {
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    const raw = await generateAiResponse({
+      prompt: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(
+        0,
+        6000
+      )}\n\nRespond ONLY with JSON like {"category":"needs_attention","summary":"single sentence"}. Categories: warm, very_hot, voicemail, needs_attention, unanswered, negative, spam, neutral.`,
+      systemPrompt: prompt || DEFAULT_AI_PROMPT,
       temperature: 0.2,
-      max_tokens: 150,
-      messages: [
-        { role: 'system', content: prompt || DEFAULT_AI_PROMPT },
-        {
-          role: 'user',
-          content: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(0, 4000)}`
-        }
-      ]
-    };
-    const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 20000
+      maxTokens: 200,
+      model: process.env.VERTEX_CLASSIFIER_MODEL || process.env.VERTEX_MODEL || undefined
     });
-    let raw = response.data?.choices?.[0]?.message?.content?.trim();
-    if (!raw) {
-      return { classification: 'unreviewed', summary: 'AI classification unavailable.', category: 'unreviewed' };
-    }
     let classification = raw;
-    let summary = '';
-    if (raw.startsWith('{')) {
+    let summary = raw;
+    if (raw.trim().startsWith('{')) {
       try {
         const parsed = JSON.parse(raw);
         classification = parsed.category || classification;
@@ -297,17 +301,51 @@ export async function classifyContent(prompt, transcript, message) {
       } catch {
         summary = raw;
       }
-    } else {
-      summary = raw;
+    }
+    if (!classification || classification === raw) {
+      const categoryMatch = raw.match(/"category"\s*:\s*"([^"]+)"/i);
+      if (categoryMatch) {
+        classification = categoryMatch[1];
+      }
+    }
+    if (!summary || summary === raw) {
+      const summaryMatch = raw.match(/"summary"\s*:\s*"([^"]+)"/i);
+      if (summaryMatch) {
+        summary = summaryMatch[1];
+      }
+    }
+    if (!classification || classification === raw) {
+      const inferred = inferCategoryFromText(raw);
+      if (inferred) classification = inferred;
+    }
+    const mappedCategory = mapCategory(classification);
+    let finalCategory = mappedCategory;
+    if (!mappedCategory || mappedCategory === 'unreviewed') {
+      const inferredFromSummary = inferCategoryFromText(summary);
+      if (inferredFromSummary) {
+        finalCategory = mapCategory(inferredFromSummary);
+        classification = inferredFromSummary;
+      }
+    }
+    if (!classification || !summary) {
+      console.warn('[ctm:classify] Empty classification or summary', {
+        classification,
+        summary,
+        category: finalCategory,
+        preview: payloadPreview
+      });
     }
     return {
       classification,
       summary,
-      category: mapCategory(classification)
+      category: finalCategory
     };
   } catch (err) {
     const details = err.response?.data || err.message;
-    console.error('[ctm:classify]', details);
+    console.error('[ctm:classify]', {
+      error: details,
+      preview: payloadPreview
+    });
     return { classification: 'unreviewed', summary: 'AI classification failed.', category: 'unreviewed' };
   }
 }
@@ -378,12 +416,26 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     
     const transcript = getTranscript(raw);
     const message = buildMessage(raw);
+    const stubMessage = isCtmStubMessage(message);
+    const hasConversation = Boolean(
+      (transcript && transcript.trim()) ||
+        (!stubMessage && message && message.trim().length > 10)
+    );
+    const unansweredLikely = isLikelyUnanswered(raw);
     let classification = prevMeta.classification || '';
     let summary = prevMeta.classification_summary || '';
     let category = prevMeta.category || 'unreviewed';
     let shouldAutoStar = false;
     
-    if ((!classification || !summary) && (transcript || message)) {
+    if (unansweredLikely && !hasConversation) {
+      classification = 'unanswered';
+      summary = 'Call was unanswered with no voicemail.';
+      category = 'unanswered';
+    } else if (stubMessage && !transcript) {
+      classification = 'neutral';
+      summary = 'Call logged from CTM metadata.';
+      category = 'neutral';
+    } else if ((!classification || !summary) && hasConversation) {
       if (classified < CLASSIFY_LIMIT) {
         const ai = await classifyContent(prompt, transcript, message);
         classification = ai.classification;
@@ -434,9 +486,60 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
       started_at: startedAtIso,
       score: finalScore
     };
-    results.push({ call: callData, meta: { ...callData }, shouldPostScore: autoStarEnabled && shouldAutoStar && finalScore > 0 });
+    const needsAttention = category === 'needs_attention';
+    results.push({
+      call: callData,
+      meta: { ...callData },
+      shouldPostScore: autoStarEnabled && shouldAutoStar && finalScore > 0,
+      notifyNeedsAttention: needsAttention && shouldAutoStar
+    });
   }
   return results;
+}
+
+function isLikelyUnanswered(raw = {}) {
+  const duration =
+    Number(raw.duration) ||
+    Number(raw.duration_sec) ||
+    Number(raw.talk_time) ||
+    Number(raw.time_on_phone) ||
+    0;
+  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (duration === 0 && statusString.includes('voicemail')) {
+    return false;
+  }
+  if (
+    duration === 0 ||
+    statusString.includes('missed') ||
+    statusString.includes('unanswered') ||
+    statusString.includes('no answer') ||
+    statusString.includes('busy')
+  ) {
+    return true;
+  }
+  if (Array.isArray(raw.actions)) {
+    return raw.actions.some((action) => {
+      const value = `${action?.event || ''} ${action?.name || ''}`.toLowerCase();
+      return value.includes('missed') || value.includes('unanswered') || value.includes('no answer');
+    });
+  }
+  return false;
+}
+
+function isCtmStubMessage(text = '') {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.startsWith('new call from:') ||
+    normalized.startsWith('repeat call from:') ||
+    normalized.startsWith('caller transcript:') ||
+    normalized.startsWith('call from:') ||
+    normalized.startsWith('website visitor') ||
+    normalized === 'website'
+  );
 }
 
 export function buildCallsFromCache(rows = []) {

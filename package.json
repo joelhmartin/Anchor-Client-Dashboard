@@ -11,6 +11,7 @@
     "@fontsource/inter": "5.2.8",
     "@fontsource/poppins": "5.2.7",
     "@fontsource/roboto": "5.2.8",
+    "@google-cloud/vertexai": "^1.10.0",
     "@mui/icons-material": "7.3.4",
     "@mui/material": "7.3.4",
     "@tabler/icons-react": "3.35.0",
