@@ -33,17 +33,21 @@ const baseCspDirectives = {
 
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:4173').split(',').map((o) => o.trim());
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+};
+
+// Apply CORS middleware globally (before other routes and static asset serving)
+app.use(cors(corsOptions)); // <--- This will apply CORS to all requests
+app.use('/api', authRouter); // Assuming authRouter is an API router
+app.use('/api', hubRouter); // Assuming hubRouter is an API router
+app.use('/api', onboardingRouter); // Assuming onboardingRouter is an API router
 
 app.use(
   helmet({
