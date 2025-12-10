@@ -4,7 +4,7 @@ import { generateAiResponse } from './ai.js';
 const CTM_BASE = process.env.CTM_API_BASE || 'https://api.calltrackingmetrics.com';
 export const DEFAULT_AI_PROMPT =
   process.env.DEFAULT_AI_PROMPT ||
-  'You are an assistant that classifies call transcripts for Renting or Buying A Home using your realtor company, Aragona & Associates. Categories: warm (promising live lead), very_hot (ready to book now), voicemail (voicemail with no actionable details), needs_attention (caller left a voicemail indicating they want services or next steps), unanswered (no conversation occurred), negative (unhappy caller or not a fit), spam (irrelevant/sales), neutral (general inquiry). Respond ONLY with JSON like {"category":"needs_attention","summary":"One sentence summary"}.';
+  'You are an assistant that classifies call transcripts for Renting or Buying A Home using your realtor company, Aragona & Associates. Categories: warm (promising live lead), very_hot (ready to book now), voicemail (voicemail with no actionable details), needs_attention (caller left a voicemail indicating they want services or next steps), unanswered (no conversation occurred), negative (unhappy caller or not a fit), spam (irrelevant/sales), neutral (general inquiry), applicant (career/employment inquiry). Respond ONLY with JSON like {"category":"needs_attention","summary":"One sentence summary"}.';
 
 const MAX_CALLS = Number(process.env.CTM_MAX_CALLS || 200);
 const CLASSIFY_LIMIT = Number(process.env.CTM_CLASSIFY_LIMIT || 40);
@@ -14,6 +14,7 @@ const CATEGORY_MAP = {
   'very-hot': 'very_good',
   hot: 'very_good',
   needs_attention: 'needs_attention',
+  applicant: 'applicant',
   voicemail: 'voicemail',
   unanswered: 'unanswered',
   negative: 'negative',
@@ -257,7 +258,8 @@ const CATEGORY_PATTERNS = [
   { key: 'unanswered', phrases: ['unanswered', 'no answer', 'no response'] },
   { key: 'negative', phrases: ['negative', 'not interested', 'unhappy'] },
   { key: 'spam', phrases: ['spam', 'telemarketer', 'scam', 'robocall'] },
-  { key: 'neutral', phrases: ['neutral', 'general inquiry', 'info request'] }
+  { key: 'neutral', phrases: ['neutral', 'general inquiry', 'info request'] },
+  { key: 'applicant', phrases: ['career', 'careers', 'job', 'jobs', 'position', 'apply', 'applicant', 'employment'] }
 ];
 
 function inferCategoryFromText(text = '') {
@@ -285,7 +287,7 @@ export async function classifyContent(prompt, transcript, message) {
       prompt: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(
         0,
         6000
-      )}\n\nRespond ONLY with JSON like {"category":"needs_attention","summary":"single sentence"}. Categories: warm, very_hot, voicemail, needs_attention, unanswered, negative, spam, neutral.`,
+      )}\n\nRespond ONLY with JSON like {"category":"needs_attention","summary":"single sentence"}. Categories: warm, very_hot, applicant, voicemail, needs_attention, unanswered, negative, spam, neutral.`,
       systemPrompt: prompt || DEFAULT_AI_PROMPT,
       temperature: 0.2,
       maxTokens: 200,

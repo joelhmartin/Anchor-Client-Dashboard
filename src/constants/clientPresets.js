@@ -139,6 +139,11 @@ export const CLIENT_TYPE_PRESETS = [
     value: 'food_service',
     label: 'Food Service',
     subtypes: []
+  },
+  {
+    value: 'other',
+    label: 'Other',
+    subtypes: []
   }
 ];
 
@@ -193,6 +198,13 @@ export const CLIENT_AI_PROMPTS = {
   food_service: {
     description: 'food and hospitality businesses',
     default: promptFor('food service operations', collectServices('food_service'))
+  },
+  other: {
+    description: 'other business types',
+    default:
+      `${AI_PROMPT_BASE} You are configuring a prompt for a business that does not match presets.` +
+      ' Replace the placeholders with real details before use.' +
+      ' Business type: {{business_type}}. Core services: {{services}}. Audience/tone: {{audience}}.'
   }
 };
 

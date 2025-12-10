@@ -1408,7 +1408,7 @@ export default function ClientPortal() {
                 onChange={(e) => setCallFilters((prev) => ({ ...prev, category: e.target.value }))}
               >
                 <MenuItem value="all">All</MenuItem>
-                {['warm', 'very_good', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
+                {['warm', 'very_good', 'applicant', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
                   <MenuItem key={cat} value={cat}>
                     {cat.replace('_', ' ')}
                   </MenuItem>
@@ -1417,7 +1417,7 @@ export default function ClientPortal() {
             </Stack>
             {callsLoading && <LinearProgress />}
             <Grid container spacing={2}>
-              {['warm', 'very_good', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
+              {['warm', 'very_good', 'applicant', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
                 <Grid item xs={6} md={3} key={cat}>
                   <Card variant="outlined">
                     <CardContent>

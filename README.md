@@ -1,4 +1,4 @@
-# Berry Free React Material UI Admin Template [![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=Get%20Berry%20React%20-%20The%20most%20beautiful%20Material%20designed%20Admin%20Dashboard%20Template%20&url=https://berrydashboard.com&via=codedthemes&hashtags=reactjs,webdev,developers,javascript)
+# Berry Free React Material UI Admin Template [![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=Get%20Berry%20React%20-%20The%20most%20beautiful%20Material%20designed%20Admin%20Dashboard%20Template%20&url=https://anchorcorps.com&via=codedthemes&hashtags=reactjs,webdev,developers,javascript)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Price](https://img.shields.io/badge/price-FREE-0098f7.svg)](https://github.com/codedthemes/berry-free-react-admin-template/blob/main/LICENSE)
@@ -10,7 +10,7 @@ Berry is a free Material UI admin dashboard template built with React. It is mea
 
 ✨ Support us! If you like this theme, click the ⭐ (Top right) and let it shine
 
-![IMG_8566.jpg](https://berrydashboard.com/imp-images/berry-github-free-repo-1.jpg)
+![IMG_8566.jpg](https://anchorcorps.com/imp-images/berry-github-free-repo-1.jpg)
 
 ## Table of contents
 
@@ -43,10 +43,10 @@ git clone https://github.com/codedthemes/berry-free-react-admin-template.git
 ## Download
 
 - Berry Free
-  - [Live Preview](https://berrydashboard.com/free/)
+  - [Live Preview](https://anchorcorps.com/free/)
   - [Download](https://github.com/codedthemes/berry-free-react-admin-template)
 - Berry
-  - [Live Preview](https://berrydashboard.com)
+  - [Live Preview](https://anchorcorps.com)
   - [Download](https://material-ui.com/store/items/berry-react-material-admin/)
 
 ## Why Berry?
@@ -62,19 +62,19 @@ Berry offers everything you need to create dashboards. We have included the foll
 
 ## What's included in Premium Version?
 
-[Pro version](https://berrydashboard.com) of Berry react template contains features like TypeScript, Next.js Seed versions, Apps, Authentication Methods (i.e. JWT, Auth0, Firebase, AWS, Supabase), Advance Components, Form Plugins, Layouts, Widgets, and many more.
+[Pro version](https://anchorcorps.com) of Berry react template contains features like TypeScript, Next.js Seed versions, Apps, Authentication Methods (i.e. JWT, Auth0, Firebase, AWS, Supabase), Advance Components, Form Plugins, Layouts, Widgets, and many more.
 
-| [Berry Free](https://berrydashboard.com/free/) | [Berry](https://material-ui.com/store/items/berry-react-material-admin/) |
-| ---------------------------------------------- | :----------------------------------------------------------------------- |
-| **9** Demo pages                               | **45+** demo pages                                                       |
-| -                                              | ✓ Multi-language                                                         |
-| -                                              | ✓ Dark/Light Mode 🌓                                                     |
-| -                                              | ✓ TypeScript version                                                     |
-| -                                              | ✓ Design files (Figma)                                                   |
-| -                                              | ✓ 6+ color Options                                                       |
-| -                                              | ✓ RTL                                                                    |
-| -                                              | ✓ JWT, Firebase, Auth0, AWS, Supabase authentications                    |
-| -                                              | ✓ [More components](https://berrydashboard.com/components/autocomplete)  |
+| [Berry Free](https://anchorcorps.com/free/) | [Berry](https://material-ui.com/store/items/berry-react-material-admin/) |
+| ------------------------------------------- | :----------------------------------------------------------------------- |
+| **9** Demo pages                            | **45+** demo pages                                                       |
+| -                                           | ✓ Multi-language                                                         |
+| -                                           | ✓ Dark/Light Mode 🌓                                                     |
+| -                                           | ✓ TypeScript version                                                     |
+| -                                           | ✓ Design files (Figma)                                                   |
+| -                                           | ✓ 6+ color Options                                                       |
+| -                                           | ✓ RTL                                                                    |
+| -                                           | ✓ JWT, Firebase, Auth0, AWS, Supabase authentications                    |
+| -                                           | ✓ [More components](https://anchorcorps.com/components/autocomplete)     |
 
 ## Documentation
 
@@ -122,7 +122,7 @@ Berry offers everything you need to create dashboards. We have included the foll
 
 | Dashboard                                                                                                                                                          | FREE                                                                                | PRO                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| <img src="https://org-public-assets.s3.us-west-2.amazonaws.com/logos/Mantis%20with%20name.png"  height="30" style="display:inline-block; vertical-align:middle;">  | [**Free**](https://mantisdashboard.com/free/)                                        | [**Pro**](https://mui.com/store/items/mantis-react-admin-dashboard-template/)</span>  |
+| <img src="https://org-public-assets.s3.us-west-2.amazonaws.com/logos/Mantis%20with%20name.png"  height="30" style="display:inline-block; vertical-align:middle;">  | [**Free**](https://mantisdashboard.com/free/)                                       | [**Pro**](https://mui.com/store/items/mantis-react-admin-dashboard-template/)</span>  |
 | <img src="https://org-public-assets.s3.us-west-2.amazonaws.com/logos/Datta%20with%20name.png" height="30" style="display:inline-block; vertical-align:middle;">    | [**Free**](https://codedthemes.com/item/datta-able-react-free-admin-template/)      | [**Pro**](https://codedthemes.com/item/datta-able-react-admin-template/)</span>       |
 | <img src="https://org-public-assets.s3.us-west-2.amazonaws.com/logos/Gradient%20with%20name.png" height="30" style="display:inline-block; vertical-align:middle;"> | [**Free**](https://codedthemes.com/item/gradient-able-reactjs-free-admin-template/) | [**Pro**](https://codedthemes.com/item/gradient-able-reactjs-admin-dashboard/)</span> |
 

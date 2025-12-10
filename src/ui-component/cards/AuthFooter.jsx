@@ -8,11 +8,11 @@ import Stack from '@mui/material/Stack';
 export default function AuthFooter() {
   return (
     <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-      <Typography variant="subtitle2" component={Link} href="https://berrydashboard.com" target="_blank" underline="hover">
-        berrydashboard.com
+      <Typography variant="subtitle2" component={Link} href="https://anchorcorps.com" target="_blank" underline="hover">
+        anchorcorps.com
       </Typography>
-      <Typography variant="subtitle2" component={Link} href="https://codedthemes.com" target="_blank" underline="hover">
-        &copy; codedthemes.com
+      <Typography variant="subtitle2" component={Link} href="https://anchorcorps.com" target="_blank" underline="hover">
+        &copy; anchorcorps.com
       </Typography>
     </Stack>
   );

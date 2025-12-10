@@ -115,6 +115,7 @@ export default function AdminHub() {
   const [clientServicesLoading, setClientServicesLoading] = useState(false);
   const [clientServicesReady, setClientServicesReady] = useState(false);
   const presetSubtypeAppliedRef = useRef(null);
+  const lastAppliedPromptRef = useRef('');
   const fileInputRef = useRef(null);
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
@@ -235,8 +236,18 @@ export default function AdminHub() {
 
   useEffect(() => {
     if (!isAdmin || !editing) return;
+    if (!editing.client_type) {
+      lastAppliedPromptRef.current = '';
+      if (editing.ai_prompt) {
+        setEditing((prev) => (prev ? { ...prev, ai_prompt: '' } : prev));
+      }
+      return;
+    }
+
     const prompt = getAiPromptForClient(editing.client_type, editing.client_subtype);
-    if (!editing.ai_prompt || editing.ai_prompt === prompt) {
+    const shouldApplyPreset = !editing.ai_prompt || editing.ai_prompt === lastAppliedPromptRef.current;
+    if (shouldApplyPreset || editing.ai_prompt === prompt) {
+      lastAppliedPromptRef.current = prompt;
       setEditing((prev) => (prev ? { ...prev, ai_prompt: prompt } : prev));
     }
   }, [editing?.client_type, editing?.client_subtype, editing?.ai_prompt, isAdmin]);
@@ -461,7 +472,8 @@ export default function AdminHub() {
   const handleClientTypeSelect = (event) => {
     const nextType = event.target.value;
     presetSubtypeAppliedRef.current = null;
-    setEditing((prev) => ({ ...prev, client_type: nextType, client_subtype: '' }));
+    lastAppliedPromptRef.current = '';
+    setEditing((prev) => ({ ...prev, client_type: nextType, client_subtype: '', ai_prompt: '' }));
   };
 
   const handleClientSubtypeSelect = (event) => {
@@ -645,7 +657,7 @@ export default function AdminHub() {
         </Grid>
       </Grid>
       {clientServicesLoading && <LinearProgress />}
-      {isAdmin && (
+      {isAdmin && editing.client_type && (
         <TextField
           label="AI Prompt"
           value={editing.ai_prompt || ''}
