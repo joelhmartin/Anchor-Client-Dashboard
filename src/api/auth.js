@@ -38,3 +38,11 @@ export function logout() {
 export function impersonate(userId) {
   return request('/auth/impersonate', { method: 'POST', body: { user_id: userId } });
 }
+
+export function requestPasswordReset(email) {
+  return request('/auth/forgot-password', { method: 'POST', body: { email } });
+}
+
+export function resetPassword(payload) {
+  return request('/auth/reset-password', { method: 'POST', body: payload });
+}

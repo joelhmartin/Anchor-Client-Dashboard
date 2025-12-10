@@ -43,12 +43,10 @@ const corsOptions = {
   credentials: true
 };
 
-// Apply CORS middleware globally (before other routes and static asset serving)
-app.use(cors(corsOptions)); // <--- This will apply CORS to all requests
-app.use('/api', authRouter); // Assuming authRouter is an API router
-app.use('/api', hubRouter); // Assuming hubRouter is an API router
-app.use('/api', onboardingRouter); // Assuming onboardingRouter is an API router
-
+// Apply core middleware before any routers so bodies/cookies are available
+app.use(cors(corsOptions)); // CORS first
+app.use(express.json()); // body parser before routes
+app.use(cookieParser()); // cookies before routes
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -58,8 +56,10 @@ app.use(
   })
 );
 
-app.use(express.json());
-app.use(cookieParser());
+// API routes (explicit mounts to avoid leaking through other routers)
+app.use('/api/auth', authRouter);
+app.use('/api/hub', hubRouter);
+app.use('/api/onboarding', onboardingRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 if (NODE_ENV === 'production') {
@@ -67,9 +67,6 @@ if (NODE_ENV === 'production') {
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
-app.use('/api/auth', authRouter);
-app.use('/api/hub', hubRouter);
-app.use('/api/onboarding', onboardingRouter);
 
 if (NODE_ENV === 'production') {
   app.get('*', (req, res, next) => {

@@ -241,6 +241,18 @@ CREATE TABLE IF NOT EXISTS client_onboarding_tokens (
 CREATE INDEX IF NOT EXISTS idx_client_onboarding_tokens_user ON client_onboarding_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_client_onboarding_tokens_token ON client_onboarding_tokens(token_hash);
 
+-- Password reset tokens
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash);
+
 -- Idempotent alter helpers
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'client';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;

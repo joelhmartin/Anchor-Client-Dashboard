@@ -26,13 +26,18 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 // ===============================|| JWT - LOGIN ||=============================== //
 
 export default function AuthLogin() {
-  const [checked, setChecked] = useState(true);
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
+
+  const [checked, setChecked] = useState(true);
+  const [form, setForm] = useState({
+    email: location.state?.email || '',
+    password: ''
+  });
+  const [error, setError] = useState('');
+  const [infoMessage, setInfoMessage] = useState(location.state?.resetMessage || '');
+  const [submitting, setSubmitting] = useState(false);
 
   const [showPassword, setShowPassword] = useState(false);
   const handleClickShowPassword = () => {
@@ -50,6 +55,7 @@ export default function AuthLogin() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError('');
+    setInfoMessage('');
     setSubmitting(true);
     try {
       await login(form);
@@ -64,6 +70,7 @@ export default function AuthLogin() {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ display: 'grid', gap: 2 }}>
+      {infoMessage && <Alert severity="success">{infoMessage}</Alert>}
       {error && <Alert severity="error">{error}</Alert>}
 
       <CustomFormControl fullWidth>
@@ -114,7 +121,12 @@ export default function AuthLogin() {
           />
         </Grid>
         <Grid>
-          <Typography variant="subtitle1" component={Link} to="#!" sx={{ textDecoration: 'none', color: 'secondary.main' }}>
+          <Typography
+            variant="subtitle1"
+            component={Link}
+            to="/pages/forgot-password"
+            sx={{ textDecoration: 'none', color: 'secondary.main' }}
+          >
             Forgot Password?
           </Typography>
         </Grid>

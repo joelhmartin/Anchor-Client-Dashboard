@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
@@ -6,6 +7,7 @@ import { z } from 'zod';
 
 import { query } from './db.js';
 import { isAdminOrEditor } from './middleware/roles.js';
+import { isMailgunConfigured, sendMailgunMessage } from './services/mailgun.js';
 
 const router = Router();
 
@@ -39,9 +41,41 @@ const loginSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters')
 });
 
+const passwordResetRequestSchema = z.object({
+  email: z.string().email()
+});
+
+const passwordResetSchema = z.object({
+  token: z.string().min(10, 'Reset token is required'),
+  password: z.string().min(8, 'Password must be at least 8 characters')
+});
+
 const COOKIE_NAME = 'session';
 const COOKIE_MAX_AGE = 1000 * 60 * 60 * 24 * 7; // 7 days
 const IMPERSONATOR_COOKIE = 'impersonator';
+const PASSWORD_RESET_TTL_MINUTES = parseInt(process.env.PASSWORD_RESET_TTL_MINUTES || '60', 10);
+
+function resolveAppBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const isLocalHost = host && (host.includes('localhost') || host.includes('127.0.0.1'));
+
+  // Prefer explicit local override when running locally
+  if (isLocalHost && process.env.LOCAL_APP_BASE_URL) return process.env.LOCAL_APP_BASE_URL.replace(/\/$/, '');
+
+  // In development with localhost, default to port 3000 unless overridden
+  if (isLocalHost && process.env.NODE_ENV !== 'production') {
+    return 'http://localhost:3000';
+  }
+
+  // Otherwise, fall back to configured cloud/base URL if present
+  const fromEnv = process.env.APP_BASE_URL || process.env.CLIENT_APP_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+
+  if (host) return `${proto}://${host}`.replace(/\/$/, '');
+
+  return 'http://localhost:3000';
+}
 
 function signToken(userId) {
   if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is not set');
@@ -73,6 +107,77 @@ function setImpersonatorCookie(res, userId) {
 function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax', path: '/' });
   res.clearCookie(IMPERSONATOR_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/' });
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function pruneExpiredResetTokens(userId) {
+  if (userId) {
+    await query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND (used_at IS NOT NULL OR expires_at < NOW())', [userId]);
+    return;
+  }
+  await query('DELETE FROM password_reset_tokens WHERE expires_at < NOW()');
+}
+
+async function createPasswordResetToken(userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000);
+  await pruneExpiredResetTokens(userId);
+  await query(
+    `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
+    [userId, tokenHash, expiresAt]
+  );
+  return { token, expiresAt };
+}
+
+async function findValidResetToken(token) {
+  const tokenHash = hashToken(token);
+  const { rows } = await query(
+    `SELECT id, user_id
+     FROM password_reset_tokens
+     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+     LIMIT 1`,
+    [tokenHash]
+  );
+  return rows[0] || null;
+}
+
+async function markResetTokenUsed(record) {
+  if (!record?.id || !record?.user_id) return;
+  await query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [record.id]);
+  await pruneExpiredResetTokens(record.user_id);
+}
+
+async function sendPasswordResetEmail(user, token, baseUrl) {
+  const resetUrl = `${baseUrl}/pages/forgot-password?token=${token}`;
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'there';
+
+  if (!isMailgunConfigured()) {
+    // eslint-disable-next-line no-console
+    console.warn(`[password-reset] Mail provider not configured. Reset URL: ${resetUrl}`);
+    return { delivered: false, resetUrl };
+  }
+
+  await sendMailgunMessage({
+    to: [user.email],
+    subject: 'Reset your Anchor password',
+    text: `Hi ${name},
+
+We received a request to reset your Anchor password. Use the link below to set a new password:
+${resetUrl}
+
+If you did not request this, you can safely ignore this email.`,
+    html: `<p>Hi ${name},</p>
+<p>We received a request to reset your Anchor password. Use the link below to set a new password:</p>
+<p><a href="${resetUrl}" target="_blank" rel="noopener">Reset your password</a></p>
+<p>If you did not request this, you can safely ignore this email.</p>`
+  });
+
+  return { delivered: true, resetUrl };
 }
 
 async function findUserByEmail(email) {
@@ -148,6 +253,68 @@ router.post('/login', async (req, res) => {
     }
     console.error('[login]', err);
     res.status(500).json({ message: 'Unable to login right now' });
+  }
+});
+
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = passwordResetRequestSchema.parse(req.body);
+    const user = await findUserByEmail(email);
+    const appBaseUrl = resolveAppBaseUrl(req);
+    const genericResponse = {
+      message: 'If an account exists with that email, we sent password reset instructions.'
+    };
+
+    if (!user) {
+      return res.json(genericResponse);
+    }
+
+    const { token } = await createPasswordResetToken(user.id);
+    const { resetUrl } = await sendPasswordResetEmail(user, token, appBaseUrl);
+    const responsePayload = { ...genericResponse };
+
+    if (!isMailgunConfigured() && process.env.NODE_ENV !== 'production') {
+      responsePayload.resetUrl = resetUrl;
+      responsePayload.token = token;
+    }
+
+    res.json(responsePayload);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    }
+    console.error('[forgot-password]', err);
+    res.status(500).json({ message: 'Unable to process password reset right now' });
+  }
+});
+
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, password } = passwordResetSchema.parse(req.body);
+    const record = await findValidResetToken(token);
+    if (!record) return res.status(400).json({ message: 'Reset link is invalid or expired' });
+
+    const user = await findUserById(record.user_id);
+    if (!user) {
+      await markResetTokenUsed(record);
+      return res.status(404).json({ message: 'User for this reset link could not be found' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [passwordHash, record.user_id]);
+    await markResetTokenUsed(record);
+
+    const tokenJwt = signToken(user.id);
+    setAuthCookie(res, tokenJwt);
+    setImpersonatorCookie(res, '');
+
+    res.json({ message: 'Password updated successfully', user });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    }
+    console.error('[reset-password]', err);
+    res.status(500).json({ message: 'Unable to reset password right now' });
   }
 });
 
