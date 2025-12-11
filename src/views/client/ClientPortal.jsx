@@ -1408,7 +1408,7 @@ export default function ClientPortal() {
                 onChange={(e) => setCallFilters((prev) => ({ ...prev, category: e.target.value }))}
               >
                 <MenuItem value="all">All</MenuItem>
-                {['warm', 'very_good', 'applicant', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
+                {['warm', 'very_good', 'applicant', 'needs_attention', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
                   <MenuItem key={cat} value={cat}>
                     {cat.replace('_', ' ')}
                   </MenuItem>
@@ -1417,7 +1417,7 @@ export default function ClientPortal() {
             </Stack>
             {callsLoading && <LinearProgress />}
             <Grid container spacing={2}>
-              {['warm', 'very_good', 'applicant', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
+              {['warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
                 <Grid item xs={6} md={3} key={cat}>
                   <Card variant="outlined">
                     <CardContent>
@@ -1469,7 +1469,12 @@ export default function ClientPortal() {
                       <CardContent>
                         <Stack spacing={1}>
                           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
-                            <Chip label={(call.category || 'unreviewed').toUpperCase()} color="primary" variant="outlined" />
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Chip label={(call.category || 'unreviewed').toUpperCase()} color="primary" variant="outlined" />
+                              {call.is_voicemail && (
+                                <Chip label="VOICEMAIL" color="warning" variant="outlined" size="small" />
+                              )}
+                            </Stack>
                             <Typography sx={{ flex: 1 }}>{call.source || 'Unknown source'}</Typography>
                             <Typography variant="body2">{call.call_time}</Typography>
                           </Stack>

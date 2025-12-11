@@ -1264,6 +1264,26 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
   res.json({ client: rows[0] });
 });
 
+router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admins can delete clients.' });
+    }
+    const clientId = req.params.id;
+    const { rows } = await query('SELECT id, role FROM users WHERE id = $1 LIMIT 1', [clientId]);
+    if (!rows.length) return res.status(404).json({ message: 'Client not found' });
+    if (rows[0].role !== 'client') {
+      return res.status(400).json({ message: 'Only client accounts can be deleted.' });
+    }
+    await query('DELETE FROM users WHERE id = $1', [clientId]);
+    logEvent('clients:delete', 'Client deleted', { clientId, deletedBy: req.user.id });
+    res.json({ message: 'Client deleted' });
+  } catch (err) {
+    console.error('[clients:delete]', err);
+    res.status(500).json({ message: 'Unable to delete client' });
+  }
+});
+
 router.post('/clients/:id/service-presets', isAdminOrEditor, async (req, res) => {
   const targetClientId = req.params.id;
   const { services } = req.body || {};

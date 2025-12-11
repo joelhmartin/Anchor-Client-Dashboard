@@ -45,7 +45,7 @@ import Stepper from '@mui/material/Stepper';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
-import { createClient, fetchClients, updateClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
+import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import client from 'api/client';
 import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPresets';
@@ -117,6 +117,8 @@ export default function AdminHub() {
   const presetSubtypeAppliedRef = useRef(null);
   const lastAppliedPromptRef = useRef('');
   const fileInputRef = useRef(null);
+  const [deletingClientId, setDeletingClientId] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, clientId: null, label: '' });
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingLoading, setOnboardingLoading] = useState(false);
@@ -413,6 +415,33 @@ export default function AdminHub() {
       setSavingEdit(false);
     }
     return saved;
+  };
+
+  const confirmDeleteClient = (clientId) => {
+    const target = clients.find((c) => c.id === clientId);
+    const label = target ? target.email || `${target.first_name || ''} ${target.last_name || ''}`.trim() : 'this client';
+    setDeleteConfirm({ open: true, clientId, label });
+  };
+
+  const handleDeleteClient = async () => {
+    const clientId = deleteConfirm.clientId;
+    if (!clientId) return;
+    setDeletingClientId(clientId);
+    setError('');
+    setSuccess('');
+    try {
+      await deleteClient(clientId);
+      setClients((prev) => prev.filter((c) => c.id !== clientId));
+      if (editing?.id === clientId) {
+        setEditing(null);
+      }
+      setSuccess('Client deleted');
+    } catch (err) {
+      setError(err.message || 'Unable to delete client');
+    } finally {
+      setDeletingClientId(null);
+      setDeleteConfirm({ open: false, clientId: null, label: '' });
+    }
   };
 
   const newRolesOptions = isAdmin ? ['client', 'editor'] : ['client'];
@@ -918,6 +947,17 @@ export default function AdminHub() {
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
                           Edit
                         </Button>
+                        {isAdmin && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            onClick={() => confirmDeleteClient(c.id)}
+                            disabled={deletingClientId === c.id}
+                          >
+                            {deletingClientId === c.id ? 'Deleting…' : 'Delete'}
+                          </Button>
+                        )}
                         <Button
                           size="small"
                           variant="contained"
@@ -986,6 +1026,24 @@ export default function AdminHub() {
           </Stack>
         )}
       </Drawer>
+
+      <Dialog open={deleteConfirm.open} onClose={() => setDeleteConfirm({ open: false, clientId: null, label: '' })} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete Client</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            This action cannot be undone.
+          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            Are you sure you want to delete {deleteConfirm.label || 'this client'}?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '' })}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDeleteClient} disabled={Boolean(deletingClientId)}>
+            {deletingClientId ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={onboardingWizardOpen} onClose={handleWizardClose} fullWidth maxWidth="md">
         <DialogTitle sx={{ pb: 1 }}>

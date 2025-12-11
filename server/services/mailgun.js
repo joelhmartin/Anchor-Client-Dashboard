@@ -1,8 +1,9 @@
 import Mailgun from 'mailgun.js';
 import formData from 'form-data';
 
-const apiKey = process.env.MAILGUN_SANDBOX_API_KEY || process.env.MAILGUN_API_KEY;
-const rawDomain = process.env.MAILGUN_SANDBOX_DOMAIN || process.env.MAILGUN_DOMAIN;
+// Prefer production Mailgun domain (e.g., mg.anchorcorps.com). Sandbox only as a fallback.
+const apiKey = process.env.MAILGUN_API_KEY || process.env.MAILGUN_SANDBOX_API_KEY;
+const rawDomain = process.env.MAILGUN_DOMAIN || process.env.MAILGUN_SANDBOX_DOMAIN;
 const resolvedDomain =
   rawDomain && rawDomain.includes('.') ? rawDomain : rawDomain ? `${rawDomain}.mailgun.org` : undefined;
 

@@ -356,8 +356,10 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
   if (!accountId || !apiKey || !apiSecret) {
     throw new Error('CallTrackingMetrics credentials not configured.');
   }
-  const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const endDate = new Date().toISOString().slice(0, 10);
+  // CTM date filters are day-based; include tomorrow to ensure “today” is fully captured across timezones
+  const now = Date.now();
+  const startDate = new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const endDate = new Date(now + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const calls = [];
   for (let page = 1; page <= maxPages; page += 1) {
     const resp = await axios.get(`${CTM_BASE}/api/v1/accounts/${accountId}/calls`, {
@@ -424,6 +426,7 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
         (!stubMessage && message && message.trim().length > 10)
     );
     const unansweredLikely = isLikelyUnanswered(raw);
+    const voicemailFlag = isVoicemail(raw);
     let classification = prevMeta.classification || '';
     let summary = prevMeta.classification_summary || '';
     let category = prevMeta.category || 'unreviewed';
@@ -450,6 +453,12 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
         summary = summary || 'AI classification skipped.';
         category = category || 'unreviewed';
       }
+    }
+
+    // If voicemail but AI says this is a good/applicant lead, elevate to needs_attention and tag voicemail
+    const goodLead = category === 'warm' || category === 'very_good' || category === 'applicant';
+    if (voicemailFlag && goodLead) {
+      category = 'needs_attention';
     }
     
     // Determine final score
@@ -483,6 +492,7 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
       classification,
       classification_summary: summary || '',
       category,
+      is_voicemail: voicemailFlag,
       assets,
       duration_sec: getDuration(raw),
       started_at: startedAtIso,
@@ -526,6 +536,21 @@ function isLikelyUnanswered(raw = {}) {
     return raw.actions.some((action) => {
       const value = `${action?.event || ''} ${action?.name || ''}`.toLowerCase();
       return value.includes('missed') || value.includes('unanswered') || value.includes('no answer');
+    });
+  }
+  return false;
+}
+
+function isVoicemail(raw = {}) {
+  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult, raw.direction]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (statusString.includes('voicemail') || statusString.includes('voice mail')) return true;
+  if (Array.isArray(raw.actions)) {
+    return raw.actions.some((action) => {
+      const value = `${action?.event || ''} ${action?.name || ''}`.toLowerCase();
+      return value.includes('voicemail') || value.includes('voice mail');
     });
   }
   return false;
