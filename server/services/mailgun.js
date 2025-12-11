@@ -1,11 +1,10 @@
 import Mailgun from 'mailgun.js';
 import formData from 'form-data';
 
-// Prefer production Mailgun domain (e.g., mg.anchorcorps.com). Sandbox only as a fallback.
-const apiKey = process.env.MAILGUN_API_KEY || process.env.MAILGUN_SANDBOX_API_KEY;
-const rawDomain = process.env.MAILGUN_DOMAIN || process.env.MAILGUN_SANDBOX_DOMAIN;
-const resolvedDomain =
-  rawDomain && rawDomain.includes('.') ? rawDomain : rawDomain ? `${rawDomain}.mailgun.org` : undefined;
+// Use explicit Mailgun domain/api key; no sandbox fallback.
+const apiKey = process.env.MAILGUN_API_KEY;
+const rawDomain = process.env.MAILGUN_DOMAIN;
+const resolvedDomain = rawDomain && rawDomain.includes('.') ? rawDomain : rawDomain ? `${rawDomain}.mailgun.org` : undefined;
 
 const defaultFrom =
   process.env.MAILGUN_DEFAULT_FROM || (resolvedDomain ? `Anchor Dashboard <postmaster@${resolvedDomain}>` : undefined);
