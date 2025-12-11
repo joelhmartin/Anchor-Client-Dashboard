@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Checkbox,
@@ -27,9 +28,9 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconUser } from '@tabler/icons-react';
 
-import { fetchOnboarding, submitOnboarding } from 'api/onboarding';
+import { fetchOnboarding, submitOnboarding, uploadOnboardingAvatar, uploadOnboardingBrandAsset } from 'api/onboarding';
 import { login } from 'api/auth';
 import { findClientTypePreset } from 'constants/clientPresets';
 import { strengthColor, strengthIndicator } from 'utils/password-strength';
@@ -70,7 +71,8 @@ export default function ClientOnboardingPage() {
     client_identifier_value: '',
     password: '',
     password_confirm: '',
-    brand: {}
+    brand: {},
+    avatar_url: ''
   });
   const [serviceList, setServiceList] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
@@ -115,7 +117,8 @@ export default function ClientOnboardingPage() {
           display_name: initialName,
           monthly_revenue_goal: payload.profile?.monthly_revenue_goal || '',
           client_identifier_value: payload.profile?.client_identifier_value || '',
-          brand: presetBrand
+          brand: presetBrand,
+          avatar_url: payload.user?.avatar_url || ''
         }));
         const initialServices = (payload.services && payload.services.length ? payload.services : []).map((s) => ({
           id: s.id,
@@ -306,96 +309,111 @@ export default function ClientOnboardingPage() {
       <Typography variant="body2" color="text.secondary">
         Confirm the name we should use in-app, your client identifier, and the password you&apos;ll use to log in.
       </Typography>
-      <Grid container spacing={2}>
-        <Grid item xs={12}>
-          <TextField
-            label="Display Name"
-            fullWidth
-            value={form.display_name}
-            onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Client Identifier"
-            fullWidth
-            value={form.client_identifier_value}
-            onChange={(e) => setForm((prev) => ({ ...prev, client_identifier_value: e.target.value }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Monthly Revenue Goal"
-            type="number"
-            fullWidth
-            value={form.monthly_revenue_goal}
-            onChange={(e) => setForm((prev) => ({ ...prev, monthly_revenue_goal: e.target.value }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <FormControl fullWidth variant="outlined">
-            <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
-            <OutlinedInput
-              id="client-onboarding-password"
-              type={showPassword ? 'text' : 'password'}
-              value={form.password}
-              onChange={(e) => changePassword(e.target.value)}
-              endAdornment={
-                <InputAdornment position="end">
-                  <IconButton
-                    aria-label="toggle password visibility"
-                    onClick={handleTogglePassword}
-                    onMouseDown={handleMouseDownPassword}
-                    edge="end"
-                    size="large"
-                  >
-                    {showPassword ? <Visibility /> : <VisibilityOff />}
-                  </IconButton>
-                </InputAdornment>
-              }
-              label="Password"
+      <Stack spacing={2}>
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Avatar
+            src={form.avatar_url || ''}
+            alt="Avatar"
+            sx={{ width: 96, height: 96, bgcolor: 'grey.200', color: 'grey.600' }}
+          >
+            {!form.avatar_url && <IconUser size={36} />}
+          </Avatar>
+          <Button variant="outlined" component="label">
+            Upload Avatar
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const res = await uploadOnboardingAvatar(token, file);
+                  setForm((prev) => ({ ...prev, avatar_url: res.data?.avatar_url || prev.avatar_url }));
+                } catch (err) {
+                  setError(err.message || 'Unable to upload avatar');
+                }
+              }}
             />
-          </FormControl>
-          {strength !== 0 && (
-            <Box sx={{ mt: 1 }}>
-              <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
-                <Box sx={{ width: 90, height: 8, borderRadius: '7px', bgcolor: level?.color }} />
-                <Typography variant="caption" color="text.secondary">
-                  {level?.label}
-                </Typography>
-              </Stack>
-            </Box>
-          )}
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <FormControl fullWidth variant="outlined">
-            <InputLabel htmlFor="client-onboarding-password-confirm">Confirm Password</InputLabel>
-            <OutlinedInput
-              id="client-onboarding-password-confirm"
-              type={showConfirmPassword ? 'text' : 'password'}
-              value={form.password_confirm}
-              onChange={(e) => setForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
-              endAdornment={
-                <InputAdornment position="end">
-                  <IconButton
-                    aria-label="toggle confirm password visibility"
-                    onClick={handleToggleConfirmPassword}
-                    onMouseDown={handleMouseDownPassword}
-                    edge="end"
-                    size="large"
-                  >
-                    {showConfirmPassword ? <Visibility /> : <VisibilityOff />}
-                  </IconButton>
-                </InputAdornment>
-              }
-              label="Confirm Password"
-            />
-          </FormControl>
-        </Grid>
-      </Grid>
+          </Button>
+        </Stack>
+        <TextField
+          label="Display Name"
+          fullWidth
+          value={form.display_name}
+          onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
+        />
+        <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
+        <TextField
+          label="Client Identifier"
+          fullWidth
+          value={form.client_identifier_value}
+          onChange={(e) => setForm((prev) => ({ ...prev, client_identifier_value: e.target.value }))}
+        />
+        <TextField
+          label="Monthly Revenue Goal"
+          type="number"
+          fullWidth
+          value={form.monthly_revenue_goal}
+          onChange={(e) => setForm((prev) => ({ ...prev, monthly_revenue_goal: e.target.value }))}
+        />
+        <FormControl fullWidth variant="outlined">
+          <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
+          <OutlinedInput
+            id="client-onboarding-password"
+            type={showPassword ? 'text' : 'password'}
+            value={form.password}
+            onChange={(e) => changePassword(e.target.value)}
+            endAdornment={
+              <InputAdornment position="end">
+                <IconButton
+                  aria-label="toggle password visibility"
+                  onClick={handleTogglePassword}
+                  onMouseDown={handleMouseDownPassword}
+                  edge="end"
+                  size="large"
+                >
+                  {showPassword ? <Visibility /> : <VisibilityOff />}
+                </IconButton>
+              </InputAdornment>
+            }
+            label="Password"
+          />
+        </FormControl>
+        {strength !== 0 && (
+          <Box sx={{ mt: 1 }}>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+              <Box sx={{ width: 90, height: 8, borderRadius: '7px', bgcolor: level?.color }} />
+              <Typography variant="caption" color="text.secondary">
+                {level?.label}
+              </Typography>
+            </Stack>
+          </Box>
+        )}
+        <FormControl fullWidth variant="outlined">
+          <InputLabel htmlFor="client-onboarding-password-confirm">Confirm Password</InputLabel>
+          <OutlinedInput
+            id="client-onboarding-password-confirm"
+            type={showConfirmPassword ? 'text' : 'password'}
+            value={form.password_confirm}
+            onChange={(e) => setForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
+            endAdornment={
+              <InputAdornment position="end">
+                <IconButton
+                  aria-label="toggle confirm password visibility"
+                  onClick={handleToggleConfirmPassword}
+                  onMouseDown={handleMouseDownPassword}
+                  edge="end"
+                  size="large"
+                >
+                  {showConfirmPassword ? <Visibility /> : <VisibilityOff />}
+                </IconButton>
+              </InputAdornment>
+            }
+            label="Confirm Password"
+          />
+        </FormControl>
+      </Stack>
     </Stack>
   );
 
@@ -405,73 +423,85 @@ export default function ClientOnboardingPage() {
       <Typography variant="body2" color="text.secondary">
         Share the quick-reference items our team will need for reporting and campaign execution.
       </Typography>
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Business Name"
-            fullWidth
-            value={form.brand.business_name || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_name: e.target.value } }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Website"
-            fullWidth
-            value={form.brand.website_url || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
-          />
-        </Grid>
-        <Grid item xs={12}>
-          <TextField
-            label="Brand Notes"
-            multiline
-            minRows={2}
-            fullWidth
-            value={form.brand.brand_notes || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="GA/GTM Emails"
-            fullWidth
-            value={form.brand.ga_emails || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, ga_emails: e.target.value } }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Meta Business Email"
-            fullWidth
-            value={form.brand.meta_bm_email || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, meta_bm_email: e.target.value } }))}
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Pricing List URL"
-            fullWidth
-            value={form.brand.pricing_list_url || ''}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, brand: { ...prev.brand, pricing_list_url: e.target.value } }))
-            }
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField
-            label="Promo Calendar URL"
-            fullWidth
-            value={form.brand.promo_calendar_url || ''}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, brand: { ...prev.brand, promo_calendar_url: e.target.value } }))
-            }
-          />
-        </Grid>
-      </Grid>
-      <Typography variant="caption" color="text.secondary">
-        You&apos;ll upload logos and files inside the portal after onboarding.
-      </Typography>
+      <Stack spacing={2}>
+        <TextField
+          label="Business Name"
+          fullWidth
+          value={form.brand.business_name || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_name: e.target.value } }))}
+        />
+        <TextField
+          label="Website"
+          fullWidth
+          value={form.brand.website_url || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
+        />
+        <TextField
+          label="Brand Notes"
+          multiline
+          minRows={2}
+          fullWidth
+          value={form.brand.brand_notes || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
+        />
+        <TextField
+          label="GA/GTM Emails"
+          fullWidth
+          value={form.brand.ga_emails || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, ga_emails: e.target.value } }))}
+        />
+        <TextField
+          label="Meta Business Email"
+          fullWidth
+          value={form.brand.meta_bm_email || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, meta_bm_email: e.target.value } }))}
+        />
+        <TextField
+          label="Pricing List URL"
+          fullWidth
+          value={form.brand.pricing_list_url || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, pricing_list_url: e.target.value } }))}
+        />
+        <TextField
+          label="Promo Calendar URL"
+          fullWidth
+          value={form.brand.promo_calendar_url || ''}
+          onChange={(e) =>
+            setForm((prev) => ({ ...prev, brand: { ...prev.brand, promo_calendar_url: e.target.value } }))
+          }
+        />
+        <Stack spacing={1}>
+          <Typography variant="subtitle2">Brand Assets (logos, files)</Typography>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            {Array.isArray(data?.brand?.logos) &&
+              data.brand.logos.map((logo) => (
+                <Button key={logo.id} href={logo.url} target="_blank" rel="noreferrer" size="small" variant="outlined">
+                  {logo.name || 'Logo'}
+                </Button>
+              ))}
+          </Stack>
+          <Button variant="outlined" component="label">
+            Upload Brand Asset
+            <input
+              type="file"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const res = await uploadOnboardingBrandAsset(token, file);
+                  setData((prev) => ({
+                    ...prev,
+                    brand: { ...(prev?.brand || {}), logos: res.data?.logos || prev?.brand?.logos || [] }
+                  }));
+                } catch (err) {
+                  setError(err.message || 'Unable to upload brand asset');
+                }
+              }}
+            />
+          </Button>
+        </Stack>
+      </Stack>
     </Stack>
   );
 
@@ -535,7 +565,7 @@ export default function ClientOnboardingPage() {
         serviceList.map((service, index) => (
           <Paper key={service.id || `${service.name}-${index}`} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
+              <Grid item xs={12}>
                 <TextField
                   label="Service Name"
                   fullWidth
@@ -545,7 +575,7 @@ export default function ClientOnboardingPage() {
                   helperText={service.isDefault ? 'Default service from your preset' : ''}
                 />
               </Grid>
-              <Grid item xs={12} md={4}>
+              <Grid item xs={12}>
                 <TextField
                   label="Base Price"
                   type="number"
@@ -555,7 +585,7 @@ export default function ClientOnboardingPage() {
                   InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
                 />
               </Grid>
-              <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+              <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
                 <IconButton color="error" onClick={() => handleRemoveService(index)}>
                   <IconTrash size={18} />
                 </IconButton>

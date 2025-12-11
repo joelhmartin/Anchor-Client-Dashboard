@@ -55,24 +55,35 @@ const COOKIE_MAX_AGE = 1000 * 60 * 60 * 24 * 7; // 7 days
 const IMPERSONATOR_COOKIE = 'impersonator';
 const PASSWORD_RESET_TTL_MINUTES = parseInt(process.env.PASSWORD_RESET_TTL_MINUTES || '60', 10);
 
+function normalizeBase(value) {
+  if (!value) return null;
+  let base = String(value).trim();
+  if (!/^https?:\/\//i.test(base)) {
+    const isLocal = base.startsWith('localhost') || base.startsWith('127.0.0.1');
+    base = `${isLocal ? 'http' : 'https'}://${base}`;
+  }
+  return base.replace(/\/$/, '');
+}
+
 function resolveAppBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const isLocalHost = host && (host.includes('localhost') || host.includes('127.0.0.1'));
 
   // Prefer explicit local override when running locally
-  if (isLocalHost && process.env.LOCAL_APP_BASE_URL) return process.env.LOCAL_APP_BASE_URL.replace(/\/$/, '');
+  const localOverride = normalizeBase(process.env.LOCAL_APP_BASE_URL);
+  if (isLocalHost && localOverride) return localOverride;
 
   // In development with localhost, default to port 3000 unless overridden
   if (isLocalHost && process.env.NODE_ENV !== 'production') {
     return 'http://localhost:3000';
   }
 
-  // Otherwise, fall back to configured cloud/base URL if present
-  const fromEnv = process.env.APP_BASE_URL || process.env.CLIENT_APP_URL;
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  // Fall back to configured base URL (single source of truth)
+  const fromEnv = normalizeBase(process.env.APP_BASE_URL || process.env.CLIENT_APP_URL);
+  if (fromEnv) return fromEnv;
 
-  if (host) return `${proto}://${host}`.replace(/\/$/, '');
+  if (host) return normalizeBase(`${proto}://${host}`);
 
   return 'http://localhost:3000';
 }

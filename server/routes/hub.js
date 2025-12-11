@@ -43,10 +43,42 @@ import {
 } from '../services/notifications.js';
 
 const router = express.Router();
-const APP_BASE_URL =
-  (process.env.APP_BASE_URL ||
-    (process.env.NODE_ENV === 'production' ? process.env.CLIENT_APP_URL : process.env.VITE_APP_BASE_NAME) ||
-    'http://localhost:3000').replace(/\/$/, '');
+
+function normalizeBase(value) {
+  if (!value) return null;
+  let base = String(value).trim();
+  if (!/^https?:\/\//i.test(base)) {
+    const isLocal = base.startsWith('localhost') || base.startsWith('127.0.0.1');
+    base = `${isLocal ? 'http' : 'https'}://${base}`;
+  }
+  return base.replace(/\/$/, '');
+}
+
+function resolveBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const isLocalHost = host && (host.includes('localhost') || host.includes('127.0.0.1'));
+
+  const localOverride = normalizeBase(process.env.LOCAL_APP_BASE_URL);
+  if (isLocalHost && localOverride) return localOverride;
+
+  if (isLocalHost && process.env.NODE_ENV !== 'production') {
+    return 'http://localhost:3000';
+  }
+
+  const fromEnv = normalizeBase(
+    process.env.APP_BASE_URL ||
+      process.env.CLIENT_APP_URL ||
+      process.env.APP_URL ||
+      process.env.PUBLIC_URL ||
+      process.env.VITE_APP_BASE_NAME
+  );
+  if (fromEnv) return fromEnv;
+
+  if (host) return normalizeBase(`${proto}://${host}`);
+
+  return 'http://localhost:3000';
+}
 const ONBOARDING_TOKEN_TTL_HOURS = parseInt(process.env.ONBOARDING_TOKEN_TTL_HOURS || '72', 10);
 const JOURNEY_TEMPLATE_KEY_PREFIX = 'journey_template';
 const JOURNEY_STATUS_OPTIONS = ['pending', 'in_progress', 'active_client', 'won', 'lost', 'archived'];
@@ -527,9 +559,10 @@ ${clientName} just created a new blog post titled "${blogTitle}" (status: ${stat
 You can review it inside the Anchor admin hub.
 
 - Anchor Dashboard`;
+  const baseUrl = resolveBaseUrl(req);
   const emailHtml = `<p>Hi ${managerName || 'there'},</p>
 <p><strong>${clientName}</strong> just created a new blog post titled <strong>${blogTitle}</strong> (status: ${statusLabel}).</p>
-<p><a href="${APP_BASE_URL}/admin" target="_blank" rel="noopener">Open the admin hub</a> to review it.</p>
+<p><a href="${baseUrl}/admin" target="_blank" rel="noopener">Open the admin hub</a> to review it.</p>
 <p>- Anchor Dashboard</p>`;
 
   if (notificationUserId) {
@@ -940,7 +973,8 @@ router.post('/docs/:id/viewed', async (req, res) => {
   const docInfo = docRows[0];
   const docLabel = docInfo?.label || docInfo?.name || 'Document';
   const clientName = [docInfo?.first_name, docInfo?.last_name].filter(Boolean).join(' ').trim() || docInfo?.email || 'Client';
-  const adminLink = `${APP_BASE_URL}/client-hub`;
+  const baseUrl = resolveBaseUrl(req);
+  const adminLink = `${baseUrl}/client-hub`;
 
   await createNotificationsForAdmins({
     title: 'Client reviewed a document',
@@ -995,7 +1029,7 @@ router.post('/docs/admin/review', requireAdmin, async (req, res) => {
     const docInfo = docRows[0] || {};
     const clientInfo = userRows[0] || {};
     const docLabel = docInfo.label || docInfo.name || 'Document';
-    const portalLink = `${APP_BASE_URL}/portal?tab=documents`;
+  const portalLink = `${resolveBaseUrl(req)}/portal?tab=documents`;
     await createNotification({
       userId: user_id,
       title: 'Document ready for review',
@@ -1045,7 +1079,8 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
     [clientId, tokenHash, expiresAt, JSON.stringify({ created_by: req.user.id })]
   );
 
-  const onboardingUrl = `${APP_BASE_URL}/onboarding/${token}`;
+  const baseUrl = resolveBaseUrl(req);
+  const onboardingUrl = `${baseUrl}/onboarding/${token}`;
   const subject = 'Anchor Client Onboarding';
   const greeting = clientUser.first_name
     ? `Hi ${clientUser.first_name},`

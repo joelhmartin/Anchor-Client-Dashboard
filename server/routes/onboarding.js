@@ -1,6 +1,10 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { v4 as uuidv4 } from 'uuid';
 
 import { query } from '../db.js';
 import { createNotificationsForAdmins, notifyAdminsByEmail } from '../services/notifications.js';
@@ -8,8 +12,55 @@ import { createNotificationsForAdmins, notifyAdminsByEmail } from '../services/n
 const router = express.Router();
 
 const TOKEN_TTL_HOURS = parseInt(process.env.ONBOARDING_TOKEN_TTL_HOURS || '72', 10);
-const APP_BASE_URL =
-  (process.env.APP_BASE_URL || process.env.CLIENT_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+function normalizeBase(value) {
+  if (!value) return null;
+  let base = String(value).trim();
+  if (!/^https?:\/\//i.test(base)) {
+    const isLocal = base.startsWith('localhost') || base.startsWith('127.0.0.1');
+    base = `${isLocal ? 'http' : 'https'}://${base}`;
+  }
+  return base.replace(/\/$/, '');
+}
+
+function resolveBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const isLocalHost = host && (host.includes('localhost') || host.includes('127.0.0.1'));
+
+  const localOverride = normalizeBase(process.env.LOCAL_APP_BASE_URL);
+  if (isLocalHost && localOverride) return localOverride;
+
+  if (isLocalHost && process.env.NODE_ENV !== 'production') {
+    return 'http://localhost:3000';
+  }
+
+  const fromEnv = normalizeBase(process.env.APP_BASE_URL || process.env.CLIENT_APP_URL);
+  if (fromEnv) return fromEnv;
+
+  if (host) return normalizeBase(`${proto}://${host}`);
+
+  return 'http://localhost:3000';
+}
+
+const uploadRoot = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads');
+const avatarDir = path.join(uploadRoot, 'avatars');
+const brandDir = path.join(uploadRoot, 'brand');
+[uploadRoot, avatarDir, brandDir].forEach((dir) => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+function storage(dir) {
+  return multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, dir),
+    filename: (_req, file, cb) => {
+      const safeName = file.originalname?.replace?.(/[^\w.-]+/g, '_') || 'upload';
+      cb(null, `${Date.now()}_${safeName}`);
+    }
+  });
+}
+
+const uploadAvatar = multer({ storage: storage(avatarDir) });
+const uploadBrandAsset = multer({ storage: storage(brandDir) });
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -204,16 +255,54 @@ router.post('/:token', async (req, res) => {
       meta: { client_id: record.user_id }
     });
 
+    const baseUrl = resolveBaseUrl(req);
     await notifyAdminsByEmail({
       subject: `Client onboarding completed: ${display_name || 'New Client'}`,
-      text: `${display_name || onboardedUser.email || 'A client'} finished onboarding.\n\nView details: ${APP_BASE_URL}/client-hub`,
-      html: `<p>${display_name || onboardedUser.email || 'A client'} finished onboarding.</p><p><a href="${APP_BASE_URL}/client-hub" target="_blank" rel="noopener">Open the Admin Hub</a></p>`
+      text: `${display_name || onboardedUser.email || 'A client'} finished onboarding.\n\nView details: ${baseUrl}/client-hub`,
+      html: `<p>${display_name || onboardedUser.email || 'A client'} finished onboarding.</p><p><a href="${baseUrl}/client-hub" target="_blank" rel="noopener">Open the Admin Hub</a></p>`
     });
 
     res.json({ message: 'Onboarding information saved', user_id: record.user_id });
   } catch (err) {
     console.error('[onboarding:submit]', err);
     res.status(500).json({ message: err.message || 'Unable to save onboarding information' });
+  }
+});
+
+router.post('/:token/avatar', uploadAvatar.single('avatar'), async (req, res) => {
+  try {
+    const record = await getTokenRecord(req.params.token);
+    if (!record) return res.status(404).json({ message: 'Onboarding link is invalid or expired' });
+    if (!req.file) return res.status(400).json({ message: 'Avatar file is required' });
+    const url = `/uploads/avatars/${req.file.filename}`;
+    await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, record.user_id]);
+    res.json({ avatar_url: url });
+  } catch (err) {
+    console.error('[onboarding:avatar]', err);
+    res.status(500).json({ message: 'Unable to upload avatar' });
+  }
+});
+
+router.post('/:token/brand-assets', uploadBrandAsset.single('brand_asset'), async (req, res) => {
+  try {
+    const record = await getTokenRecord(req.params.token);
+    if (!record) return res.status(404).json({ message: 'Onboarding link is invalid or expired' });
+    if (!req.file) return res.status(400).json({ message: 'Brand file is required' });
+    const url = `/uploads/brand/${req.file.filename}`;
+    const logo = { id: uuidv4(), name: req.file.originalname || req.file.filename, url };
+    const existing = await query('SELECT logos FROM brand_assets WHERE user_id = $1 LIMIT 1', [record.user_id]);
+    const logos = existing.rows[0]?.logos || [];
+    const nextLogos = Array.isArray(logos) ? [...logos, logo] : [logo];
+    await query(
+      `INSERT INTO brand_assets (user_id, logos)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET logos = $2, updated_at = NOW()`,
+      [record.user_id, JSON.stringify(nextLogos)]
+    );
+    res.json({ logos: nextLogos });
+  } catch (err) {
+    console.error('[onboarding:brand-asset]', err);
+    res.status(500).json({ message: 'Unable to upload brand asset' });
   }
 });
 

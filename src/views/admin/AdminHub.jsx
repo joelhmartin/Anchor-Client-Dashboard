@@ -628,7 +628,14 @@ export default function AdminHub() {
         loading={loadingPeople}
       />
       <Typography variant="subtitle1">Client Type & Services</Typography>
-      <Grid container spacing={2}>
+      <Grid
+        container
+        spacing={2}
+        sx={{
+          width: '100%',
+          '& > .MuiGrid-item': { pl: 0, pr: 0 }
+        }}
+      >
         <Grid item xs={12} md={6}>
           <TextField
             label="Client Type"
@@ -986,7 +993,12 @@ export default function AdminHub() {
         </Box>
       </Stack>
 
-      <Drawer anchor="right" open={Boolean(editing) && !onboardingWizardOpen} onClose={() => setEditing(null)} sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: 480 }, p: 2 } }}>
+      <Drawer
+        anchor="right"
+        open={Boolean(editing) && !onboardingWizardOpen}
+        onClose={() => setEditing(null)}
+        sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: 640, md: 760 }, p: 2 } }}
+      >
         {editing && (
           <Stack spacing={2} sx={{ height: '100%' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

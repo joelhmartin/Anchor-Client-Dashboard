@@ -1,13 +1,13 @@
 import Mailgun from 'mailgun.js';
 import formData from 'form-data';
 
-// Use explicit Mailgun domain/api key; no sandbox fallback.
-const apiKey = process.env.MAILGUN_API_KEY;
-const rawDomain = process.env.MAILGUN_DOMAIN;
+// Prefer prod keys/domains; in non-production allow sandbox if prod not set.
+const isProd = process.env.NODE_ENV === 'production';
+const apiKey = process.env.MAILGUN_API_KEY || (!isProd ? process.env.MAILGUN_SANDBOX_API_KEY : undefined);
+const rawDomain = process.env.MAILGUN_DOMAIN || (!isProd ? process.env.MAILGUN_SANDBOX_DOMAIN : undefined);
 const resolvedDomain = rawDomain && rawDomain.includes('.') ? rawDomain : rawDomain ? `${rawDomain}.mailgun.org` : undefined;
 
-const defaultFrom =
-  process.env.MAILGUN_DEFAULT_FROM || (resolvedDomain ? `Anchor Dashboard <postmaster@${resolvedDomain}>` : undefined);
+const defaultFrom = process.env.MAILGUN_DEFAULT_FROM || (resolvedDomain ? `Anchor Dashboard <webforms@${resolvedDomain}>` : undefined);
 
 let client = null;
 if (apiKey && resolvedDomain) {
@@ -38,7 +38,7 @@ export async function sendMailgunMessage({ to, subject, text, html, from }) {
 
   const recipients = Array.isArray(to) ? to : [to];
   const payload = {
-    from: from || defaultFrom || `postmaster@${resolvedDomain}`,
+    from: from || defaultFrom || `webforms@${resolvedDomain}`,
     to: recipients,
     subject,
     text,
