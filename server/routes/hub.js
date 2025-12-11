@@ -1066,9 +1066,12 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
     return res.status(400).json({ message: 'Mailgun is not configured' });
   }
   const clientId = req.params.id;
-  const { rows } = await query('SELECT id, email, first_name, last_name FROM users WHERE id = $1', [clientId]);
+  const { rows } = await query('SELECT id, email, first_name, last_name, role FROM users WHERE id = $1', [clientId]);
   if (!rows.length) return res.status(404).json({ message: 'Client not found' });
   const clientUser = rows[0];
+  if (clientUser.role !== 'client') {
+    return res.status(400).json({ message: 'Onboarding emails are only for client accounts.' });
+  }
   const token = uuidv4();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);

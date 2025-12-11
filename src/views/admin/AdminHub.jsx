@@ -46,6 +46,7 @@ import Stepper from '@mui/material/Stepper';
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
+import { requestPasswordReset } from 'api/auth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import client from 'api/client';
 import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPresets';
@@ -273,7 +274,16 @@ export default function AdminHub() {
         return [...others, res.client];
       });
       setNewClient({ email: '', name: '', role: 'client' });
-      await startOnboardingFlow(res.client.id);
+      if (res.client.role === 'client') {
+        await startOnboardingFlow(res.client.id);
+      } else if (res.client.role === 'editor') {
+        try {
+          await requestPasswordReset(res.client.email);
+          setSuccess('Editor created. Password reset email sent.');
+        } catch (resetErr) {
+          setError(resetErr.message || 'Editor created, but failed to send reset email.');
+        }
+      }
     } catch (err) {
       setError(err.message || 'Unable to save client');
     } finally {
