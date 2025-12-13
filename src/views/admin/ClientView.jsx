@@ -21,7 +21,7 @@ export default function ClientView() {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const isAllowed = user?.role === 'admin' || user?.role === 'editor';
+  const isAllowed = user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'editor';
 
   useEffect(() => {
     if (!isAllowed) return;

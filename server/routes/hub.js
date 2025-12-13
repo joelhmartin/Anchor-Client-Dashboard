@@ -526,7 +526,7 @@ async function resolveAccountManagerContact(userId, options = {}) {
 
   if (!managerEmail || !notificationUserId) {
     const { rows: adminRows } = await query(
-      "SELECT id, email, first_name, last_name FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1"
+      "SELECT id, email, first_name, last_name FROM users WHERE role = 'superadmin' OR (role = 'admin' AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin')) ORDER BY created_at ASC LIMIT 1"
     );
     if (adminRows.length) {
       if (!managerEmail) managerEmail = adminRows[0].email;
@@ -600,7 +600,7 @@ router.get('/profile', async (req, res) => {
 router.put('/profile', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const isSelfUpdate = req.user.id === userId;
-  const canOverridePassword = !isSelfUpdate && req.user.role === 'admin';
+  const canOverridePassword = !isSelfUpdate && req.user.effective_role === 'superadmin';
   const { first_name, last_name, email, password, new_password, monthly_revenue_goal } = req.body || {};
   const updates = [];
   const params = [];
@@ -1174,7 +1174,7 @@ router.get('/clients', isAdminOrEditor, async (_req, res) => {
             COALESCE(cp.ai_prompt, $1) as ai_prompt
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
-     WHERE u.role IN ('client', 'editor')
+     WHERE u.role IN ('client', 'admin', 'editor')
      ORDER BY u.created_at DESC`,
     [DEFAULT_AI_PROMPT]
   );
@@ -1185,7 +1185,9 @@ router.post('/clients', isAdminOrEditor, async (req, res) => {
   try {
     const { email, name, role } = req.body || {};
     if (!email) return res.status(400).json({ message: 'Email is required' });
-    const newRole = role === 'editor' ? (req.user.role === 'admin' ? 'editor' : 'client') : 'client';
+    const requesterRole = req.user.effective_role || req.user.role;
+    const wantsAdmin = role === 'admin';
+    const newRole = wantsAdmin ? (requesterRole === 'superadmin' ? 'admin' : 'client') : 'client';
     const existing = await query('SELECT id, email, first_name, last_name FROM users WHERE email = $1 LIMIT 1', [email]);
     const [first, ...rest] = (name || '').trim().split(' ').filter(Boolean);
     const last = rest.join(' ');
@@ -1252,8 +1254,12 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
   if (user_email) {
     await query('UPDATE users SET email=$1 WHERE id=$2', [user_email, clientId]);
   }
-  if (role && req.user.role === 'admin') {
-    const nextRole = ['client', 'editor', 'admin'].includes(role) ? role : 'client';
+  if (role && req.user.effective_role === 'superadmin') {
+    const requesterRole = req.user.effective_role || req.user.role;
+    if (requesterRole !== 'superadmin') {
+      return res.status(403).json({ message: 'Superadmin only' });
+    }
+    const nextRole = ['client', 'admin', 'superadmin'].includes(role) ? role : 'client';
     await query('UPDATE users SET role=$1 WHERE id=$2', [nextRole, clientId]);
   }
   const exists = await query('SELECT user_id FROM client_profiles WHERE user_id = $1', [clientId]);

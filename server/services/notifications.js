@@ -16,7 +16,10 @@ export async function createNotification({ userId, title, body, linkUrl, meta = 
 }
 
 export async function createNotificationsForAdmins(payload) {
-  const { rows } = await query("SELECT id FROM users WHERE role = 'admin'");
+  // Target superadmins. During migration: if no superadmin exists yet, treat legacy 'admin' as superadmin.
+  const { rows } = await query(
+    "SELECT id FROM users WHERE role = 'superadmin' OR (role = 'admin' AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin'))"
+  );
   await Promise.all(rows.map((admin) => createNotification({ ...payload, userId: admin.id })));
   return rows;
 }
@@ -62,7 +65,9 @@ export async function markAllNotificationsRead(userId) {
 
 export async function notifyAdminsByEmail({ subject, text, html }) {
   if (!isMailgunConfigured()) return;
-  const { rows } = await query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL");
+  const { rows } = await query(
+    "SELECT email FROM users WHERE email IS NOT NULL AND (role = 'superadmin' OR (role = 'admin' AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin')))"
+  );
   const recipients = rows.map((row) => row.email).filter(Boolean);
   if (!recipients.length && ADMIN_FALLBACK_EMAIL) {
     recipients.push(ADMIN_FALLBACK_EMAIL);

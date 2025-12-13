@@ -20,13 +20,13 @@ const BlogEditor = Loadable(lazy(() => import('views/client/BlogEditor')));
 function AdminRoute({ children }) {
   const { user, initializing } = useAuth();
   if (initializing) return <Loader />;
-  return <SuspendedRoute allow={user?.role === 'admin' || user?.role === 'editor'}>{children}</SuspendedRoute>;
+  return <SuspendedRoute allow={user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'editor'}>{children}</SuspendedRoute>;
 }
 
 function PortalRoute({ children }) {
   const { user, initializing, actingClientId } = useAuth();
   if (initializing) return <Loader />;
-  const isAdmin = user?.role === 'admin' || user?.role === 'editor';
+  const isAdmin = user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'editor';
   if (isAdmin && !actingClientId) {
     return <Navigate to="/client-hub" replace />;
   }
@@ -39,7 +39,7 @@ function DefaultLanding() {
   if (actingClientId) {
     return <Navigate to="/portal" replace />;
   }
-  if (user?.role === 'admin' || user?.role === 'editor') {
+  if (user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'editor') {
     return <Navigate to="/client-hub" replace />;
   }
   return <Navigate to="/portal" replace />;

@@ -126,9 +126,9 @@ export default function AdminHub() {
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
 
-  const isAdmin = user?.role === 'admin';
-  const isEditor = user?.role === 'editor';
-  const canAccessHub = isAdmin || isEditor;
+  const isSuperadmin = user?.role === 'superadmin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'editor'; // allow legacy 'editor' during transition
+  const canAccessHub = isSuperadmin || isAdmin;
 
   useEffect(() => {
     if (!canAccessHub) return;
@@ -259,7 +259,7 @@ export default function AdminHub() {
     return [...clients].sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
   }, [clients]);
 
-  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'editor'), [sortedClients]);
+  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'admin' || c.role === 'editor'), [sortedClients]);
   const sortedClientOnly = useMemo(() => sortedClients.filter((c) => c.role === 'client'), [sortedClients]);
 
   if (initializing) return null;
@@ -279,12 +279,12 @@ export default function AdminHub() {
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
         await startOnboardingFlow(res.client.id);
-      } else if (res.client.role === 'editor') {
+      } else if (res.client.role === 'admin' || res.client.role === 'editor') {
         try {
           await requestPasswordReset(res.client.email);
-          setSuccess('Editor created. Password reset email sent.');
+          setSuccess('Admin created. Password reset email sent.');
         } catch (resetErr) {
-          setError(resetErr.message || 'Editor created, but failed to send reset email.');
+          setError(resetErr.message || 'Admin created, but failed to send reset email.');
         }
       }
     } catch (err) {
@@ -457,7 +457,7 @@ export default function AdminHub() {
     }
   };
 
-  const newRolesOptions = isAdmin ? ['client', 'editor'] : ['client'];
+  const newRolesOptions = isSuperadmin ? ['client', 'admin'] : ['client'];
 
   const handleDocUpload = async () => {
     if (!editing?.id || !docUpload.files.length) return;
@@ -577,11 +577,11 @@ export default function AdminHub() {
         <Grid item xs={12} md={6}>
           <FormControl fullWidth>
             <InputLabel>Role</InputLabel>
-            <Select value={editing.role || 'client'} onChange={handleEditChange('role')} disabled={!isAdmin} label="Role">
+            <Select value={editing.role || 'client'} onChange={handleEditChange('role')} disabled={!isSuperadmin} label="Role">
               <MenuItem value="client">Client</MenuItem>
-              <MenuItem value="editor">Editor</MenuItem>
-              <MenuItem value="admin" disabled>
-                Admin
+              <MenuItem value="admin">Admin</MenuItem>
+              <MenuItem value="superadmin" disabled>
+                Superadmin
               </MenuItem>
             </Select>
           </FormControl>
@@ -929,7 +929,7 @@ export default function AdminHub() {
         {isAdmin && (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
             <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="h5">Editors</Typography>
+              <Typography variant="h5">Admins</Typography>
               {loading && <CircularProgress size={20} />}
             </Box>
             <Divider />
@@ -948,7 +948,7 @@ export default function AdminHub() {
                     <TableRow key={c.id} hover>
                       <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                       <TableCell>{c.email}</TableCell>
-                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'editor'}</TableCell>
+                    <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
                       <TableCell align="right">
                         <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                           <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -972,7 +972,7 @@ export default function AdminHub() {
                   {!sortedEditors.length && !loading && (
                     <TableRow>
                       <TableCell colSpan={4} align="center">
-                        No editors yet.
+                        No admins yet.
                       </TableCell>
                     </TableRow>
                   )}
