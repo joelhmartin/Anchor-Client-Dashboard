@@ -259,6 +259,9 @@ export default function AdminHub() {
     return [...clients].sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
   }, [clients]);
 
+  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'editor'), [sortedClients]);
+  const sortedClientOnly = useMemo(() => sortedClients.filter((c) => c.role === 'client'), [sortedClients]);
+
   if (initializing) return null;
   if (!canAccessHub) return <Navigate to="/" replace />;
 
@@ -923,6 +926,62 @@ export default function AdminHub() {
           </Box>
         </Box>
 
+        {isAdmin && (
+          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
+            <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography variant="h5">Editors</Typography>
+              {loading && <CircularProgress size={20} />}
+            </Box>
+            <Divider />
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Display Name</TableCell>
+                    <TableCell>Email</TableCell>
+                    <TableCell>Role</TableCell>
+                    <TableCell align="right">Action</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sortedEditors.map((c) => (
+                    <TableRow key={c.id} hover>
+                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                      <TableCell>{c.email}</TableCell>
+                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'editor'}</TableCell>
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
+                          <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
+                            Edit
+                          </Button>
+                          {isAdmin && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              onClick={() => confirmDeleteClient(c.id)}
+                              disabled={deletingClientId === c.id}
+                            >
+                              {deletingClientId === c.id ? 'Deleting…' : 'Delete'}
+                            </Button>
+                          )}
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!sortedEditors.length && !loading && (
+                    <TableRow>
+                      <TableCell colSpan={4} align="center">
+                        No editors yet.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
+
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
           <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="h5">Clients</Typography>
@@ -942,23 +1001,23 @@ export default function AdminHub() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {sortedClients.map((c) => (
-                    <TableRow key={c.id} hover>
-                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                      <TableCell>{c.email}</TableCell>
-                      <TableCell>
-                        {c.looker_url ? (
-                          <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
-                            Open
-                          </Button>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">
-                            Not set
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                      <TableCell>{c.monday_board_id || '-'}</TableCell>
+                {sortedClientOnly.map((c) => (
+                  <TableRow key={c.id} hover>
+                    <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                    <TableCell>{c.email}</TableCell>
+                    <TableCell>
+                      {c.looker_url ? (
+                        <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
+                          Open
+                        </Button>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          Not set
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
+                    <TableCell>{c.monday_board_id || '-'}</TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -990,7 +1049,7 @@ export default function AdminHub() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!sortedClients.length && !loading && (
+                {!sortedClientOnly.length && !loading && (
                   <TableRow>
                     <TableCell colSpan={6} align="center">
                       No clients yet.

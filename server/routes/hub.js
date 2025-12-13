@@ -1174,7 +1174,7 @@ router.get('/clients', isAdminOrEditor, async (_req, res) => {
             COALESCE(cp.ai_prompt, $1) as ai_prompt
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
-     WHERE u.role = 'client'
+     WHERE u.role IN ('client', 'editor')
      ORDER BY u.created_at DESC`,
     [DEFAULT_AI_PROMPT]
   );
@@ -1190,11 +1190,7 @@ router.post('/clients', isAdminOrEditor, async (req, res) => {
     const [first, ...rest] = (name || '').trim().split(' ').filter(Boolean);
     const last = rest.join(' ');
     if (existing.rows.length) {
-      const updated = await query(
-        'UPDATE users SET first_name = $1, last_name = $2 WHERE id = $3 RETURNING id, first_name, last_name, email, role',
-        [first || existing.rows[0].first_name, last || existing.rows[0].last_name, existing.rows[0].id]
-      );
-      res.json({ client: updated.rows[0], created: false });
+      return res.status(409).json({ message: 'Email already in use' });
     } else {
       const password = uuidv4();
       const hash = await bcrypt.hash(password, 12);
