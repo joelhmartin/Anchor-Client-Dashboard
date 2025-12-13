@@ -253,6 +253,142 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash);
 
+-- ==========================
+-- Internal task platform v1
+-- ==========================
+
+CREATE TABLE IF NOT EXISTS task_workspaces (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_workspace_memberships (
+  workspace_id UUID NOT NULL REFERENCES task_workspaces(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_boards (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES task_workspaces(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_boards_workspace ON task_boards(workspace_id);
+
+CREATE TABLE IF NOT EXISTS task_groups (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  board_id UUID NOT NULL REFERENCES task_boards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_task_groups_board ON task_groups(board_id);
+
+CREATE TABLE IF NOT EXISTS task_items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES task_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo',
+  due_date DATE,
+  is_voicemail BOOLEAN NOT NULL DEFAULT FALSE,
+  needs_attention BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT task_items_status_check CHECK (status IN ('todo','working','blocked','done','needs_attention'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_items_group ON task_items(group_id);
+CREATE INDEX IF NOT EXISTS idx_task_items_status ON task_items(status);
+
+CREATE TABLE IF NOT EXISTS task_subitems (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  parent_item_id UUID NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo',
+  due_date DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT task_subitems_status_check CHECK (status IN ('todo','working','blocked','done','needs_attention'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_subitems_parent ON task_subitems(parent_item_id);
+
+CREATE TABLE IF NOT EXISTS task_item_assignees (
+  item_id UUID NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (item_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_updates (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_id UUID NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_updates_item ON task_updates(item_id);
+
+CREATE TABLE IF NOT EXISTS task_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_id UUID REFERENCES task_items(id) ON DELETE CASCADE,
+  update_id UUID REFERENCES task_updates(id) ON DELETE CASCADE,
+  uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  file_url TEXT NOT NULL,
+  file_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_files_item ON task_files(item_id);
+CREATE INDEX IF NOT EXISTS idx_task_files_update ON task_files(update_id);
+
+CREATE TABLE IF NOT EXISTS task_time_entries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_id UUID NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  time_spent_minutes INTEGER NOT NULL DEFAULT 0,
+  billable_minutes INTEGER NOT NULL DEFAULT 0,
+  description TEXT,
+  work_category TEXT,
+  is_billable BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT task_time_billable_minutes_check CHECK (billable_minutes >= 0),
+  CONSTRAINT task_time_spent_minutes_check CHECK (time_spent_minutes >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_task_time_entries_item ON task_time_entries(item_id);
+CREATE INDEX IF NOT EXISTS idx_task_time_entries_user ON task_time_entries(user_id);
+
+-- Automations (v1: board-scoped rules)
+CREATE TABLE IF NOT EXISTS task_board_automations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  board_id UUID NOT NULL REFERENCES task_boards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  trigger_type TEXT NOT NULL,
+  trigger_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  action_type TEXT NOT NULL,
+  action_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_board_automations_board ON task_board_automations(board_id);
+CREATE INDEX IF NOT EXISTS idx_task_board_automations_active ON task_board_automations(is_active);
+
+-- AI summaries (cached)
+CREATE TABLE IF NOT EXISTS task_item_ai_summaries (
+  item_id UUID PRIMARY KEY REFERENCES task_items(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'vertex',
+  model TEXT,
+  generated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source_meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_task_item_ai_summaries_generated_at ON task_item_ai_summaries(generated_at);
+
 -- Idempotent alter helpers
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'client';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;

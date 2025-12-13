@@ -126,9 +126,8 @@ export default function AdminHub() {
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
 
-  const isAdmin = user?.role === 'admin';
-  const isEditor = user?.role === 'editor';
-  const canAccessHub = isAdmin || isEditor;
+  const effectiveRole = user?.effective_role || user?.role;
+  const canAccessHub = effectiveRole === 'superadmin' || effectiveRole === 'admin';
 
   useEffect(() => {
     if (!canAccessHub) return;

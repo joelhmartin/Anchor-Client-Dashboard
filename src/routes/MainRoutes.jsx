@@ -16,21 +16,35 @@ const ServicesManagement = Loadable(lazy(() => import('views/admin/ServicesManag
 const ActiveClients = Loadable(lazy(() => import('views/admin/ActiveClients')));
 const ClientPortal = Loadable(lazy(() => import('views/client/ClientPortal')));
 const BlogEditor = Loadable(lazy(() => import('views/client/BlogEditor')));
+const TaskManager = Loadable(lazy(() => import('views/tasks/TaskManager')));
 
 function AdminRoute({ children }) {
   const { user, initializing } = useAuth();
   if (initializing) return <Loader />;
-  return <SuspendedRoute allow={user?.role === 'admin' || user?.role === 'editor'}>{children}</SuspendedRoute>;
+  const role = user?.effective_role || user?.role;
+  return <SuspendedRoute allow={role === 'superadmin' || role === 'admin'}>{children}</SuspendedRoute>;
 }
 
 function PortalRoute({ children }) {
   const { user, initializing, actingClientId } = useAuth();
   if (initializing) return <Loader />;
-  const isAdmin = user?.role === 'admin' || user?.role === 'editor';
+  const role = user?.effective_role || user?.role;
+  const isAdmin = role === 'superadmin' || role === 'admin';
   if (isAdmin && !actingClientId) {
     return <Navigate to="/client-hub" replace />;
   }
   return children;
+}
+
+function TaskRoute({ children }) {
+  const { user, initializing } = useAuth();
+  if (initializing) return <Loader />;
+  const role = user?.effective_role || user?.role;
+  return (
+    <SuspendedRoute allow={role === 'superadmin' || role === 'admin' || role === 'team'}>
+      {children}
+    </SuspendedRoute>
+  );
 }
 
 function DefaultLanding() {
@@ -39,7 +53,8 @@ function DefaultLanding() {
   if (actingClientId) {
     return <Navigate to="/portal" replace />;
   }
-  if (user?.role === 'admin' || user?.role === 'editor') {
+  const role = user?.effective_role || user?.role;
+  if (role === 'superadmin' || role === 'admin') {
     return <Navigate to="/client-hub" replace />;
   }
   return <Navigate to="/portal" replace />;
@@ -102,6 +117,15 @@ const MainRoutes = {
     {
       path: 'blogs',
       element: <BlogEditor />
+    }
+    ,
+    {
+      path: 'tasks',
+      element: (
+        <TaskRoute>
+          <TaskManager />
+        </TaskRoute>
+      )
     }
   ]
 };

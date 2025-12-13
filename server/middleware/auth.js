@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
+import { getEffectiveRole } from '../utils/roles.js';
 
 const COOKIE_NAME = 'session';
 
@@ -13,10 +14,10 @@ export async function requireAuth(req, res, next) {
     ]);
     const user = rows[0];
     if (!user) return res.status(401).json({ message: 'Session invalid' });
-    req.user = user;
+    req.user = { ...user, effective_role: await getEffectiveRole(user.role) };
     req.portalUserId = user.id;
     req.actingClient = null;
-    if ((user.role === 'admin' || user.role === 'editor') && req.headers['x-acting-user']) {
+    if ((req.user.effective_role === 'superadmin' || req.user.effective_role === 'admin') && req.headers['x-acting-user']) {
       const actingId = String(req.headers['x-acting-user']);
       if (actingId && actingId !== user.id) {
         const { rows: actingRows } = await query('SELECT id, role FROM users WHERE id = $1 LIMIT 1', [actingId]);
@@ -35,6 +36,6 @@ export async function requireAuth(req, res, next) {
 
 export function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ message: 'Login required' });
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+  if (req.user.effective_role !== 'superadmin') return res.status(403).json({ message: 'Superadmin only' });
   next();
 }

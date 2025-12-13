@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // material-ui
 import Avatar from '@mui/material/Avatar';
@@ -35,6 +36,7 @@ export default function ProfileSection() {
     state: { borderRadius }
   } = useConfig();
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
   const [sdm, setSdm] = useState(true);
   const [value, setValue] = useState('');
@@ -158,6 +160,22 @@ export default function ProfileSection() {
                           '& .MuiListItemButton-root': { mt: 0.5 }
                         }}
                       >
+                        {((user?.effective_role || user?.role) === 'superadmin' ||
+                          (user?.effective_role || user?.role) === 'admin' ||
+                          (user?.effective_role || user?.role) === 'team') && (
+                          <ListItemButton
+                            onClick={(e) => {
+                              navigate('/tasks');
+                              handleClose(e);
+                            }}
+                            sx={{ borderRadius: `${borderRadius}px` }}
+                          >
+                            <ListItemIcon>
+                              <IconSettings stroke={1.5} size="20px" />
+                            </ListItemIcon>
+                            <ListItemText primary={<Typography variant="body2">Task Manager</Typography>} />
+                          </ListItemButton>
+                        )}
                         <ListItemButton sx={{ borderRadius: `${borderRadius}px` }}>
                           <ListItemIcon>
                             <IconSettings stroke={1.5} size="20px" />

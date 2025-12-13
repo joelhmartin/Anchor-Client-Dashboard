@@ -13,6 +13,7 @@ import authRouter from './auth.js';
 import { query } from './db.js';
 import hubRouter from './routes/hub.js';
 import onboardingRouter from './routes/onboarding.js';
+import tasksRouter from './routes/tasks.js';
 
 const app = express();
 const PORT = process.env.API_SERVER_PORT || process.env.PORT || 4000;
@@ -60,6 +61,7 @@ app.use(
 app.use('/api/auth', authRouter);
 app.use('/api/hub', hubRouter);
 app.use('/api/onboarding', onboardingRouter);
+app.use('/api/tasks', tasksRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 if (NODE_ENV === 'production') {

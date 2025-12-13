@@ -543,7 +543,7 @@ async function resolveAccountManagerContact(userId, options = {}) {
   return { client, clientName, managerEmail, managerName, notificationUserId };
 }
 
-async function notifyAccountManagerOfBlogPost(userId, blogPost) {
+async function notifyAccountManagerOfBlogPost(userId, blogPost, baseUrl) {
   if (!userId || !blogPost) return;
   const contact = await resolveAccountManagerContact(userId);
   if (!contact) return;
@@ -559,10 +559,10 @@ ${clientName} just created a new blog post titled "${blogTitle}" (status: ${stat
 You can review it inside the Anchor admin hub.
 
 - Anchor Dashboard`;
-  const baseUrl = resolveBaseUrl(req);
+  const resolvedBaseUrl = baseUrl || 'http://localhost:3000';
   const emailHtml = `<p>Hi ${managerName || 'there'},</p>
 <p><strong>${clientName}</strong> just created a new blog post titled <strong>${blogTitle}</strong> (status: ${statusLabel}).</p>
-<p><a href="${baseUrl}/admin" target="_blank" rel="noopener">Open the admin hub</a> to review it.</p>
+<p><a href="${resolvedBaseUrl}/admin" target="_blank" rel="noopener">Open the admin hub</a> to review it.</p>
 <p>- Anchor Dashboard</p>`;
 
   if (notificationUserId) {
@@ -3145,7 +3145,7 @@ router.post('/blog-posts', async (req, res) => {
     );
     const newPost = rows[0];
     try {
-      await notifyAccountManagerOfBlogPost(userId, newPost);
+      await notifyAccountManagerOfBlogPost(userId, newPost, resolveBaseUrl(req));
     } catch (notifyErr) {
       console.error('[blog:notify]', notifyErr.message || notifyErr);
     }

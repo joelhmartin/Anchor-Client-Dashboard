@@ -20,6 +20,7 @@ import { handlerDrawerOpen, useGetMenuMaster } from 'api/menu';
 import useAuth from 'hooks/useAuth';
 import { useLocation } from 'react-router-dom';
 import portalMenu from 'menu-items/portal';
+import tasksMenu from 'menu-items/tasks';
 
 // ==============================|| SIDEBAR DRAWER ||============================== //
 
@@ -33,6 +34,7 @@ function Sidebar() {
   
   // Use portal menu for regular clients or when admin is viewing portal
   const isPortal = user?.role === 'client' || Boolean(actingClientId) || location.pathname.startsWith('/portal');
+  const isTasks = location.pathname.startsWith('/tasks');
 
   const {
     state: { miniDrawer }
@@ -65,18 +67,18 @@ function Sidebar() {
       <>
         {downMD ? (
           <Box sx={drawerSX}>
-            <MenuList menuConfig={isPortal ? portalMenu : undefined} />
+            <MenuList menuConfig={isPortal ? portalMenu : isTasks ? tasksMenu : undefined} />
             {drawerOpen && drawerContent}
           </Box>
         ) : (
           <SimpleBar sx={{ height: 'calc(100vh - 90px)', ...drawerSX }}>
-            <MenuList menuConfig={isPortal ? portalMenu : undefined} />
+            <MenuList menuConfig={isPortal ? portalMenu : isTasks ? tasksMenu : undefined} />
             {drawerOpen && drawerContent}
           </SimpleBar>
         )}
       </>
     );
-  }, [downMD, drawerOpen, isPortal]);
+  }, [downMD, drawerOpen, isPortal, isTasks]);
 
   return (
     <Box component="nav" sx={{ flexShrink: { md: 0 }, width: { xs: 'auto', md: drawerWidth } }} aria-label="mailbox folders">

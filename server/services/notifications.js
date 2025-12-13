@@ -16,7 +16,11 @@ export async function createNotification({ userId, title, body, linkUrl, meta = 
 }
 
 export async function createNotificationsForAdmins(payload) {
-  const { rows } = await query("SELECT id FROM users WHERE role = 'admin'");
+  // Prefer superadmins; if none exist, fall back to admins.
+  let { rows } = await query("SELECT id FROM users WHERE role = 'superadmin'");
+  if (!rows.length) {
+    ({ rows } = await query("SELECT id FROM users WHERE role = 'admin'"));
+  }
   await Promise.all(rows.map((admin) => createNotification({ ...payload, userId: admin.id })));
   return rows;
 }
@@ -62,7 +66,11 @@ export async function markAllNotificationsRead(userId) {
 
 export async function notifyAdminsByEmail({ subject, text, html }) {
   if (!isMailgunConfigured()) return;
-  const { rows } = await query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL");
+  // Prefer superadmins; if none exist, fall back to admins.
+  let rows = (await query("SELECT email FROM users WHERE role = 'superadmin' AND email IS NOT NULL")).rows;
+  if (!rows.length) {
+    rows = (await query("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL")).rows;
+  }
   const recipients = rows.map((row) => row.email).filter(Boolean);
   if (!recipients.length && ADMIN_FALLBACK_EMAIL) {
     recipients.push(ADMIN_FALLBACK_EMAIL);
