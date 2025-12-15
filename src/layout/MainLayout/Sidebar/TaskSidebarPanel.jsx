@@ -62,8 +62,8 @@ export default function TaskSidebarPanel() {
     try {
       const ws = await fetchTaskWorkspaces();
       setWorkspaces(ws);
-      // default selection
-      if (!workspaceIdFromUrl && ws.length) {
+      // default selection (boards pane only)
+      if (pane === 'boards' && !workspaceIdFromUrl && ws.length) {
         const next = new URLSearchParams(searchParams);
         next.set('workspace', ws[0].id);
         setSearchParams(next, { replace: true });
@@ -82,21 +82,21 @@ export default function TaskSidebarPanel() {
 
   // If the URL lost workspace/board (e.g., navigating between panes), reapply defaults when we have data.
   useEffect(() => {
-    if (!workspaceIdFromUrl && workspaces.length) {
+    if (pane === 'boards' && !workspaceIdFromUrl && workspaces.length) {
       const nextWorkspaceId = workspaces[0].id;
       setActiveWorkspaceId(nextWorkspaceId);
       navigate(withPane(paths.workspace(nextWorkspaceId), pane), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceIdFromUrl, workspaces]);
+  }, [pane, workspaceIdFromUrl, workspaces]);
 
   useEffect(() => {
-    if (activeWorkspaceId && !boardIdFromUrl && boards.length) {
+    if (pane === 'boards' && activeWorkspaceId && !boardIdFromUrl && boards.length) {
       const nextBoardId = boards[0].id;
       navigate(withPane(paths.board(nextBoardId), pane), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, boardIdFromUrl, boards]);
+  }, [pane, activeWorkspaceId, boardIdFromUrl, boards]);
 
   const loadWorkspaceData = async (workspaceId) => {
     if (!workspaceId) {
@@ -111,7 +111,7 @@ export default function TaskSidebarPanel() {
       setBoards(b);
       setMembers(m);
       // default board selection (if missing)
-      if (!boardIdFromUrl && b.length) {
+      if (pane === 'boards' && !boardIdFromUrl && b.length) {
         const next = new URLSearchParams(searchParams);
         next.set('workspace', workspaceId);
         next.set('board', b[0].id);
