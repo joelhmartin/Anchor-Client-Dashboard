@@ -40,6 +40,22 @@ export function fetchTaskBoardView(boardId) {
   return client.get(`/tasks/boards/${boardId}/view`).then((res) => res.data);
 }
 
+export function updateTaskBoard(boardId, payload) {
+  return client.patch(`/tasks/boards/${boardId}`, payload).then((res) => res.data.board);
+}
+
+export function fetchTaskBoardsAll() {
+  return client.get('/tasks/boards').then((res) => res.data.boards || []);
+}
+
+export function runTaskBoardsReport(payload) {
+  return client.post('/tasks/reports/boards', payload).then((res) => res.data.rows || []);
+}
+
+export function fetchMyWork() {
+  return client.get('/tasks/my-work').then((res) => res.data.boards || []);
+}
+
 export function createTaskGroup(boardId, payload) {
   return client.post(`/tasks/boards/${boardId}/groups`, payload).then((res) => res.data.group);
 }

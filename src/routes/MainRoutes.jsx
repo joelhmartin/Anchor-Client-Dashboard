@@ -126,6 +126,31 @@ const MainRoutes = {
           <TaskManager />
         </TaskRoute>
       )
+    },
+    // Task manager canonical + aliases (all prefixed with /tasks)
+    {
+      path: 'tasks/boards/:boardId',
+      element: (
+        <TaskRoute>
+          <TaskManager />
+        </TaskRoute>
+      )
+    },
+    {
+      path: 'tasks/workspaces/:workspaceId',
+      element: (
+        <TaskRoute>
+          <TaskManager />
+        </TaskRoute>
+      )
+    },
+    {
+      path: 'tasks/workspaces/:workspaceId/boards/:boardId',
+      element: (
+        <TaskRoute>
+          <TaskManager />
+        </TaskRoute>
+      )
     }
   ]
 };

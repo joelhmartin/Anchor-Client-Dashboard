@@ -1,4 +1,4 @@
-import { IconLayoutBoard, IconUser, IconSettings } from '@tabler/icons-react';
+import { IconLayoutBoard, IconReportAnalytics, IconUserCheck } from '@tabler/icons-react';
 
 export const tasksNavGroup = {
   id: 'tasks-nav-group',
@@ -13,18 +13,18 @@ export const tasksNavGroup = {
       icon: IconLayoutBoard
     },
     {
-      id: 'profile-settings',
-      title: 'Profile Settings',
+      id: 'tasks-my-work',
+      title: 'My Work',
       type: 'item',
-      url: '/profile',
-      icon: IconSettings
+      url: '/tasks?pane=my-work',
+      icon: IconUserCheck
     },
     {
-      id: 'client-hub',
-      title: 'Back to Client Hub',
+      id: 'tasks-reporting',
+      title: 'Reporting',
       type: 'item',
-      url: '/client-hub',
-      icon: IconUser
+      url: '/tasks?pane=reports',
+      icon: IconReportAnalytics
     }
   ]
 };

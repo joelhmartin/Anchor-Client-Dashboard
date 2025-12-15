@@ -21,6 +21,7 @@ import useAuth from 'hooks/useAuth';
 import { useLocation } from 'react-router-dom';
 import portalMenu from 'menu-items/portal';
 import tasksMenu from 'menu-items/tasks';
+import TaskSidebarPanel from './TaskSidebarPanel';
 
 // ==============================|| SIDEBAR DRAWER ||============================== //
 
@@ -50,15 +51,20 @@ function Sidebar() {
   );
 
   const drawer = useMemo(() => {
-    const drawerContent =
-      !isPortal && (
-        <>
-          <MenuCard />
-          <Stack direction="row" sx={{ justifyContent: 'center', mb: 2 }}>
-            <Chip label={import.meta.env.VITE_APP_VERSION} size="small" color="default" />
-          </Stack>
-        </>
-      );
+    const drawerContent = !isPortal ? (
+      <>
+        {isTasks ? (
+          <TaskSidebarPanel />
+        ) : (
+          <>
+            <MenuCard />
+            <Stack direction="row" sx={{ justifyContent: 'center', mb: 2 }}>
+              <Chip label={import.meta.env.VITE_APP_VERSION} size="small" color="default" />
+            </Stack>
+          </>
+        )}
+      </>
+    ) : null;
 
     let drawerSX = { paddingLeft: '0px', paddingRight: '0px', marginTop: '20px' };
     if (drawerOpen) drawerSX = { paddingLeft: '16px', paddingRight: '16px', marginTop: '0px' };

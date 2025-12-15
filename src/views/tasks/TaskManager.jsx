@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams, useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import {
   Alert,
@@ -18,28 +18,26 @@ import {
   Popper,
   Select,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Typography
 } from '@mui/material';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
+import BoardHeader from './components/BoardHeader';
+import BoardTable from './components/BoardTable';
 import {
-  createTaskBoard,
   createTaskGroup,
   createTaskItem,
   createTaskBoardAutomation,
-  createTaskWorkspace,
   fetchTaskWorkspaceMembers,
   searchTaskWorkspaceMembers,
-  addTaskWorkspaceMember,
-  updateTaskWorkspaceMember,
-  removeTaskWorkspaceMember,
   fetchTaskBoardView,
   fetchTaskBoardAutomations,
   fetchTaskBoardReport,
-  fetchTaskBoards,
-  fetchTaskWorkspaces,
+  fetchTaskBoardsAll,
   fetchTaskItemUpdates,
   createTaskItemUpdate,
   fetchTaskItemFiles,
@@ -54,11 +52,14 @@ import {
   updateTaskSubitem,
   deleteTaskSubitem,
   setTaskAutomationActive,
-  downloadTaskBoardCsv
-  ,
+  downloadTaskBoardCsv,
   fetchTaskItemAiSummary,
   refreshTaskItemAiSummary
 } from 'api/tasks';
+import { updateTaskBoard } from 'api/tasks';
+import { runTaskBoardsReport } from 'api/tasks';
+import { fetchMyWork } from 'api/tasks';
+import { paths, withPane } from 'routes/paths';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -66,31 +67,29 @@ function getEffectiveRole(user) {
 
 export default function TaskManager() {
   const { user } = useAuth();
-  const effRole = useMemo(() => getEffectiveRole(user), [user]);
-  // used for deep-linking /tasks?board=...&item=...
-  useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const params = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const pane = searchParams.get('pane') || 'boards'; // boards | reports | my-work
+  const reportStart = searchParams.get('report_start') || '';
+  const reportEnd = searchParams.get('report_end') || '';
+  const reportBoards = (searchParams.get('report_boards') || '').split(',').filter(Boolean);
 
-  const canCreateWorkspace = useMemo(() => effRole === 'superadmin' || effRole === 'admin', [effRole]);
-
-  const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
   const [error, setError] = useState('');
 
-  const [workspaces, setWorkspaces] = useState([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
+  const activeWorkspaceId = params.workspaceId || searchParams.get('workspace') || '';
+  const activeBoardId = params.boardId || searchParams.get('board') || '';
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
-  const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
-  const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [addingMember, setAddingMember] = useState(false);
-
-  const [boards, setBoards] = useState([]);
-  const [activeBoardId, setActiveBoardId] = useState('');
 
   const [boardViewLoading, setBoardViewLoading] = useState(false);
   const [boardView, setBoardView] = useState(null); // { board, groups, items }
+  const [boardSearch, setBoardSearch] = useState('');
+  const [boardViewType, setBoardViewType] = useState('main');
   const [automations, setAutomations] = useState([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [creatingAutomation, setCreatingAutomation] = useState(false);
+  const [automationsAnchorEl, setAutomationsAnchorEl] = useState(null);
   const [automationToStatus, setAutomationToStatus] = useState('needs_attention');
   const [automationAction, setAutomationAction] = useState('notify_admins');
   const [automationTitle, setAutomationTitle] = useState('Task needs attention');
@@ -98,13 +97,6 @@ export default function TaskManager() {
   const [boardReport, setBoardReport] = useState(null);
   const [boardReportLoading, setBoardReportLoading] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
-
-  // Create forms
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
-
-  const [newBoardName, setNewBoardName] = useState('');
-  const [creatingBoard, setCreatingBoard] = useState(false);
 
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
@@ -115,6 +107,7 @@ export default function TaskManager() {
   // Item drawer
   const [activeItem, setActiveItem] = useState(null);
   const [itemDrawerOpen, setItemDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState('updates'); // updates | files | time
   const [itemUpdates, setItemUpdates] = useState([]);
   const [itemUpdatesLoading, setItemUpdatesLoading] = useState(false);
   const [newUpdateText, setNewUpdateText] = useState('');
@@ -151,6 +144,20 @@ export default function TaskManager() {
   const itemCardRefs = useRef({});
   const [highlightedItemId, setHighlightedItemId] = useState('');
 
+  // Reporting results (main content when pane=reports)
+  const [reportRows, setReportRows] = useState([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [allBoards, setAllBoards] = useState([]);
+  const [allBoardsLoading, setAllBoardsLoading] = useState(false);
+  const [reportBoardQuery, setReportBoardQuery] = useState('');
+  const [reportStartInput, setReportStartInput] = useState(reportStart || '');
+  const [reportEndInput, setReportEndInput] = useState(reportEnd || '');
+  const [selectedReportBoards, setSelectedReportBoards] = useState(() => new Set(reportBoards));
+
+  // My Work (main content when pane=my-work)
+  const [myWorkBoards, setMyWorkBoards] = useState([]);
+  const [myWorkLoading, setMyWorkLoading] = useState(false);
+
   const updateItemField = async (patch) => {
     if (!activeItem?.id) return;
     setError('');
@@ -167,46 +174,16 @@ export default function TaskManager() {
     }
   };
 
-  const loadWorkspaces = async () => {
-    setLoadingWorkspaces(true);
-    setError('');
-    try {
-      const ws = await fetchTaskWorkspaces();
-      setWorkspaces(ws);
-      if (!activeWorkspaceId && ws.length) setActiveWorkspaceId(ws[0].id);
-    } catch (err) {
-      setError(err.message || 'Unable to load workspaces');
-    } finally {
-      setLoadingWorkspaces(false);
-    }
-  };
-
-  useEffect(() => {
-    loadWorkspaces();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // Members are used for assignee dropdown and mention autocomplete
   useEffect(() => {
     if (!activeWorkspaceId) {
-      setBoards([]);
-      setActiveBoardId('');
-      setBoardView(null);
       setWorkspaceMembers([]);
       return;
     }
-    setError('');
-    fetchTaskBoards(activeWorkspaceId)
-      .then((b) => {
-        setBoards(b);
-        if (!activeBoardId && b.length) setActiveBoardId(b[0].id);
-      })
-      .catch((err) => setError(err.message || 'Unable to load boards'));
-    setWorkspaceMembersLoading(true);
+    // Sidebar owns member management; we only need the list for dropdowns.
     fetchTaskWorkspaceMembers(activeWorkspaceId)
       .then((m) => setWorkspaceMembers(m))
-      .catch(() => setWorkspaceMembers([]))
-      .finally(() => setWorkspaceMembersLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .catch(() => setWorkspaceMembers([]));
   }, [activeWorkspaceId]);
 
   const loadBoardView = async (boardId) => {
@@ -219,6 +196,17 @@ export default function TaskManager() {
     try {
       const data = await fetchTaskBoardView(boardId);
       setBoardView(data);
+      const boardWs = data?.board?.workspace_id;
+      // If URL workspace mismatches board, redirect to canonical /boards/:boardId (preserving pane).
+      if (boardWs && params.workspaceId && boardWs !== params.workspaceId) {
+        navigate(withPane(paths.board(boardId), pane), { replace: true });
+      }
+      // If no workspace context in URL, keep it in search for sidebar convenience.
+      if (boardWs && !activeWorkspaceId) {
+        const next = new URLSearchParams(searchParams);
+        next.set('workspace', boardWs);
+        setSearchParams(next, { replace: true });
+      }
     } catch (err) {
       setError(err.message || 'Unable to load board');
       setBoardView(null);
@@ -265,80 +253,162 @@ export default function TaskManager() {
     loadAutomations(activeBoardId);
     loadBoardReport(activeBoardId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBoardId]);
+  }, [activeBoardId, location.pathname]);
 
-  const handleCreateWorkspace = async () => {
-    if (!newWorkspaceName.trim()) return;
-    setCreatingWorkspace(true);
-    setError('');
-    try {
-      const workspace = await createTaskWorkspace({ name: newWorkspaceName.trim() });
-      setWorkspaces((prev) => [workspace, ...prev]);
-      setActiveWorkspaceId(workspace.id);
-      setNewWorkspaceName('');
-    } catch (err) {
-      setError(err.message || 'Unable to create workspace');
-    } finally {
-      setCreatingWorkspace(false);
-    }
+  // Load all boards for reporting pane
+  useEffect(() => {
+    if (pane !== 'reports') return;
+    setAllBoardsLoading(true);
+    fetchTaskBoardsAll()
+      .then((rows) => setAllBoards(rows))
+      .catch(() => setAllBoards([]))
+      .finally(() => setAllBoardsLoading(false));
+  }, [pane]);
+
+  // Load My Work (assigned to current user), grouped by board
+  useEffect(() => {
+    if (pane !== 'my-work') return;
+    setMyWorkLoading(true);
+    fetchMyWork()
+      .then((rows) => setMyWorkBoards(rows))
+      .catch(() => setMyWorkBoards([]))
+      .finally(() => setMyWorkLoading(false));
+  }, [pane]);
+
+  const jumpToItem = (b, item) => {
+    const base = paths.board(b.board_id);
+    const params = new URLSearchParams();
+    // keep pane implicit as "boards" (default); no need to set pane
+    if (b?.workspace_id) params.set('workspace', b.workspace_id);
+    if (item?.id) params.set('item', item.id);
+    const query = params.toString();
+    navigate(query ? `${base}?${query}` : base, { replace: false });
   };
 
-  const handleCreateBoard = async () => {
-    if (!activeWorkspaceId || !newBoardName.trim()) return;
-    setCreatingBoard(true);
-    setError('');
-    try {
-      const board = await createTaskBoard(activeWorkspaceId, { name: newBoardName.trim() });
-      setBoards((prev) => [board, ...prev]);
-      setActiveBoardId(board.id);
-      setNewBoardName('');
-    } catch (err) {
-      setError(err.message || 'Unable to create board');
-    } finally {
-      setCreatingBoard(false);
-    }
+  // Sync reporting selections from URL
+  useEffect(() => {
+    if (pane !== 'reports') return;
+    setReportStartInput(reportStart || '');
+    setReportEndInput(reportEnd || '');
+    setSelectedReportBoards(new Set(reportBoards));
+  }, [pane, reportStart, reportEnd, reportBoards]);
+
+  const filteredReportBoards = useMemo(() => {
+    const q = reportBoardQuery.trim().toLowerCase();
+    if (!q) return allBoards;
+    return allBoards.filter((b) => {
+      const name = (b.name || '').toLowerCase();
+      const ws = (b.workspace_name || '').toLowerCase();
+      return name.includes(q) || ws.includes(q);
+    });
+  }, [allBoards, reportBoardQuery]);
+
+  const toggleReportBoard = (boardId) => {
+    setSelectedReportBoards((prev) => {
+      const next = new Set(prev);
+      if (next.has(boardId)) next.delete(boardId);
+      else next.add(boardId);
+      return next;
+    });
   };
 
-  const handleAddMember = async () => {
-    if (!activeWorkspaceId || !newMemberEmail.trim()) return;
-    setAddingMember(true);
+  const toggleAllReportBoards = () => {
+    const ids = filteredReportBoards.map((b) => b.id);
+    setSelectedReportBoards((prev) => {
+      const next = new Set(prev);
+      const allSelected = ids.length > 0 && ids.every((id) => next.has(id));
+      if (allSelected) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  const handleRunReport = async () => {
+    const ids = Array.from(selectedReportBoards);
+    if (!ids.length) return;
+    setReportLoading(true);
     setError('');
     try {
-      const member = await addTaskWorkspaceMember(activeWorkspaceId, { email: newMemberEmail.trim(), role: 'member' });
-      setWorkspaceMembers((prev) => {
-        const existing = prev.find((m) => m.user_id === member.user_id);
-        if (existing) return prev.map((m) => (m.user_id === member.user_id ? member : m));
-        return [...prev, member];
+      const rows = await runTaskBoardsReport({
+        board_ids: ids,
+        start_date: reportStartInput || null,
+        end_date: reportEndInput || null
       });
-      setNewMemberEmail('');
+      setReportRows(rows || []);
+      const next = new URLSearchParams(searchParams);
+      next.set('pane', 'reports');
+      next.set('report_boards', ids.join(','));
+      if (reportStartInput) next.set('report_start', reportStartInput);
+      else next.delete('report_start');
+      if (reportEndInput) next.set('report_end', reportEndInput);
+      else next.delete('report_end');
+      setSearchParams(next, { replace: true });
     } catch (err) {
-      setError(err.message || 'Unable to add member');
+      setError(err.message || 'Unable to run report');
     } finally {
-      setAddingMember(false);
+      setReportLoading(false);
     }
   };
 
-  const handleChangeMemberRole = async (memberUserId, role) => {
-    if (!activeWorkspaceId) return;
-    setError('');
-    try {
-      const updated = await updateTaskWorkspaceMember(activeWorkspaceId, memberUserId, { role });
-      setWorkspaceMembers((prev) => prev.map((m) => (m.user_id === memberUserId ? updated : m)));
-    } catch (err) {
-      setError(err.message || 'Unable to update member role');
-    }
+  const handleExportReportCsv = () => {
+    if (!reportRows.length) return;
+    const headers = [
+      'Workspace',
+      'Board',
+      'Total',
+      'Todo',
+      'Working',
+      'Blocked',
+      'Done',
+      'Updates (range)',
+      'Time minutes (range)',
+      'Updated (range)'
+    ];
+    const lines = [
+      headers.join(','),
+      ...reportRows.map((r) =>
+        [
+          r.workspace_name,
+          r.board_name,
+          r.total_items || 0,
+          r.todo || 0,
+          r.working || 0,
+          r.blocked || 0,
+          r.done || 0,
+          r.updates_in_range || 0,
+          r.time_minutes_in_range || 0,
+          r.items_updated_in_range || 0
+        ]
+          .map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`)
+          .join(',')
+      )
+    ].join('\n');
+    const blob = new Blob([lines], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'board-report.csv';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleRemoveMember = async (memberUserId) => {
-    if (!activeWorkspaceId) return;
-    setError('');
-    try {
-      await removeTaskWorkspaceMember(activeWorkspaceId, memberUserId);
-      setWorkspaceMembers((prev) => prev.filter((m) => m.user_id !== memberUserId));
-    } catch (err) {
-      setError(err.message || 'Unable to remove member');
+  useEffect(() => {
+    if (pane !== 'reports') return;
+    if (!reportBoards.length) {
+      setReportRows([]);
+      return;
     }
-  };
+    setReportLoading(true);
+    runTaskBoardsReport({
+      board_ids: reportBoards,
+      start_date: reportStart || null,
+      end_date: reportEnd || null
+    })
+      .then((rows) => setReportRows(rows))
+      .catch(() => setReportRows([]))
+      .finally(() => setReportLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane]);
 
   const handleCreateGroup = async () => {
     if (!activeBoardId || !newGroupName.trim()) return;
@@ -501,6 +571,70 @@ export default function TaskManager() {
     }
   };
 
+  const updateItemInline = async (itemId, patch) => {
+    if (!itemId) return;
+    setError('');
+    // optimistic update board view
+    setBoardView((prev) => {
+      if (!prev?.items) return prev;
+      return { ...prev, items: prev.items.map((it) => (it.id === itemId ? { ...it, ...patch } : it)) };
+    });
+    try {
+      const updated = await updateTaskItem(itemId, patch);
+      setBoardView((prev) => {
+        if (!prev?.items) return prev;
+        return { ...prev, items: prev.items.map((it) => (it.id === itemId ? updated : it)) };
+      });
+      if (activeItem?.id === itemId) setActiveItem(updated);
+    } catch (err) {
+      setError(err.message || 'Unable to update item');
+      // reload view to recover
+      if (activeBoardId) loadBoardView(activeBoardId);
+    }
+  };
+
+  const toggleAssigneeInline = async (itemId, userId, isCurrentlyAssigned) => {
+    if (!itemId || !userId) return;
+    // optimistic update
+    setBoardView((prev) => {
+      if (!prev) return prev;
+      const existing = prev.assignees_by_item || {};
+      const list = Array.isArray(existing[itemId]) ? [...existing[itemId]] : [];
+      if (isCurrentlyAssigned) {
+        const nextList = list.filter((a) => a.user_id !== userId);
+        return { ...prev, assignees_by_item: { ...existing, [itemId]: nextList } };
+      }
+      const member = (workspaceMembers || []).find((m) => m.user_id === userId);
+      const nextList = [
+        ...list,
+        {
+          user_id: userId,
+          email: member?.email,
+          first_name: member?.first_name,
+          last_name: member?.last_name,
+          avatar_url: member?.avatar_url
+        }
+      ];
+      return { ...prev, assignees_by_item: { ...existing, [itemId]: nextList } };
+    });
+
+    try {
+      if (isCurrentlyAssigned) {
+        await removeTaskItemAssignee(itemId, userId);
+      } else {
+        await addTaskItemAssignee(itemId, { user_id: userId });
+      }
+      // refresh assignees list in drawer if same item open
+      if (activeItem?.id === itemId) {
+        const ass = await fetchTaskItemAssignees(itemId);
+        setAssignees(ass);
+      }
+    } catch (err) {
+      setError(err.message || 'Unable to update assignees');
+      if (activeBoardId) loadBoardView(activeBoardId);
+    }
+  };
+
   // When an item is opened (via click or deep-link), scroll it into view and highlight it briefly.
   useEffect(() => {
     const id = activeItem?.id;
@@ -513,28 +647,6 @@ export default function TaskManager() {
     const t = setTimeout(() => setHighlightedItemId(''), 4000);
     return () => clearTimeout(t);
   }, [activeItem?.id]);
-
-  // Deep link support: /tasks?board=<id>&item=<id>
-  useEffect(() => {
-    const boardFromUrl = searchParams.get('board') || '';
-    if (boardFromUrl && boardFromUrl !== activeBoardId) {
-      setActiveBoardId(boardFromUrl);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
-
-  useEffect(() => {
-    // keep URL in sync when user changes board
-    if (!activeBoardId) return;
-    const currentBoard = searchParams.get('board');
-    if (currentBoard !== activeBoardId) {
-      const next = new URLSearchParams(searchParams);
-      next.set('board', activeBoardId);
-      // don't force item unless already set
-      setSearchParams(next, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBoardId]);
 
   useEffect(() => {
     const itemFromUrl = searchParams.get('item') || '';
@@ -760,7 +872,12 @@ export default function TaskManager() {
 
   const itemsByGroup = useMemo(() => {
     const map = {};
-    const items = boardView?.items || [];
+    const items = (boardView?.items || []).filter((it) => {
+      if (!boardSearch.trim()) return true;
+      return String(it.name || '')
+        .toLowerCase()
+        .includes(boardSearch.trim().toLowerCase());
+    });
     for (const it of items) {
       if (!map[it.group_id]) map[it.group_id] = [];
       map[it.group_id].push(it);
@@ -772,287 +889,454 @@ export default function TaskManager() {
     <MainCard title="Task Manager">
       <Stack spacing={2}>
         {error && <Alert severity="error">{error}</Alert>}
-
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '320px 1fr' }, gap: 2 }}>
-          {/* Left navigator */}
-          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
-            <Stack spacing={1.5}>
-              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                <Typography variant="subtitle1">Workspace</Typography>
-                {loadingWorkspaces && <CircularProgress size={16} />}
+        {pane === 'reports' ? (
+          <Box
+            sx={{
+              p: 1.25,
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 2,
+              position: 'sticky',
+              top: 0,
+              zIndex: 5,
+              bgcolor: 'background.default'
+            }}
+          >
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              alignItems={{ xs: 'flex-start', sm: 'center' }}
+              justifyContent="space-between"
+            >
+              <Stack spacing={0.25}>
+                <Typography variant="h5">Reporting</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Select boards and date range, run the report, then export the preview.
+                </Typography>
               </Stack>
-
-              <Select
+              <Button
                 size="small"
-                value={activeWorkspaceId}
-                displayEmpty
-                onChange={(e) => {
-                  setActiveWorkspaceId(e.target.value);
-                  setActiveBoardId('');
+                variant="outlined"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set('pane', 'boards');
+                  setSearchParams(next, { replace: true });
                 }}
               >
-                <MenuItem value="">
-                  <em>Select workspace…</em>
-                </MenuItem>
-                {workspaces.map((w) => (
-                  <MenuItem key={w.id} value={w.id}>
-                    {w.name}
-                  </MenuItem>
-                ))}
-              </Select>
+                Back to Boards
+              </Button>
+            </Stack>
+          </Box>
+        ) : pane === 'my-work' ? (
+          <Box
+            sx={{
+              p: 1.25,
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 2,
+              position: 'sticky',
+              top: 0,
+              zIndex: 5,
+              bgcolor: 'background.default'
+            }}
+          >
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              alignItems={{ xs: 'flex-start', sm: 'center' }}
+              justifyContent="space-between"
+            >
+              <Stack spacing={0.25}>
+                <Typography variant="h5">My Work</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Items assigned to you, grouped by board.
+                </Typography>
+              </Stack>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set('pane', 'boards');
+                  next.delete('item');
+                  setSearchParams(next, { replace: true });
+                }}
+              >
+                Back to Boards
+              </Button>
+            </Stack>
+          </Box>
+        ) : (
+          <BoardHeader
+            board={boardView?.board}
+            view={boardViewType}
+            onChangeView={setBoardViewType}
+            search={boardSearch}
+            onChangeSearch={setBoardSearch}
+            onOpenAutomations={(e) => {
+              if (!activeBoardId) return;
+              setAutomationsAnchorEl(e?.currentTarget || null);
+            }}
+            onOpenBoardMenu={() => {}}
+            onUpdateBoard={async (patch) => {
+              if (!boardView?.board?.id) return;
+              try {
+                const updated = await updateTaskBoard(boardView.board.id, patch);
+                setBoardView((prev) => (prev ? { ...prev, board: updated } : prev));
+              } catch (err) {
+                setError(err.message || 'Unable to update board');
+              }
+            }}
+          />
+        )}
 
-              {canCreateWorkspace && (
-                <Stack direction="row" spacing={1}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="New workspace"
-                    value={newWorkspaceName}
-                    onChange={(e) => setNewWorkspaceName(e.target.value)}
-                  />
-                  <Button
-                    variant="contained"
-                    onClick={handleCreateWorkspace}
-                    disabled={creatingWorkspace || !newWorkspaceName.trim()}
-                  >
-                    Create
-                  </Button>
-                </Stack>
-              )}
-
-              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25 }}>
-                <Stack spacing={1}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="subtitle1">Members</Typography>
-                    {workspaceMembersLoading && <CircularProgress size={16} />}
-                  </Stack>
-
-                  <Stack direction="row" spacing={1}>
-                    <TextField
-                      fullWidth
-                      size="small"
-                      label="Add member by email"
-                      value={newMemberEmail}
-                      onChange={(e) => setNewMemberEmail(e.target.value)}
-                      disabled={!activeWorkspaceId}
-                    />
-                    <Button
-                      variant="contained"
-                      onClick={handleAddMember}
-                      disabled={addingMember || !activeWorkspaceId || !newMemberEmail.trim()}
-                    >
-                      Add
-                    </Button>
-                  </Stack>
-
-                  <Stack spacing={0.75}>
-                    {!workspaceMembers.length && (
-                      <Typography variant="body2" color="text.secondary">
-                        No members yet.
-                      </Typography>
-                    )}
-                    {workspaceMembers.map((m) => {
-                      const display =
-                        `${m.first_name || ''} ${m.last_name || ''}`.trim() || m.email || m.user_id?.slice?.(0, 8) || 'User';
-                      return (
-                        <Box
-                          key={m.user_id}
-                          sx={{
-                            p: 1,
-                            border: '1px solid',
-                            borderColor: 'divider',
-                            borderRadius: 2,
-                            display: 'flex',
-                            gap: 1,
-                            alignItems: 'center',
-                            justifyContent: 'space-between'
-                          }}
-                        >
-                          <Stack sx={{ minWidth: 0 }}>
-                            <Typography variant="body2" noWrap>
-                              {display}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary" noWrap>
-                              {m.email || ''} {m.user_role ? `• ${m.user_role}` : ''}
-                            </Typography>
-                          </Stack>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Select
-                              size="small"
-                              value={m.membership_role || 'member'}
-                              onChange={(e) => handleChangeMemberRole(m.user_id, e.target.value)}
-                            >
-                              <MenuItem value="admin">Admin</MenuItem>
-                              <MenuItem value="member">Member</MenuItem>
-                            </Select>
-                            <Button size="small" color="error" variant="outlined" onClick={() => handleRemoveMember(m.user_id)}>
-                              Remove
-                            </Button>
-                          </Stack>
-                        </Box>
-                      );
-                    })}
-                  </Stack>
-                </Stack>
-              </Box>
-
-              <Divider />
-
-              <Typography variant="subtitle1">Boards</Typography>
-
-              <Stack direction="row" spacing={1}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="New board"
-                  value={newBoardName}
-                  onChange={(e) => setNewBoardName(e.target.value)}
-                  disabled={!activeWorkspaceId}
-                />
-                <Button variant="contained" onClick={handleCreateBoard} disabled={creatingBoard || !newBoardName.trim() || !activeWorkspaceId}>
-                  Create
+        <Popper open={Boolean(automationsAnchorEl)} anchorEl={automationsAnchorEl} placement="bottom-end" sx={{ zIndex: 2000 }}>
+          <Paper sx={{ p: 1.5, width: 420 }}>
+            <Stack spacing={1.25}>
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                <Typography variant="subtitle1">Automations</Typography>
+                <Button size="small" variant="text" onClick={() => setAutomationsAnchorEl(null)}>
+                  Close
                 </Button>
               </Stack>
 
-              <List dense sx={{ p: 0, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                {boards.length === 0 && (
-                  <ListItemText
-                    primary={<Typography variant="body2" color="text.secondary">No boards yet.</Typography>}
-                    sx={{ px: 1.5, py: 1 }}
-                  />
-                )}
-                {boards.map((b) => (
-                  <ListItemButton key={b.id} selected={b.id === activeBoardId} onClick={() => setActiveBoardId(b.id)}>
-                    <ListItemText primary={b.name} secondary={b.description || ''} />
-                  </ListItemButton>
-                ))}
-              </List>
-            </Stack>
-          </Box>
+              {automationsLoading ? (
+                <CircularProgress size={18} />
+              ) : (
+                <Stack spacing={0.75}>
+                  {!automations.length && (
+                    <Typography variant="body2" color="text.secondary">
+                      No automations yet.
+                    </Typography>
+                  )}
+                  {automations.slice(0, 8).map((r) => (
+                    <Box
+                      key={r.id}
+                      sx={{
+                        p: 1,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        borderRadius: 2,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <Stack>
+                        <Typography variant="body2">{r.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
+                        </Typography>
+                      </Stack>
+                      <Button size="small" variant="outlined" onClick={() => handleToggleAutomation(r)}>
+                        {r.is_active ? 'Disable' : 'Enable'}
+                      </Button>
+                    </Box>
+                  ))}
+                </Stack>
+              )}
 
-          {/* Board view */}
+              <Button variant="outlined" onClick={handleAddNeedsAttentionAutomation} disabled={creatingAutomation || !activeBoardId}>
+                {creatingAutomation ? 'Adding…' : 'Add “Needs Attention” automation'}
+              </Button>
+
+              <Divider />
+
+              <Typography variant="subtitle2">Create automation</Typography>
+              <Select size="small" value={automationToStatus} onChange={(e) => setAutomationToStatus(e.target.value)}>
+                <MenuItem value="todo">Todo</MenuItem>
+                <MenuItem value="working">Working</MenuItem>
+                <MenuItem value="blocked">Blocked</MenuItem>
+                <MenuItem value="done">Done</MenuItem>
+                <MenuItem value="needs_attention">Needs Attention</MenuItem>
+              </Select>
+              <Select size="small" value={automationAction} onChange={(e) => setAutomationAction(e.target.value)}>
+                <MenuItem value="notify_admins">Notify admins</MenuItem>
+                <MenuItem value="notify_assignees">Notify assignees</MenuItem>
+              </Select>
+              <TextField
+                size="small"
+                label="Notification title"
+                value={automationTitle}
+                onChange={(e) => setAutomationTitle(e.target.value)}
+              />
+              <TextField
+                size="small"
+                label="Notification body"
+                value={automationBody}
+                onChange={(e) => setAutomationBody(e.target.value)}
+              />
+              <Button variant="contained" onClick={handleCreateAutomation} disabled={creatingAutomation || !activeBoardId}>
+                {creatingAutomation ? 'Creating…' : 'Create automation'}
+              </Button>
+            </Stack>
+          </Paper>
+        </Popper>
+        {pane === 'my-work' ? (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
             <Stack spacing={1.5}>
               <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                <Typography variant="h6">{boardView?.board?.name || 'Board'}</Typography>
-                {boardViewLoading && <CircularProgress size={18} />}
+                <Typography variant="h6">Assigned to me</Typography>
+                {myWorkLoading && <CircularProgress size={18} />}
+              </Stack>
+              {!myWorkLoading && !myWorkBoards.length && (
+                <Typography variant="body2" color="text.secondary">
+                  No assigned items yet.
+                </Typography>
+              )}
+              {myWorkBoards.map((b) => (
+                <Box key={b.board_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
+                  <Box sx={{ p: 1.25, bgcolor: 'grey.100', borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                      {b.board_name}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {b.workspace_name}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    {(b.items || []).map((it) => (
+                      <Box key={it.id} sx={{ p: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
+                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                          <Button
+                            variant="text"
+                            onClick={() => jumpToItem(b, it)}
+                            sx={{ textTransform: 'none', justifyContent: 'flex-start', p: 0, minWidth: 0 }}
+                          >
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                              {it.name}
+                            </Typography>
+                          </Button>
+                          <Typography variant="caption" color="text.secondary">
+                            {it.status || 'todo'} {it.due_date ? `• due ${it.due_date}` : ''}
+                          </Typography>
+                        </Stack>
+                        {Array.isArray(it.subitems) && it.subitems.length > 0 && (
+                          <Box sx={{ pl: 2, mt: 0.5 }}>
+                            {it.subitems.slice(0, 6).map((s) => (
+                              <Typography key={s.id} variant="caption" color="text.secondary" display="block">
+                                - {s.name} ({s.status || 'todo'})
+                              </Typography>
+                            ))}
+                            {it.subitems.length > 6 && (
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                +{it.subitems.length - 6} more…
+                              </Typography>
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              ))}
+            </Stack>
+          </Box>
+        ) : pane === 'reports' ? (
+          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
+            <Stack spacing={1.5}>
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                alignItems={{ xs: 'stretch', sm: 'center' }}
+                justifyContent="space-between"
+              >
+                <Stack spacing={0.25}>
+                  <Typography variant="h6">Select boards</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Choose boards and date range, then run the report.
+                  </Typography>
+                </Stack>
+                {reportLoading && <CircularProgress size={18} />}
               </Stack>
 
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <TextField
+                  size="small"
+                  placeholder="Search boards..."
+                  value={reportBoardQuery}
+                  onChange={(e) => setReportBoardQuery(e.target.value)}
+                  sx={{ minWidth: 220 }}
+                />
+                <TextField
+                  size="small"
+                  label="Start"
+                  type="date"
+                  value={reportStartInput}
+                  onChange={(e) => setReportStartInput(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  size="small"
+                  label="End"
+                  type="date"
+                  value={reportEndInput}
+                  onChange={(e) => setReportEndInput(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <Button
+                  variant="contained"
+                  disableElevation
+                  onClick={handleRunReport}
+                  disabled={selectedReportBoards.size === 0 || reportLoading}
+                >
+                  {reportLoading ? 'Running…' : 'Run report'}
+                </Button>
+              </Stack>
+
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
+                <Box
+                  sx={{
+                    p: 1,
+                    borderBottom: '1px solid',
+                    borderColor: 'divider',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    bgcolor: 'grey.50'
+                  }}
+                >
+                  <Checkbox
+                    size="small"
+                    checked={filteredReportBoards.length > 0 && filteredReportBoards.every((b) => selectedReportBoards.has(b.id))}
+                    indeterminate={
+                      filteredReportBoards.some((b) => selectedReportBoards.has(b.id)) &&
+                      !filteredReportBoards.every((b) => selectedReportBoards.has(b.id))
+                    }
+                    onChange={toggleAllReportBoards}
+                    disabled={allBoardsLoading}
+                  />
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    Boards ({selectedReportBoards.size})
+                  </Typography>
+                  {allBoardsLoading && <CircularProgress size={14} />}
+                </Box>
+                <Box sx={{ maxHeight: 320, overflow: 'auto' }}>
+                  {filteredReportBoards.map((b) => (
+                    <Box
+                      key={b.id}
+                      sx={{
+                        p: 1,
+                        borderBottom: '1px solid',
+                        borderColor: 'divider',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1
+                      }}
+                    >
+                      <Checkbox
+                        size="small"
+                        checked={selectedReportBoards.has(b.id)}
+                        onChange={() => toggleReportBoard(b.id)}
+                        disabled={allBoardsLoading}
+                      />
+                      <Stack sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" noWrap>
+                          {b.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {b.workspace_name || ''}
+                        </Typography>
+                      </Stack>
+                    </Box>
+                  ))}
+                  {!filteredReportBoards.length && !allBoardsLoading && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+                      No boards found.
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'auto' }}>
+                <Box sx={{ minWidth: 980 }}>
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    alignItems={{ xs: 'flex-start', sm: 'center' }}
+                    justifyContent="space-between"
+                    sx={{ p: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.default' }}
+                  >
+                    <Typography variant="subtitle1">Report preview</Typography>
+                    {reportRows.length > 0 && (
+                      <Button size="small" variant="outlined" onClick={handleExportReportCsv}>
+                        Export to CSV
+                      </Button>
+                    )}
+                  </Stack>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: '260px 260px 90px 90px 90px 90px 90px 140px 140px 140px',
+                      borderBottom: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: 'background.default'
+                    }}
+                  >
+                    {[
+                      'Workspace',
+                      'Board',
+                      'Total',
+                      'Todo',
+                      'Working',
+                      'Blocked',
+                      'Done',
+                      'Updates (range)',
+                      'Time (min)',
+                      'Updated (range)'
+                    ].map((h) => (
+                      <Box key={h} sx={{ p: 1, fontWeight: 800, fontSize: '0.85rem', borderRight: '1px solid', borderColor: 'divider' }}>
+                        {h}
+                      </Box>
+                    ))}
+                  </Box>
+                  {reportRows.map((r) => (
+                    <Box
+                      key={r.board_id}
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: '260px 260px 90px 90px 90px 90px 90px 140px 140px 140px',
+                        borderBottom: '1px solid',
+                        borderColor: 'divider'
+                      }}
+                    >
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.workspace_name}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.board_name}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.total_items || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.todo || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.working || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.blocked || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.done || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.updates_in_range || 0}</Box>
+                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}>{r.time_minutes_in_range || 0}</Box>
+                      <Box sx={{ p: 1 }}>{r.items_updated_in_range || 0}</Box>
+                    </Box>
+                  ))}
+                  {!reportRows.length && !reportLoading && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+                      Run a report to see preview results.
+                    </Typography>
+                  )}
+                  {reportLoading && (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
+                      Running report…
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            </Stack>
+          </Box>
+        ) : (
+          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
+            <Stack spacing={1.5}>
               {!activeBoardId && (
                 <Typography variant="body2" color="text.secondary">
-                  Select a board to view its groups and items.
+                  Select a board from the left sidebar to view its groups and items.
                 </Typography>
               )}
 
               {activeBoardId && (
                 <Stack spacing={1}>
-                  <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25 }}>
-                    <Stack spacing={1}>
-                      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                        <Typography variant="subtitle1">Automations</Typography>
-                        {automationsLoading && <CircularProgress size={16} />}
-                      </Stack>
-
-                      <Stack spacing={0.75}>
-                        {!automations.length && (
-                          <Typography variant="body2" color="text.secondary">
-                            No automations yet.
-                          </Typography>
-                        )}
-                        {automations.slice(0, 5).map((r) => (
-                          <Box
-                            key={r.id}
-                            sx={{
-                              p: 1,
-                              border: '1px solid',
-                              borderColor: 'divider',
-                              borderRadius: 2,
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center'
-                            }}
-                          >
-                            <Stack>
-                              <Typography variant="body2">{r.name}</Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
-                              </Typography>
-                            </Stack>
-                            <Button size="small" variant="outlined" onClick={() => handleToggleAutomation(r)}>
-                              {r.is_active ? 'Disable' : 'Enable'}
-                            </Button>
-                          </Box>
-                        ))}
-                      </Stack>
-
-                      <Button
-                        variant="outlined"
-                        onClick={handleAddNeedsAttentionAutomation}
-                        disabled={creatingAutomation || !activeBoardId}
-                      >
-                        {creatingAutomation ? 'Adding…' : 'Add “Needs Attention” automation'}
-                      </Button>
-
-                      <Divider />
-
-                      <Typography variant="subtitle2">Create automation</Typography>
-                      <Select size="small" value={automationToStatus} onChange={(e) => setAutomationToStatus(e.target.value)}>
-                        <MenuItem value="todo">Todo</MenuItem>
-                        <MenuItem value="working">Working</MenuItem>
-                        <MenuItem value="blocked">Blocked</MenuItem>
-                        <MenuItem value="done">Done</MenuItem>
-                        <MenuItem value="needs_attention">Needs Attention</MenuItem>
-                      </Select>
-                      <Select size="small" value={automationAction} onChange={(e) => setAutomationAction(e.target.value)}>
-                        <MenuItem value="notify_admins">Notify admins</MenuItem>
-                        <MenuItem value="notify_assignees">Notify assignees</MenuItem>
-                      </Select>
-                      <TextField
-                        size="small"
-                        label="Notification title"
-                        value={automationTitle}
-                        onChange={(e) => setAutomationTitle(e.target.value)}
-                      />
-                      <TextField
-                        size="small"
-                        label="Notification body"
-                        value={automationBody}
-                        onChange={(e) => setAutomationBody(e.target.value)}
-                      />
-                      <Button variant="contained" onClick={handleCreateAutomation} disabled={creatingAutomation || !activeBoardId}>
-                        {creatingAutomation ? 'Creating…' : 'Create automation'}
-                      </Button>
-                    </Stack>
-                  </Box>
-
-                  <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25 }}>
-                    <Stack spacing={1}>
-                      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                        <Typography variant="subtitle1">Reporting</Typography>
-                        {boardReportLoading && <CircularProgress size={16} />}
-                      </Stack>
-                      {boardReport ? (
-                        <Typography variant="body2" color="text.secondary">
-                          Total: {boardReport.total} • Todo: {boardReport.todo} • Working: {boardReport.working} • Blocked:{' '}
-                          {boardReport.blocked} • Done: {boardReport.done} • Needs-attn(status): {boardReport.needs_attention_status} •
-                          Needs-attn(flag): {boardReport.needs_attention_flag} • Voicemail: {boardReport.voicemail}
-                        </Typography>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">
-                          No report available yet.
-                        </Typography>
-                      )}
-                      <Stack direction="row" spacing={1}>
-                        <Button variant="outlined" onClick={() => loadBoardReport(activeBoardId)} disabled={!activeBoardId || boardReportLoading}>
-                          Refresh
-                        </Button>
-                        <Button variant="contained" onClick={handleDownloadCsv} disabled={!activeBoardId || exportingCsv}>
-                          {exportingCsv ? 'Exporting…' : 'Export CSV'}
-                        </Button>
-                      </Stack>
-                    </Stack>
-                  </Box>
-
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
                     <TextField
                       fullWidth
@@ -1068,80 +1352,34 @@ export default function TaskManager() {
 
                   <Divider />
 
-                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, 1fr)' }, gap: 1.5 }}>
-                    {(boardView?.groups || []).map((g) => (
-                      <Box key={g.id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25 }}>
-                        <Stack spacing={1}>
-                          <Typography variant="subtitle1">{g.name}</Typography>
-
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <TextField
-                              fullWidth
-                              size="small"
-                              label="New item"
-                              value={newItemNameByGroup[g.id] || ''}
-                              onChange={(e) => setNewItemNameByGroup((prev) => ({ ...prev, [g.id]: e.target.value }))}
-                            />
-                            <Button
-                              variant="outlined"
-                              onClick={() => handleCreateItem(g.id)}
-                              disabled={creatingItemByGroup[g.id] || !(newItemNameByGroup[g.id] || '').trim()}
-                            >
-                              Add
-                            </Button>
-                          </Stack>
-
-                          <Divider />
-
-                          <Stack spacing={0.75}>
-                            {(itemsByGroup[g.id] || []).length === 0 && (
-                              <Typography variant="body2" color="text.secondary">
-                                No items.
-                              </Typography>
-                            )}
-                            {(itemsByGroup[g.id] || []).map((it) => (
-                              <Box
-                                key={it.id}
-                                onClick={() => openItemDrawer(it)}
-                                ref={(node) => {
-                                  if (node) itemCardRefs.current[it.id] = node;
-                                }}
-                                sx={{
-                                  p: 1,
-                                  border: '1px solid',
-                                  borderColor: 'divider',
-                                  borderRadius: 2,
-                                  cursor: 'pointer',
-                                  ...(highlightedItemId === it.id && {
-                                    borderColor: 'primary.main',
-                                    bgcolor: 'action.selected'
-                                  }),
-                                  '&:hover': { bgcolor: 'action.hover' }
-                                }}
-                              >
-                                <Stack spacing={0.25}>
-                                  <Typography variant="subtitle2">{it.name}</Typography>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {it.status}
-                                    {it.needs_attention ? ' • needs attention' : ''}
-                                    {it.is_voicemail ? ' • voicemail' : ''}
-                                  </Typography>
-                                </Stack>
-                              </Box>
-                            ))}
-                          </Stack>
-                        </Stack>
-                      </Box>
-                    ))}
-                  </Box>
+                  <BoardTable
+                    groups={boardView?.groups || []}
+                    itemsByGroup={itemsByGroup}
+                    assigneesByItem={boardView?.assignees_by_item || {}}
+                    workspaceMembers={workspaceMembers}
+                    updateCountsByItem={boardView?.update_counts_by_item || {}}
+                    timeTotalsByItem={boardView?.time_totals_by_item || {}}
+                    highlightedItemId={highlightedItemId}
+                    onUpdateItem={updateItemInline}
+                    onToggleAssignee={toggleAssigneeInline}
+                    onClickItem={(it, tab) => {
+                      if (tab) setDrawerTab(tab);
+                      openItemDrawer(it);
+                    }}
+                  />
                 </Stack>
               )}
             </Stack>
           </Box>
-        </Box>
+        )}
       </Stack>
 
-      <Drawer anchor="right" open={itemDrawerOpen} onClose={() => setItemDrawerOpen(false)} PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}>
+      <Drawer
+        anchor="right"
+        open={itemDrawerOpen}
+        onClose={() => setItemDrawerOpen(false)}
+        PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}
+      >
         <Box sx={{ p: 2 }}>
           <Stack spacing={1.5}>
             <Typography variant="h6">{activeItem?.name || 'Item'}</Typography>
@@ -1152,11 +1390,7 @@ export default function TaskManager() {
 
             <Typography variant="subtitle1">Fields</Typography>
             <Stack spacing={1}>
-              <Select
-                size="small"
-                value={activeItem?.status || 'todo'}
-                onChange={(e) => updateItemField({ status: e.target.value })}
-              >
+              <Select size="small" value={activeItem?.status || 'todo'} onChange={(e) => updateItemField({ status: e.target.value })}>
                 <MenuItem value="todo">Todo</MenuItem>
                 <MenuItem value="working">Working</MenuItem>
                 <MenuItem value="blocked">Blocked</MenuItem>
@@ -1340,197 +1574,231 @@ export default function TaskManager() {
 
             <Divider />
 
-            <Typography variant="subtitle1">Attachments</Typography>
-            {itemFilesLoading ? (
-              <CircularProgress size={18} />
-            ) : (
+            <Tabs value={drawerTab} onChange={(_e, v) => setDrawerTab(v)}>
+              <Tab value="updates" label="Updates" />
+              <Tab value="files" label="Files" />
+              <Tab value="time" label="Time Tracking" />
+            </Tabs>
+
+            {drawerTab === 'updates' && (
               <Stack spacing={1}>
-                {!itemFiles.length && (
-                  <Typography variant="body2" color="text.secondary">
-                    No files yet.
-                  </Typography>
-                )}
-                {itemFiles.map((f) => (
-                  <Box key={f.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                    <Typography variant="body2">{f.file_name || 'File'}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {f.uploaded_by_name || 'Unknown'}
-                    </Typography>
-                    <Box sx={{ mt: 0.5 }}>
-                      <Button size="small" variant="outlined" component="a" href={f.file_url} target="_blank" rel="noreferrer">
-                        Open
-                      </Button>
-                    </Box>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-
-            <Button variant="outlined" component="label" disabled={!activeItem?.id || uploadingFile}>
-              {uploadingFile ? 'Uploading…' : 'Upload file'}
-              <input
-                type="file"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) handleUploadFile(file);
-                }}
-              />
-            </Button>
-
-            <Divider />
-
-            <Typography variant="subtitle1">Time tracking</Typography>
-            {timeEntriesLoading ? (
-              <CircularProgress size={18} />
-            ) : (
-              <Stack spacing={1}>
-                {!timeEntries.length && (
-                  <Typography variant="body2" color="text.secondary">
-                    No time entries yet.
-                  </Typography>
-                )}
-                {timeEntries.map((t) => (
-                  <Box key={t.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                    <Typography variant="body2">
-                      {t.time_spent_minutes}m{t.is_billable ? ` (billable ${t.billable_minutes}m)` : ' (non-billable)'}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {t.user_name || 'Unknown'}
-                      {t.work_category ? ` • ${t.work_category}` : ''}
-                    </Typography>
-                    {t.description ? (
-                      <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
-                        {t.description}
-                      </Typography>
-                    ) : null}
-                  </Box>
-                ))}
-              </Stack>
-            )}
-
-            <Stack spacing={1}>
-              <TextField
-                label="Minutes"
-                type="number"
-                value={timeMinutes}
-                onChange={(e) => setTimeMinutes(e.target.value)}
-                inputProps={{ min: 0 }}
-              />
-              <Select size="small" value={timeCategory} onChange={(e) => setTimeCategory(e.target.value)}>
-                <MenuItem value="Graphics">Graphics</MenuItem>
-                <MenuItem value="Web">Web</MenuItem>
-                <MenuItem value="Project Management">Project Management</MenuItem>
-                <MenuItem value="Other">Other</MenuItem>
-              </Select>
-              <Select size="small" value={timeBillable ? 'billable' : 'non_billable'} onChange={(e) => setTimeBillable(e.target.value === 'billable')}>
-                <MenuItem value="billable">Billable</MenuItem>
-                <MenuItem value="non_billable">Non-billable</MenuItem>
-              </Select>
-              <TextField
-                multiline
-                minRows={2}
-                label="Description (optional)"
-                value={timeDescription}
-                onChange={(e) => setTimeDescription(e.target.value)}
-              />
-              <Button
-                variant="contained"
-                onClick={handleLogTime}
-                disabled={loggingTime || !activeItem?.id || timeMinutes === '' || Number(timeMinutes) < 0}
-              >
-                {loggingTime ? 'Logging…' : 'Log time'}
-              </Button>
-            </Stack>
-
-            <Divider />
-
-            <Typography variant="subtitle1">Updates</Typography>
-            {itemUpdatesLoading ? (
-              <CircularProgress size={18} />
-            ) : (
-              <Stack spacing={1}>
-                {itemUpdates.length === 0 && (
-                  <Typography variant="body2" color="text.secondary">
-                    No updates yet.
-                  </Typography>
-                )}
-                {itemUpdates.map((u) => (
-                  <Box key={u.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                    <Typography variant="caption" color="text.secondary">
-                      {u.author_name || 'Unknown'}
-                    </Typography>
-                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                      {u.content}
-                    </Typography>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-
-            <Stack spacing={1}>
-              <TextField
-                multiline
-                minRows={3}
-                label="Post an update"
-                helperText="Tip: mention a teammate with @email (e.g. @alex@anchorcorps.com) to notify them."
-                value={newUpdateText}
-                inputRef={updateInputRef}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setNewUpdateText(next);
-                  const caret = e.target.selectionStart ?? next.length;
-                  const state = getMentionStateFromText(next, caret);
-                  if (state.active) {
-                    setMentionOpen(true);
-                    setMentionQuery(state.query || '');
-                  } else {
-                    setMentionOpen(false);
-                    setMentionQuery('');
-                  }
-                }}
-                onBlur={() => {
-                  // allow click selection by delaying close
-                  setTimeout(() => setMentionOpen(false), 150);
-                }}
-              />
-              <Popper open={mentionOpen} anchorEl={updateInputRef.current} placement="bottom-start" sx={{ zIndex: 1500, width: updateInputRef.current?.clientWidth || 360 }}>
-                <Paper sx={{ mt: 0.5, maxHeight: 220, overflow: 'auto' }}>
-                  {mentionLoading ? (
-                    <Box sx={{ p: 1.25 }}>
-                      <CircularProgress size={18} />
-                    </Box>
-                  ) : (
-                    <List dense disablePadding>
-                      {mentionOptions.length === 0 && (
-                        <ListItemText
-                          primary={<Typography variant="body2" color="text.secondary">No matches</Typography>}
-                          sx={{ px: 1.5, py: 1 }}
-                        />
+                <Stack spacing={1}>
+                  <TextField
+                    multiline
+                    minRows={3}
+                    label="Post an update"
+                    helperText="Tip: mention a teammate with @email (e.g. @alex@anchorcorps.com) to notify them."
+                    value={newUpdateText}
+                    inputRef={updateInputRef}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setNewUpdateText(next);
+                      const caret = e.target.selectionStart ?? next.length;
+                      const state = getMentionStateFromText(next, caret);
+                      if (state.active) {
+                        setMentionOpen(true);
+                        setMentionQuery(state.query || '');
+                      } else {
+                        setMentionOpen(false);
+                        setMentionQuery('');
+                      }
+                    }}
+                    onBlur={() => {
+                      // allow click selection by delaying close
+                      setTimeout(() => setMentionOpen(false), 150);
+                    }}
+                  />
+                  <Popper
+                    open={mentionOpen}
+                    anchorEl={updateInputRef.current}
+                    placement="bottom-start"
+                    sx={{ zIndex: 1500, width: updateInputRef.current?.clientWidth || 360 }}
+                  >
+                    <Paper sx={{ mt: 0.5, maxHeight: 220, overflow: 'auto' }}>
+                      {mentionLoading ? (
+                        <Box sx={{ p: 1.25 }}>
+                          <CircularProgress size={18} />
+                        </Box>
+                      ) : (
+                        <List dense disablePadding>
+                          {mentionOptions.length === 0 && (
+                            <ListItemText
+                              primary={
+                                <Typography variant="body2" color="text.secondary">
+                                  No matches
+                                </Typography>
+                              }
+                              sx={{ px: 1.5, py: 1 }}
+                            />
+                          )}
+                          {mentionOptions.slice(0, 10).map((m) => {
+                            const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
+                            const primary = m.email || m.user_id;
+                            const secondary = name ? `${name}${m.user_role ? ` • ${m.user_role}` : ''}` : m.user_role || '';
+                            return (
+                              <ListItemButton
+                                key={m.user_id}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => insertMention(primary)}
+                              >
+                                <ListItemText primary={primary} secondary={secondary} />
+                              </ListItemButton>
+                            );
+                          })}
+                        </List>
                       )}
-                      {mentionOptions.slice(0, 10).map((m) => {
-                        const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
-                        const primary = m.email || m.user_id;
-                        const secondary = name ? `${name}${m.user_role ? ` • ${m.user_role}` : ''}` : (m.user_role || '');
-                        return (
-                          <ListItemButton key={m.user_id} onMouseDown={(e) => e.preventDefault()} onClick={() => insertMention(primary)}>
-                            <ListItemText primary={primary} secondary={secondary} />
-                          </ListItemButton>
-                        );
-                      })}
-                    </List>
-                  )}
-                </Paper>
-              </Popper>
-              <Button variant="contained" onClick={handlePostUpdate} disabled={postingUpdate || !newUpdateText.trim() || !activeItem?.id}>
-                Post update
-              </Button>
-            </Stack>
+                    </Paper>
+                  </Popper>
+                  <Button
+                    variant="contained"
+                    onClick={handlePostUpdate}
+                    disabled={postingUpdate || !newUpdateText.trim() || !activeItem?.id}
+                  >
+                    Post update
+                  </Button>
+                </Stack>
+
+                <Typography variant="subtitle2">Feed</Typography>
+                {itemUpdatesLoading ? (
+                  <CircularProgress size={18} />
+                ) : (
+                  <Stack spacing={1}>
+                    {itemUpdates.length === 0 && (
+                      <Typography variant="body2" color="text.secondary">
+                        No updates yet.
+                      </Typography>
+                    )}
+                    {itemUpdates.map((u) => (
+                      <Box key={u.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                        <Typography variant="caption" color="text.secondary">
+                          {u.author_name || 'Unknown'}
+                        </Typography>
+                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                          {u.content}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            )}
+
+            {drawerTab === 'files' && (
+              <Stack spacing={1}>
+                <Typography variant="subtitle2">Files</Typography>
+                {itemFilesLoading ? (
+                  <CircularProgress size={18} />
+                ) : (
+                  <Stack spacing={1}>
+                    {!itemFiles.length && (
+                      <Typography variant="body2" color="text.secondary">
+                        No files yet.
+                      </Typography>
+                    )}
+                    {itemFiles.map((f) => (
+                      <Box key={f.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                        <Typography variant="body2">{f.file_name || 'File'}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {f.uploaded_by_name || 'Unknown'}
+                        </Typography>
+                        <Box sx={{ mt: 0.5 }}>
+                          <Button size="small" variant="outlined" component="a" href={f.file_url} target="_blank" rel="noreferrer">
+                            Open
+                          </Button>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+
+                <Button variant="outlined" component="label" disabled={!activeItem?.id || uploadingFile}>
+                  {uploadingFile ? 'Uploading…' : 'Upload file'}
+                  <input
+                    type="file"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) handleUploadFile(file);
+                    }}
+                  />
+                </Button>
+              </Stack>
+            )}
+
+            {drawerTab === 'time' && (
+              <Stack spacing={1}>
+                <Typography variant="subtitle2">Time entries</Typography>
+                {timeEntriesLoading ? (
+                  <CircularProgress size={18} />
+                ) : (
+                  <Stack spacing={1}>
+                    {!timeEntries.length && (
+                      <Typography variant="body2" color="text.secondary">
+                        No time entries yet.
+                      </Typography>
+                    )}
+                    {timeEntries.map((t) => (
+                      <Box key={t.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                        <Typography variant="body2">
+                          {t.time_spent_minutes}m{t.is_billable ? ` (billable ${t.billable_minutes}m)` : ' (non-billable)'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {t.user_name || 'Unknown'}
+                          {t.work_category ? ` • ${t.work_category}` : ''}
+                        </Typography>
+                        {t.description ? (
+                          <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
+                            {t.description}
+                          </Typography>
+                        ) : null}
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+
+                <Stack spacing={1}>
+                  <TextField
+                    label="Minutes"
+                    type="number"
+                    value={timeMinutes}
+                    onChange={(e) => setTimeMinutes(e.target.value)}
+                    inputProps={{ min: 0 }}
+                  />
+                  <Select size="small" value={timeCategory} onChange={(e) => setTimeCategory(e.target.value)}>
+                    <MenuItem value="Graphics">Graphics</MenuItem>
+                    <MenuItem value="Web">Web</MenuItem>
+                    <MenuItem value="Project Management">Project Management</MenuItem>
+                    <MenuItem value="Other">Other</MenuItem>
+                  </Select>
+                  <Select
+                    size="small"
+                    value={timeBillable ? 'billable' : 'non_billable'}
+                    onChange={(e) => setTimeBillable(e.target.value === 'billable')}
+                  >
+                    <MenuItem value="billable">Billable</MenuItem>
+                    <MenuItem value="non_billable">Non-billable</MenuItem>
+                  </Select>
+                  <TextField
+                    multiline
+                    minRows={2}
+                    label="Description (optional)"
+                    value={timeDescription}
+                    onChange={(e) => setTimeDescription(e.target.value)}
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={handleLogTime}
+                    disabled={loggingTime || !activeItem?.id || timeMinutes === '' || Number(timeMinutes) < 0}
+                  >
+                    {loggingTime ? 'Logging…' : 'Log time'}
+                  </Button>
+                </Stack>
+              </Stack>
+            )}
           </Stack>
         </Box>
       </Drawer>
     </MainCard>
   );
 }
-

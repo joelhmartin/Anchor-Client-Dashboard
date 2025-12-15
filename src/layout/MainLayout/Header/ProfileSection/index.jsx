@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 // material-ui
 import Avatar from '@mui/material/Avatar';
@@ -37,6 +37,7 @@ export default function ProfileSection() {
   } = useConfig();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [sdm, setSdm] = useState(true);
   const [value, setValue] = useState('');
@@ -160,22 +161,30 @@ export default function ProfileSection() {
                           '& .MuiListItemButton-root': { mt: 0.5 }
                         }}
                       >
-                        {((user?.effective_role || user?.role) === 'superadmin' ||
-                          (user?.effective_role || user?.role) === 'admin' ||
-                          (user?.effective_role || user?.role) === 'team') && (
-                          <ListItemButton
-                            onClick={(e) => {
-                              navigate('/tasks');
-                              handleClose(e);
-                            }}
-                            sx={{ borderRadius: `${borderRadius}px` }}
-                          >
-                            <ListItemIcon>
-                              <IconSettings stroke={1.5} size="20px" />
-                            </ListItemIcon>
-                            <ListItemText primary={<Typography variant="body2">Task Manager</Typography>} />
-                          </ListItemButton>
-                        )}
+                        {(() => {
+                          const role = user?.effective_role || user?.role;
+                          const inTasks = location.pathname.startsWith('/tasks');
+                          const canSeeTasks = role === 'superadmin' || role === 'admin' || role === 'team';
+                          const canSeeHub = role === 'superadmin' || role === 'admin';
+                          const show = inTasks ? canSeeHub : canSeeTasks;
+                          if (!show) return null;
+                          const target = inTasks ? '/client-hub' : '/tasks';
+                          const label = inTasks ? 'Client Hub' : 'Task Manager';
+                          return (
+                            <ListItemButton
+                              onClick={(e) => {
+                                navigate(target);
+                                handleClose(e);
+                              }}
+                              sx={{ borderRadius: `${borderRadius}px` }}
+                            >
+                              <ListItemIcon>
+                                <IconSettings stroke={1.5} size="20px" />
+                              </ListItemIcon>
+                              <ListItemText primary={<Typography variant="body2">{label}</Typography>} />
+                            </ListItemButton>
+                          );
+                        })()}
                         <ListItemButton sx={{ borderRadius: `${borderRadius}px` }}>
                           <ListItemIcon>
                             <IconSettings stroke={1.5} size="20px" />

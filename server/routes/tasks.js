@@ -25,6 +25,17 @@ const boardCreateSchema = z.object({
   description: z.string().max(2000).optional().nullable()
 });
 
+const boardUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional().nullable()
+});
+
+const bulkBoardReportSchema = z.object({
+  board_ids: z.array(z.string().uuid()).min(1),
+  start_date: z.string().optional().nullable(), // YYYY-MM-DD
+  end_date: z.string().optional().nullable() // YYYY-MM-DD
+});
+
 const groupCreateSchema = z.object({
   name: z.string().min(1).max(200),
   order_index: z.number().int().min(0).optional()
@@ -132,7 +143,8 @@ const uploadTaskFile = multer({
 });
 
 async function assertWorkspaceAccess({ effRole, userId, workspaceId }) {
-  if (effRole === 'superadmin' || effRole === 'admin') return true;
+  // Staff are implicit members of all task workspaces/boards.
+  if (effRole === 'superadmin' || effRole === 'admin' || effRole === 'team') return true;
   const { rowCount } = await query(
     `SELECT 1
      FROM task_workspace_memberships
@@ -335,7 +347,8 @@ router.get('/workspaces', async (req, res) => {
   const eff = getEffectiveRole(req);
   const userId = req.user.id;
   try {
-    if (eff === 'superadmin' || eff === 'admin') {
+    // Staff are implicit members of all task workspaces.
+    if (eff === 'superadmin' || eff === 'admin' || eff === 'team') {
       const { rows } = await query('SELECT * FROM task_workspaces ORDER BY created_at DESC');
       return res.json({ workspaces: rows });
     }
@@ -392,19 +405,43 @@ router.get('/workspaces/:workspaceId/members', async (req, res) => {
   try {
     const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    // Include implicit staff members for every workspace.
     const { rows } = await query(
-      `SELECT
-         m.user_id,
-         m.role AS membership_role,
-         m.created_at,
-         u.email,
-         u.first_name,
-         u.last_name,
-         u.role AS user_role
-       FROM task_workspace_memberships m
-       JOIN users u ON u.id = m.user_id
-       WHERE m.workspace_id = $1
-       ORDER BY m.created_at ASC`,
+      `WITH explicit_members AS (
+         SELECT
+           m.user_id,
+           m.role AS membership_role,
+           m.created_at,
+           u.email,
+           u.first_name,
+           u.last_name,
+           u.role AS user_role,
+           1 AS precedence
+         FROM task_workspace_memberships m
+         JOIN users u ON u.id = m.user_id
+         WHERE m.workspace_id = $1
+       ),
+       implicit_staff AS (
+         SELECT
+           u.id AS user_id,
+           CASE WHEN u.role IN ('superadmin','admin') THEN 'admin' ELSE 'member' END AS membership_role,
+           NULL::timestamptz AS created_at,
+           u.email,
+           u.first_name,
+           u.last_name,
+           u.role AS user_role,
+           2 AS precedence
+         FROM users u
+         WHERE u.role IN ('superadmin','admin','team')
+       )
+       SELECT DISTINCT ON (user_id)
+         user_id, membership_role, created_at, email, first_name, last_name, user_role
+       FROM (
+         SELECT * FROM explicit_members
+         UNION ALL
+         SELECT * FROM implicit_staff
+       ) t
+       ORDER BY user_id, precedence`,
       [workspaceId]
     );
     return res.json({ members: rows });
@@ -425,23 +462,50 @@ router.get('/workspaces/:workspaceId/members/search', async (req, res) => {
     if (!q) return res.json({ members: [] });
     const like = `%${q.toLowerCase()}%`;
     const { rows } = await query(
-      `SELECT
-         m.user_id,
-         m.role AS membership_role,
-         u.email,
-         u.first_name,
-         u.last_name,
-         u.role AS user_role
-       FROM task_workspace_memberships m
-       JOIN users u ON u.id = m.user_id
-       WHERE m.workspace_id = $1
-         AND (
-           lower(u.email) LIKE $2
-           OR lower(u.first_name) LIKE $2
-           OR lower(u.last_name) LIKE $2
-           OR lower(u.first_name || ' ' || u.last_name) LIKE $2
-         )
-       ORDER BY u.email ASC
+      `WITH explicit_members AS (
+         SELECT
+           m.user_id,
+           m.role AS membership_role,
+           u.email,
+           u.first_name,
+           u.last_name,
+           u.role AS user_role,
+           1 AS precedence
+         FROM task_workspace_memberships m
+         JOIN users u ON u.id = m.user_id
+         WHERE m.workspace_id = $1
+       ),
+       implicit_staff AS (
+         SELECT
+           u.id AS user_id,
+           CASE WHEN u.role IN ('superadmin','admin') THEN 'admin' ELSE 'member' END AS membership_role,
+           u.email,
+           u.first_name,
+           u.last_name,
+           u.role AS user_role,
+           2 AS precedence
+         FROM users u
+         WHERE u.role IN ('superadmin','admin','team')
+       ),
+       combined AS (
+         SELECT DISTINCT ON (user_id)
+           user_id, membership_role, email, first_name, last_name, user_role
+         FROM (
+           SELECT * FROM explicit_members
+           UNION ALL
+           SELECT * FROM implicit_staff
+         ) t
+         ORDER BY user_id, precedence
+       )
+       SELECT *
+       FROM combined
+       WHERE (
+         lower(email) LIKE $2
+         OR lower(first_name) LIKE $2
+         OR lower(last_name) LIKE $2
+         OR lower(first_name || ' ' || last_name) LIKE $2
+       )
+       ORDER BY email ASC
        LIMIT 10`,
       [workspaceId, like]
     );
@@ -583,6 +647,106 @@ router.get('/workspaces/:workspaceId/boards', async (req, res) => {
   }
 });
 
+router.get('/boards', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  try {
+    // Staff can see all boards. Non-staff never hit this router because router.use(isStaff).
+    const { rows } = await query(
+      `SELECT b.*, w.name AS workspace_name
+       FROM task_boards b
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       ORDER BY w.created_at DESC, b.created_at DESC`
+    );
+    return res.json({ boards: rows });
+  } catch (err) {
+    console.error('[tasks:boards:list-all]', err);
+    return res.status(500).json({ message: 'Unable to load boards' });
+  }
+});
+
+// My Work: items (and subitems) assigned to current user, grouped by source board
+router.get('/my-work', async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const { rows } = await query(
+      `SELECT
+         w.id AS workspace_id,
+         w.name AS workspace_name,
+         b.id AS board_id,
+         b.name AS board_name,
+         g.id AS group_id,
+         g.name AS group_name,
+         i.id AS item_id,
+         i.name AS item_name,
+         i.status AS item_status,
+         i.due_date AS item_due_date,
+         i.needs_attention AS item_needs_attention,
+         i.is_voicemail AS item_is_voicemail,
+         i.created_at AS item_created_at,
+         i.updated_at AS item_updated_at,
+         s.id AS subitem_id,
+         s.name AS subitem_name,
+         s.status AS subitem_status,
+         s.created_at AS subitem_created_at
+       FROM task_item_assignees a
+       JOIN task_items i ON i.id = a.item_id
+       JOIN task_groups g ON g.id = i.group_id
+       JOIN task_boards b ON b.id = g.board_id
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       LEFT JOIN task_subitems s ON s.item_id = i.id
+       WHERE a.user_id = $1
+       ORDER BY w.name ASC, b.name ASC, i.updated_at DESC NULLS LAST, i.created_at DESC, s.created_at ASC NULLS LAST`,
+      [userId]
+    );
+
+    const byBoard = new Map();
+    for (const r of rows) {
+      const boardKey = r.board_id;
+      if (!byBoard.has(boardKey)) {
+        byBoard.set(boardKey, {
+          workspace_id: r.workspace_id,
+          workspace_name: r.workspace_name,
+          board_id: r.board_id,
+          board_name: r.board_name,
+          items: []
+        });
+      }
+      const bucket = byBoard.get(boardKey);
+      let item = bucket.items.find((it) => it.id === r.item_id);
+      if (!item) {
+        item = {
+          id: r.item_id,
+          name: r.item_name,
+          status: r.item_status,
+          due_date: r.item_due_date,
+          needs_attention: r.item_needs_attention,
+          is_voicemail: r.item_is_voicemail,
+          group_id: r.group_id,
+          group_name: r.group_name,
+          created_at: r.item_created_at,
+          updated_at: r.item_updated_at,
+          subitems: []
+        };
+        bucket.items.push(item);
+      }
+      if (r.subitem_id) {
+        item.subitems.push({
+          id: r.subitem_id,
+          name: r.subitem_name,
+          status: r.subitem_status,
+          created_at: r.subitem_created_at
+        });
+      }
+    }
+
+    return res.json({ boards: Array.from(byBoard.values()) });
+  } catch (err) {
+    console.error('[tasks:my-work]', err);
+    return res.status(500).json({ message: 'Unable to load my work' });
+  }
+});
+
 router.post('/workspaces/:workspaceId/boards', async (req, res) => {
   const eff = getEffectiveRole(req);
   const userId = req.user.id;
@@ -602,6 +766,145 @@ router.post('/workspaces/:workspaceId/boards', async (req, res) => {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
     console.error('[tasks:boards:create]', err);
     return res.status(500).json({ message: 'Unable to create board' });
+  }
+});
+
+router.patch('/boards/:boardId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { boardId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForBoard(boardId);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    const payload = boardUpdateSchema.parse(req.body);
+    const fields = [];
+    const values = [];
+    let i = 1;
+    if (payload.name !== undefined) {
+      fields.push(`name = $${i++}`);
+      values.push(payload.name.trim());
+    }
+    if (payload.description !== undefined) {
+      fields.push(`description = $${i++}`);
+      values.push(payload.description ?? null);
+    }
+    if (!fields.length) return res.status(400).json({ message: 'No changes provided' });
+    values.push(boardId);
+    const { rows } = await query(
+      `UPDATE task_boards
+       SET ${fields.join(', ')}
+       WHERE id = $${i}
+       RETURNING *`,
+      values
+    );
+    return res.json({ board: rows[0] });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:boards:update]', err);
+    return res.status(500).json({ message: 'Unable to update board' });
+  }
+});
+
+router.post('/reports/boards', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  try {
+    const payload = bulkBoardReportSchema.parse(req.body);
+    const boardIds = payload.board_ids;
+    const startDate = payload.start_date ? `${payload.start_date}T00:00:00.000Z` : null;
+    const endDate = payload.end_date ? `${payload.end_date}T23:59:59.999Z` : null;
+
+    // Ensure requester can access each board's workspace (team/staff are implicit).
+    const { rows: boardRows } = await query(
+      `SELECT b.id, b.name, b.workspace_id, w.name AS workspace_name
+       FROM task_boards b
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       WHERE b.id = ANY($1)`,
+      [boardIds]
+    );
+    if (!boardRows.length) return res.json({ rows: [] });
+    for (const b of boardRows) {
+      const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId: b.workspace_id });
+      if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
+
+    const { rows: itemAgg } = await query(
+      `SELECT
+         b.id AS board_id,
+         COUNT(i.*)::int AS total_items,
+         SUM(CASE WHEN i.status = 'todo' THEN 1 ELSE 0 END)::int AS todo,
+         SUM(CASE WHEN i.status = 'working' THEN 1 ELSE 0 END)::int AS working,
+         SUM(CASE WHEN i.status = 'blocked' THEN 1 ELSE 0 END)::int AS blocked,
+         SUM(CASE WHEN i.status = 'done' THEN 1 ELSE 0 END)::int AS done,
+         SUM(CASE WHEN i.status = 'needs_attention' THEN 1 ELSE 0 END)::int AS needs_attention_status,
+         SUM(CASE WHEN i.needs_attention = TRUE THEN 1 ELSE 0 END)::int AS needs_attention_flag,
+         SUM(CASE WHEN i.is_voicemail = TRUE THEN 1 ELSE 0 END)::int AS voicemail,
+         SUM(CASE WHEN $2::timestamptz IS NOT NULL AND $3::timestamptz IS NOT NULL AND i.updated_at BETWEEN $2 AND $3 THEN 1 ELSE 0 END)::int AS items_updated_in_range,
+         SUM(CASE WHEN $2::timestamptz IS NOT NULL AND $3::timestamptz IS NOT NULL AND i.created_at BETWEEN $2 AND $3 THEN 1 ELSE 0 END)::int AS items_created_in_range
+       FROM task_boards b
+       JOIN task_groups g ON g.board_id = b.id
+       JOIN task_items i ON i.group_id = g.id
+       WHERE b.id = ANY($1)
+       GROUP BY b.id`,
+      [boardIds, startDate, endDate]
+    );
+
+    const { rows: updatesAgg } = await query(
+      `SELECT
+         b.id AS board_id,
+         COUNT(u.*)::int AS updates_in_range
+       FROM task_boards b
+       JOIN task_groups g ON g.board_id = b.id
+       JOIN task_items i ON i.group_id = g.id
+       JOIN task_updates u ON u.item_id = i.id
+       WHERE b.id = ANY($1)
+         AND ($2::timestamptz IS NULL OR u.created_at >= $2)
+         AND ($3::timestamptz IS NULL OR u.created_at <= $3)
+       GROUP BY b.id`,
+      [boardIds, startDate, endDate]
+    );
+
+    const { rows: timeAgg } = await query(
+      `SELECT
+         b.id AS board_id,
+         COALESCE(SUM(t.time_spent_minutes), 0)::int AS time_minutes_in_range
+       FROM task_boards b
+       JOIN task_groups g ON g.board_id = b.id
+       JOIN task_items i ON i.group_id = g.id
+       JOIN task_time_entries t ON t.item_id = i.id
+       WHERE b.id = ANY($1)
+         AND ($2::timestamptz IS NULL OR t.created_at >= $2)
+         AND ($3::timestamptz IS NULL OR t.created_at <= $3)
+       GROUP BY b.id`,
+      [boardIds, startDate, endDate]
+    );
+
+    const updatesMap = Object.fromEntries(updatesAgg.map((r) => [r.board_id, r]));
+    const timeMap = Object.fromEntries(timeAgg.map((r) => [r.board_id, r]));
+    const itemMap = Object.fromEntries(itemAgg.map((r) => [r.board_id, r]));
+
+    const rowsOut = boardRows.map((b) => {
+      const items = itemMap[b.id] || {};
+      const updates = updatesMap[b.id] || {};
+      const time = timeMap[b.id] || {};
+      return {
+        board_id: b.id,
+        board_name: b.name,
+        workspace_name: b.workspace_name,
+        ...items,
+        updates_in_range: Number(updates.updates_in_range || 0),
+        time_minutes_in_range: Number(time.time_minutes_in_range || 0)
+      };
+    });
+
+    return res.json({ rows: rowsOut });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:reports:boards]', err);
+    return res.status(500).json({ message: 'Unable to run report' });
   }
 });
 
@@ -632,7 +935,63 @@ router.get('/boards/:boardId/view', async (req, res) => {
        ORDER BY i.updated_at DESC, i.created_at DESC`,
       [boardId]
     );
-    return res.json({ board: boardRes.rows[0], groups: groupsRes.rows, items: itemsRes.rows });
+    const itemIds = itemsRes.rows.map((r) => r.id);
+
+    let assigneesByItem = {};
+    let timeTotalsByItem = {};
+    let updateCountsByItem = {};
+
+    if (itemIds.length) {
+      const { rows: assigneeRows } = await query(
+        `SELECT a.item_id, u.id AS user_id, u.email, u.first_name, u.last_name, u.avatar_url
+         FROM task_item_assignees a
+         JOIN users u ON u.id = a.user_id
+         WHERE a.item_id = ANY($1)
+         ORDER BY u.email ASC`,
+        [itemIds]
+      );
+      for (const r of assigneeRows) {
+        if (!assigneesByItem[r.item_id]) assigneesByItem[r.item_id] = [];
+        assigneesByItem[r.item_id].push({
+          user_id: r.user_id,
+          email: r.email,
+          first_name: r.first_name,
+          last_name: r.last_name,
+          avatar_url: r.avatar_url
+        });
+      }
+
+      const { rows: timeRows } = await query(
+        `SELECT item_id, SUM(time_spent_minutes)::int AS total_minutes
+         FROM task_time_entries
+         WHERE item_id = ANY($1)
+         GROUP BY item_id`,
+        [itemIds]
+      );
+      for (const r of timeRows) {
+        timeTotalsByItem[r.item_id] = Number(r.total_minutes || 0);
+      }
+
+      const { rows: updateRows } = await query(
+        `SELECT item_id, COUNT(*)::int AS update_count
+         FROM task_updates
+         WHERE item_id = ANY($1)
+         GROUP BY item_id`,
+        [itemIds]
+      );
+      for (const r of updateRows) {
+        updateCountsByItem[r.item_id] = Number(r.update_count || 0);
+      }
+    }
+
+    return res.json({
+      board: boardRes.rows[0],
+      groups: groupsRes.rows,
+      items: itemsRes.rows,
+      assignees_by_item: assigneesByItem,
+      time_totals_by_item: timeTotalsByItem,
+      update_counts_by_item: updateCountsByItem
+    });
   } catch (err) {
     console.error('[tasks:boards:view]', err);
     return res.status(500).json({ message: 'Unable to load board' });

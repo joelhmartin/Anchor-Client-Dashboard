@@ -45,6 +45,7 @@ import Stepper from '@mui/material/Stepper';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
+import useTableSearch from 'hooks/useTableSearch';
 import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
 import { requestPasswordReset } from 'api/auth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
@@ -120,6 +121,11 @@ export default function AdminHub() {
   const fileInputRef = useRef(null);
   const [deletingClientId, setDeletingClientId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState({ open: false, clientId: null, label: '' });
+  const [selectedClientIds, setSelectedClientIds] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkSendingOnboarding, setBulkSendingOnboarding] = useState(false);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+  const [bulkAction, setBulkAction] = useState('');
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingLoading, setOnboardingLoading] = useState(false);
@@ -127,7 +133,9 @@ export default function AdminHub() {
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
 
   const effectiveRole = user?.effective_role || user?.role;
-  const canAccessHub = effectiveRole === 'superadmin' || effectiveRole === 'admin';
+  const isSuperAdmin = effectiveRole === 'superadmin';
+  const isAdmin = effectiveRole === 'superadmin' || effectiveRole === 'admin';
+  const canAccessHub = isAdmin;
 
   useEffect(() => {
     if (!canAccessHub) return;
@@ -258,8 +266,92 @@ export default function AdminHub() {
     return [...clients].sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
   }, [clients]);
 
-  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'editor'), [sortedClients]);
+  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'admin' || c.role === 'superadmin'), [sortedClients]);
   const sortedClientOnly = useMemo(() => sortedClients.filter((c) => c.role === 'client'), [sortedClients]);
+
+  const { query: adminsQuery, setQuery: setAdminsQuery, filtered: filteredAdmins } = useTableSearch(sortedEditors, [
+    'email',
+    'first_name',
+    'last_name',
+    'role'
+  ]);
+  const { query: clientsQuery, setQuery: setClientsQuery, filtered: filteredClients } = useTableSearch(sortedClientOnly, [
+    'email',
+    'first_name',
+    'last_name',
+    'role',
+    'monday_board_id'
+  ]);
+
+  useEffect(() => {
+    // Keep selection valid as the client list changes.
+    setSelectedClientIds((prev) => prev.filter((id) => sortedClientOnly.some((c) => c.id === id)));
+  }, [sortedClientOnly]);
+
+  const toggleSelectClient = (clientId) => {
+    setSelectedClientIds((prev) => {
+      if (prev.includes(clientId)) return prev.filter((id) => id !== clientId);
+      return [...prev, clientId];
+    });
+  };
+
+  const toggleSelectAllFilteredClients = () => {
+    const ids = filteredClients.map((c) => c.id);
+    const allSelected = ids.length > 0 && ids.every((id) => selectedClientIds.includes(id));
+    setSelectedClientIds((prev) => {
+      if (allSelected) return prev.filter((id) => !ids.includes(id));
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  };
+
+  const handleBulkSendOnboarding = async () => {
+    if (!selectedClientIds.length) return;
+    setBulkSendingOnboarding(true);
+    setError('');
+    setSuccess('');
+    try {
+      await Promise.all(selectedClientIds.map((id) => sendClientOnboardingEmail(id)));
+      setSuccess(`Onboarding email sent to ${selectedClientIds.length} client(s).`);
+    } catch (err) {
+      setError(err.message || 'Unable to send onboarding emails');
+    } finally {
+      setBulkSendingOnboarding(false);
+    }
+  };
+
+  const handleApplyBulkAction = async () => {
+    if (!selectedClientIds.length || !bulkAction) return;
+    if (bulkAction === 'send_onboarding') {
+      await handleBulkSendOnboarding();
+      setBulkAction('');
+      return;
+    }
+    if (bulkAction === 'delete') {
+      setBulkDeleteConfirmOpen(true);
+      return;
+    }
+  };
+
+  const handleBulkDeleteClients = async () => {
+    if (!selectedClientIds.length) return;
+    setBulkDeleting(true);
+    setError('');
+    setSuccess('');
+    try {
+      await Promise.all(selectedClientIds.map((id) => deleteClient(id)));
+      setClients((prev) => prev.filter((c) => !selectedClientIds.includes(c.id)));
+      if (editing?.id && selectedClientIds.includes(editing.id)) setEditing(null);
+      setSelectedClientIds([]);
+      setSuccess(`Deleted ${selectedClientIds.length} client(s).`);
+    } catch (err) {
+      setError(err.message || 'Unable to delete selected clients');
+    } finally {
+      setBulkDeleting(false);
+      setBulkDeleteConfirmOpen(false);
+    }
+  };
 
   if (initializing) return null;
   if (!canAccessHub) return <Navigate to="/" replace />;
@@ -278,12 +370,12 @@ export default function AdminHub() {
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
         await startOnboardingFlow(res.client.id);
-      } else if (res.client.role === 'editor') {
+      } else if (res.client.role === 'admin') {
         try {
           await requestPasswordReset(res.client.email);
-          setSuccess('Editor created. Password reset email sent.');
+          setSuccess('Admin created. Password reset email sent.');
         } catch (resetErr) {
-          setError(resetErr.message || 'Editor created, but failed to send reset email.');
+          setError(resetErr.message || 'Admin created, but failed to send reset email.');
         }
       }
     } catch (err) {
@@ -456,7 +548,7 @@ export default function AdminHub() {
     }
   };
 
-  const newRolesOptions = isAdmin ? ['client', 'editor'] : ['client'];
+  const newRolesOptions = isSuperAdmin ? ['client', 'admin'] : ['client'];
 
   const handleDocUpload = async () => {
     if (!editing?.id || !docUpload.files.length) return;
@@ -576,12 +668,10 @@ export default function AdminHub() {
         <Grid item xs={12} md={6}>
           <FormControl fullWidth>
             <InputLabel>Role</InputLabel>
-            <Select value={editing.role || 'client'} onChange={handleEditChange('role')} disabled={!isAdmin} label="Role">
+            <Select value={editing.role || 'client'} onChange={handleEditChange('role')} disabled={!isSuperAdmin} label="Role">
               <MenuItem value="client">Client</MenuItem>
-              <MenuItem value="editor">Editor</MenuItem>
-              <MenuItem value="admin" disabled>
-                Admin
-              </MenuItem>
+              <MenuItem value="admin">Admin</MenuItem>
+              <MenuItem value="superadmin">Superadmin</MenuItem>
             </Select>
           </FormControl>
         </Grid>
@@ -927,9 +1017,19 @@ export default function AdminHub() {
 
         {isAdmin && (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
-            <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="h5">Editors</Typography>
-              {loading && <CircularProgress size={20} />}
+            <Box sx={{ p: 2 }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+                <Typography variant="h5">Admins</Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  {loading && <CircularProgress size={20} />}
+                  <TextField
+                    size="small"
+                    placeholder="Search admins…"
+                    value={adminsQuery}
+                    onChange={(e) => setAdminsQuery(e.target.value)}
+                  />
+                </Stack>
+              </Stack>
             </Box>
             <Divider />
             <TableContainer>
@@ -943,11 +1043,11 @@ export default function AdminHub() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {sortedEditors.map((c) => (
+                  {filteredAdmins.map((c) => (
                     <TableRow key={c.id} hover>
                       <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                       <TableCell>{c.email}</TableCell>
-                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'editor'}</TableCell>
+                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
                       <TableCell align="right">
                         <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                           <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -968,10 +1068,10 @@ export default function AdminHub() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {!sortedEditors.length && !loading && (
+                  {!filteredAdmins.length && !loading && (
                     <TableRow>
                       <TableCell colSpan={4} align="center">
-                        No editors yet.
+                        No admins yet.
                       </TableCell>
                     </TableRow>
                   )}
@@ -982,15 +1082,70 @@ export default function AdminHub() {
         )}
 
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-          <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="h5">Clients</Typography>
-            {loading && <CircularProgress size={20} />}
+          <Box sx={{ p: 2 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+              <Typography variant="h5">Clients</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
+                {loading && <CircularProgress size={20} />}
+                <TextField
+                  size="small"
+                  placeholder="Search clients…"
+                  value={clientsQuery}
+                  onChange={(e) => setClientsQuery(e.target.value)}
+                />
+                {isAdmin && (
+                  <>
+                    <Select
+                      size="small"
+                      value={bulkAction}
+                      onChange={(e) => setBulkAction(e.target.value)}
+                      displayEmpty
+                      renderValue={(v) => (v ? (v === 'send_onboarding' ? 'Send onboarding email' : 'Delete') : 'Bulk Actions')}
+                      sx={{ minWidth: 220 }}
+                      disabled={!selectedClientIds.length}
+                    >
+                      <MenuItem value="">
+                        <em>Bulk Actions</em>
+                      </MenuItem>
+                      <MenuItem value="send_onboarding">Send onboarding email</MenuItem>
+                      <MenuItem value="delete">Delete</MenuItem>
+                    </Select>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disableElevation
+                      onClick={handleApplyBulkAction}
+                      disabled={!selectedClientIds.length || !bulkAction || bulkDeleting || bulkSendingOnboarding}
+                    >
+                      Apply
+                    </Button>
+                  </>
+                )}
+              </Stack>
+            </Stack>
+            {selectedClientIds.length > 0 && (
+              <Typography variant="caption" color="text.secondary">
+                Selected: {selectedClientIds.length}
+              </Typography>
+            )}
           </Box>
           <Divider />
           <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={filteredClients.length > 0 && filteredClients.every((c) => selectedClientIds.includes(c.id))}
+                      indeterminate={
+                        filteredClients.some((c) => selectedClientIds.includes(c.id)) &&
+                        !filteredClients.every((c) => selectedClientIds.includes(c.id))
+                      }
+                      onChange={toggleSelectAllFilteredClients}
+                      disabled={!isAdmin}
+                    />
+                  </TableCell>
                   <TableCell>Display Name</TableCell>
                   <TableCell>Email</TableCell>
                   <TableCell>Analytics</TableCell>
@@ -1000,8 +1155,11 @@ export default function AdminHub() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {sortedClientOnly.map((c) => (
+                {filteredClients.map((c) => (
                   <TableRow key={c.id} hover>
+                    <TableCell padding="checkbox">
+                      <Checkbox size="small" checked={selectedClientIds.includes(c.id)} onChange={() => toggleSelectClient(c.id)} disabled={!isAdmin} />
+                    </TableCell>
                     <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                     <TableCell>{c.email}</TableCell>
                     <TableCell>
@@ -1048,9 +1206,9 @@ export default function AdminHub() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!sortedClientOnly.length && !loading && (
+                {!filteredClients.length && !loading && (
                   <TableRow>
-                    <TableCell colSpan={6} align="center">
+                    <TableCell colSpan={7} align="center">
                       No clients yet.
                     </TableCell>
                   </TableRow>
@@ -1121,6 +1279,26 @@ export default function AdminHub() {
           <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '' })}>Cancel</Button>
           <Button variant="contained" color="error" onClick={handleDeleteClient} disabled={Boolean(deletingClientId)}>
             {deletingClientId ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={bulkDeleteConfirmOpen} onClose={() => setBulkDeleteConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete Clients</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            This action cannot be undone.
+          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            Are you sure you want to delete {selectedClientIds.length} client(s)?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeleteConfirmOpen(false)} disabled={bulkDeleting}>
+            Cancel
+          </Button>
+          <Button variant="contained" color="error" onClick={handleBulkDeleteClients} disabled={bulkDeleting || !selectedClientIds.length}>
+            {bulkDeleting ? 'Deleting…' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>
