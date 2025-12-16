@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams, useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 
 import {
   Alert,
@@ -28,6 +28,10 @@ import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import BoardHeader from './components/BoardHeader';
 import BoardTable from './components/BoardTable';
+import HomePane from './panes/HomePane';
+import MyWorkPane from './panes/MyWorkPane';
+import ReportsPane from './panes/ReportsPane';
+import AutomationsPane from './panes/AutomationsPane';
 import {
   createTaskGroup,
   createTaskItem,
@@ -54,12 +58,12 @@ import {
   setTaskAutomationActive,
   downloadTaskBoardCsv,
   fetchTaskItemAiSummary,
-  refreshTaskItemAiSummary
+  refreshTaskItemAiSummary,
+  updateTaskBoard,
+  updateTaskItem,
+  runTaskBoardsReport,
+  fetchMyWork
 } from 'api/tasks';
-import { updateTaskBoard } from 'api/tasks';
-import { runTaskBoardsReport } from 'api/tasks';
-import { fetchMyWork } from 'api/tasks';
-import { paths, withPane } from 'routes/paths';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -68,18 +72,17 @@ function getEffectiveRole(user) {
 export default function TaskManager() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const params = useParams();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const pane = searchParams.get('pane') || 'boards'; // boards | reports | my-work
+  const rawPane = searchParams.get('pane') || 'home';
+  const pane = ['home', 'boards', 'reports', 'my-work', 'automations'].includes(rawPane) ? rawPane : 'home';
+  const reportRun = searchParams.get('report_run') || '';
   const reportStart = searchParams.get('report_start') || '';
   const reportEnd = searchParams.get('report_end') || '';
   const reportBoards = (searchParams.get('report_boards') || '').split(',').filter(Boolean);
 
   const [error, setError] = useState('');
 
-  const activeWorkspaceId = params.workspaceId || searchParams.get('workspace') || '';
-  const activeBoardId = params.boardId || searchParams.get('board') || '';
+  const activeWorkspaceId = searchParams.get('workspace') || '';
+  const activeBoardId = searchParams.get('board') || '';
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
 
   const [boardViewLoading, setBoardViewLoading] = useState(false);
@@ -154,9 +157,14 @@ export default function TaskManager() {
   const [reportEndInput, setReportEndInput] = useState(reportEnd || '');
   const [selectedReportBoards, setSelectedReportBoards] = useState(() => new Set(reportBoards));
 
-  // My Work (main content when pane=my-work)
+  // My Work
   const [myWorkBoards, setMyWorkBoards] = useState([]);
   const [myWorkLoading, setMyWorkLoading] = useState(false);
+
+  // Close overlays when pane changes to avoid blocking navigation (e.g., reports)
+  useEffect(() => {
+    setAutomationsAnchorEl(null);
+  }, [pane]);
 
   const updateItemField = async (patch) => {
     if (!activeItem?.id) return;
@@ -196,15 +204,10 @@ export default function TaskManager() {
     try {
       const data = await fetchTaskBoardView(boardId);
       setBoardView(data);
-      const boardWs = data?.board?.workspace_id;
-      // If URL workspace mismatches board, redirect to canonical /boards/:boardId (preserving pane).
-      if (boardWs && params.workspaceId && boardWs !== params.workspaceId) {
-        navigate(withPane(paths.board(boardId), pane), { replace: true });
-      }
-      // If no workspace context in URL, keep it in search for sidebar convenience.
-      if (boardWs && !activeWorkspaceId) {
+      // Ensure workspace param is populated for sidebar + dropdowns when deep-linked by board only
+      if (data?.board?.workspace_id && !activeWorkspaceId) {
         const next = new URLSearchParams(searchParams);
-        next.set('workspace', boardWs);
+        next.set('workspace', data.board.workspace_id);
         setSearchParams(next, { replace: true });
       }
     } catch (err) {
@@ -249,11 +252,13 @@ export default function TaskManager() {
   };
 
   useEffect(() => {
-    loadBoardView(activeBoardId);
-    loadAutomations(activeBoardId);
-    loadBoardReport(activeBoardId);
+    if (pane === 'boards') {
+      loadBoardView(activeBoardId);
+      loadAutomations(activeBoardId);
+      loadBoardReport(activeBoardId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBoardId, location.pathname]);
+  }, [activeBoardId, pane]);
 
   // Load all boards for reporting pane
   useEffect(() => {
@@ -274,16 +279,6 @@ export default function TaskManager() {
       .catch(() => setMyWorkBoards([]))
       .finally(() => setMyWorkLoading(false));
   }, [pane]);
-
-  const jumpToItem = (b, item) => {
-    const base = paths.board(b.board_id);
-    const params = new URLSearchParams();
-    // keep pane implicit as "boards" (default); no need to set pane
-    if (b?.workspace_id) params.set('workspace', b.workspace_id);
-    if (item?.id) params.set('item', item.id);
-    const query = params.toString();
-    navigate(query ? `${base}?${query}` : base, { replace: false });
-  };
 
   // Sync reporting selections from URL
   useEffect(() => {
@@ -408,7 +403,7 @@ export default function TaskManager() {
       .catch(() => setReportRows([]))
       .finally(() => setReportLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane]);
+  }, [pane, reportRun]);
 
   const handleCreateGroup = async () => {
     if (!activeBoardId || !newGroupName.trim()) return;
@@ -883,90 +878,91 @@ export default function TaskManager() {
       map[it.group_id].push(it);
     }
     return map;
-  }, [boardView]);
+  }, [boardView, boardSearch]);
+
+  const renderContent = () => {
+    if (pane === 'home') return <HomePane />;
+
+    if (pane === 'automations') return <AutomationsPane />;
+
+    if (pane === 'my-work') return <MyWorkPane boards={myWorkBoards} loading={myWorkLoading} />;
+
+    if (pane === 'reports') {
+      return (
+        <ReportsPane
+          reportBoardQuery={reportBoardQuery}
+          setReportBoardQuery={setReportBoardQuery}
+          reportStartInput={reportStartInput}
+          setReportStartInput={setReportStartInput}
+          reportEndInput={reportEndInput}
+          setReportEndInput={setReportEndInput}
+          filteredReportBoards={filteredReportBoards}
+          selectedReportBoards={selectedReportBoards}
+          toggleReportBoard={toggleReportBoard}
+          toggleAllReportBoards={toggleAllReportBoards}
+          allBoardsLoading={allBoardsLoading}
+          handleRunReport={handleRunReport}
+          reportLoading={reportLoading}
+          reportRows={reportRows}
+          handleExportReportCsv={handleExportReportCsv}
+        />
+      );
+    }
+
+    // Boards pane
+    return (
+      <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
+        <Stack spacing={1.5}>
+          {!activeBoardId && (
+            <Typography variant="body2" color="text.secondary">
+              Select a board from the left sidebar to view its groups and items.
+            </Typography>
+          )}
+
+          {activeBoardId && (
+            <Stack spacing={1}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="New group"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                />
+                <Button variant="contained" onClick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()}>
+                  Create group
+                </Button>
+              </Stack>
+
+              <Divider />
+
+              <BoardTable
+                groups={boardView?.groups || []}
+                itemsByGroup={itemsByGroup}
+                assigneesByItem={boardView?.assignees_by_item || {}}
+                workspaceMembers={workspaceMembers}
+                updateCountsByItem={boardView?.update_counts_by_item || {}}
+                timeTotalsByItem={boardView?.time_totals_by_item || {}}
+                highlightedItemId={highlightedItemId}
+                onUpdateItem={updateItemInline}
+                onToggleAssignee={toggleAssigneeInline}
+                onClickItem={(it, tab) => {
+                  if (tab) setDrawerTab(tab);
+                  openItemDrawer(it);
+                }}
+              />
+            </Stack>
+          )}
+        </Stack>
+      </Box>
+    );
+  };
 
   return (
     <MainCard title="Task Manager">
       <Stack spacing={2}>
         {error && <Alert severity="error">{error}</Alert>}
-        {pane === 'reports' ? (
-          <Box
-            sx={{
-              p: 1.25,
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 2,
-              position: 'sticky',
-              top: 0,
-              zIndex: 5,
-              bgcolor: 'background.default'
-            }}
-          >
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={1}
-              alignItems={{ xs: 'flex-start', sm: 'center' }}
-              justifyContent="space-between"
-            >
-              <Stack spacing={0.25}>
-                <Typography variant="h5">Reporting</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Select boards and date range, run the report, then export the preview.
-                </Typography>
-              </Stack>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => {
-                  const next = new URLSearchParams(searchParams);
-                  next.set('pane', 'boards');
-                  setSearchParams(next, { replace: true });
-                }}
-              >
-                Back to Boards
-              </Button>
-            </Stack>
-          </Box>
-        ) : pane === 'my-work' ? (
-          <Box
-            sx={{
-              p: 1.25,
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 2,
-              position: 'sticky',
-              top: 0,
-              zIndex: 5,
-              bgcolor: 'background.default'
-            }}
-          >
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={1}
-              alignItems={{ xs: 'flex-start', sm: 'center' }}
-              justifyContent="space-between"
-            >
-              <Stack spacing={0.25}>
-                <Typography variant="h5">My Work</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Items assigned to you, grouped by board.
-                </Typography>
-              </Stack>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => {
-                  const next = new URLSearchParams(searchParams);
-                  next.set('pane', 'boards');
-                  next.delete('item');
-                  setSearchParams(next, { replace: true });
-                }}
-              >
-                Back to Boards
-              </Button>
-            </Stack>
-          </Box>
-        ) : (
+        {pane !== 'reports' && pane !== 'my-work' && pane !== 'home' && (
           <BoardHeader
             board={boardView?.board}
             view={boardViewType}
@@ -989,6 +985,7 @@ export default function TaskManager() {
             }}
           />
         )}
+        {renderContent()}
 
         <Popper open={Boolean(automationsAnchorEl)} anchorEl={automationsAnchorEl} placement="bottom-end" sx={{ zIndex: 2000 }}>
           <Paper sx={{ p: 1.5, width: 420 }}>
@@ -1072,67 +1069,7 @@ export default function TaskManager() {
             </Stack>
           </Paper>
         </Popper>
-        {pane === 'my-work' ? (
-          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
-            <Stack spacing={1.5}>
-              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                <Typography variant="h6">Assigned to me</Typography>
-                {myWorkLoading && <CircularProgress size={18} />}
-              </Stack>
-              {!myWorkLoading && !myWorkBoards.length && (
-                <Typography variant="body2" color="text.secondary">
-                  No assigned items yet.
-                </Typography>
-              )}
-              {myWorkBoards.map((b) => (
-                <Box key={b.board_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-                  <Box sx={{ p: 1.25, bgcolor: 'grey.100', borderBottom: '1px solid', borderColor: 'divider' }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-                      {b.board_name}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {b.workspace_name}
-                    </Typography>
-                  </Box>
-                  <Box>
-                    {(b.items || []).map((it) => (
-                      <Box key={it.id} sx={{ p: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
-                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                          <Button
-                            variant="text"
-                            onClick={() => jumpToItem(b, it)}
-                            sx={{ textTransform: 'none', justifyContent: 'flex-start', p: 0, minWidth: 0 }}
-                          >
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                              {it.name}
-                            </Typography>
-                          </Button>
-                          <Typography variant="caption" color="text.secondary">
-                            {it.status || 'todo'} {it.due_date ? `• due ${it.due_date}` : ''}
-                          </Typography>
-                        </Stack>
-                        {Array.isArray(it.subitems) && it.subitems.length > 0 && (
-                          <Box sx={{ pl: 2, mt: 0.5 }}>
-                            {it.subitems.slice(0, 6).map((s) => (
-                              <Typography key={s.id} variant="caption" color="text.secondary" display="block">
-                                - {s.name} ({s.status || 'todo'})
-                              </Typography>
-                            ))}
-                            {it.subitems.length > 6 && (
-                              <Typography variant="caption" color="text.secondary" display="block">
-                                +{it.subitems.length - 6} more…
-                              </Typography>
-                            )}
-                          </Box>
-                        )}
-                      </Box>
-                    ))}
-                  </Box>
-                </Box>
-              ))}
-            </Stack>
-          </Box>
-        ) : pane === 'reports' ? (
+        {pane === 'reports' ? (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
             <Stack spacing={1.5}>
               <Stack

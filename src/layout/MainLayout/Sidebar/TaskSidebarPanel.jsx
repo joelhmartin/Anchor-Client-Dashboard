@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Box, Button, CircularProgress, Divider, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
 
 import useAuth from 'hooks/useAuth';
@@ -13,7 +13,6 @@ import {
   removeTaskWorkspaceMember,
   updateTaskWorkspaceMember
 } from 'api/tasks';
-import { paths, withPane } from 'routes/paths';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -24,9 +23,8 @@ export default function TaskSidebarPanel() {
   const effRole = useMemo(() => getEffectiveRole(user), [user]);
   const canCreateWorkspace = effRole === 'superadmin' || effRole === 'admin';
 
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const pane = searchParams.get('pane') || 'boards';
+  const pane = searchParams.get('pane') || 'home';
   const workspaceIdFromUrl = searchParams.get('workspace') || '';
   const boardIdFromUrl = searchParams.get('board') || '';
 
@@ -80,24 +78,6 @@ export default function TaskSidebarPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // If the URL lost workspace/board (e.g., navigating between panes), reapply defaults when we have data.
-  useEffect(() => {
-    if (!workspaceIdFromUrl && workspaces.length) {
-      const nextWorkspaceId = workspaces[0].id;
-      setActiveWorkspaceId(nextWorkspaceId);
-      navigate(withPane(paths.workspace(nextWorkspaceId), pane), { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceIdFromUrl, workspaces]);
-
-  useEffect(() => {
-    if (activeWorkspaceId && !boardIdFromUrl && boards.length) {
-      const nextBoardId = boards[0].id;
-      navigate(withPane(paths.board(nextBoardId), pane), { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, boardIdFromUrl, boards]);
-
   const loadWorkspaceData = async (workspaceId) => {
     if (!workspaceId) {
       setBoards([]);
@@ -133,21 +113,30 @@ export default function TaskSidebarPanel() {
   }, [activeWorkspaceId]);
 
   const handleSelectWorkspace = (workspaceId) => {
-    if (workspaceId) {
-      navigate(withPane(paths.workspace(workspaceId), pane), { replace: true });
-    } else {
-      navigate(withPane(paths.taskHome(), pane), { replace: true });
-    }
+    const next = new URLSearchParams(searchParams);
+    if (workspaceId) next.set('workspace', workspaceId);
+    else next.delete('workspace');
+    next.delete('board');
+    next.delete('item');
+    next.set('pane', 'boards');
+    setSearchParams(next, { replace: true });
   };
 
   const handleSelectBoard = (boardId) => {
-    if (boardId) {
-      navigate(withPane(paths.board(boardId), pane), { replace: true });
-    } else if (activeWorkspaceId) {
-      navigate(withPane(paths.workspace(activeWorkspaceId), pane), { replace: true });
-    } else {
-      navigate(withPane(paths.taskHome(), pane), { replace: true });
-    }
+    const next = new URLSearchParams(searchParams);
+    if (activeWorkspaceId) next.set('workspace', activeWorkspaceId);
+    if (boardId) next.set('board', boardId);
+    else next.delete('board');
+    next.delete('item');
+    next.set('pane', 'boards');
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPane = (nextPane) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPane) next.set('pane', nextPane);
+    else next.delete('pane');
+    setSearchParams(next, { replace: true });
   };
 
   const handleCreateWorkspace = async () => {

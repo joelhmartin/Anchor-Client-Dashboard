@@ -1,4 +1,4 @@
-import { IconLayoutBoard, IconReportAnalytics, IconUserCheck } from '@tabler/icons-react';
+import { IconLayoutBoard } from '@tabler/icons-react';
 
 export const tasksNavGroup = {
   id: 'tasks-nav-group',
@@ -7,7 +7,7 @@ export const tasksNavGroup = {
   children: [
     {
       id: 'tasks-home',
-      title: 'Task Manager',
+      title: 'Home',
       type: 'item',
       url: '/tasks',
       icon: IconLayoutBoard
@@ -17,14 +17,21 @@ export const tasksNavGroup = {
       title: 'My Work',
       type: 'item',
       url: '/tasks?pane=my-work',
-      icon: IconUserCheck
+      icon: IconLayoutBoard
     },
     {
-      id: 'tasks-reporting',
-      title: 'Reporting',
+      id: 'tasks-automations',
+      title: 'Automations',
+      type: 'item',
+      url: '/tasks?pane=automations',
+      icon: IconLayoutBoard
+    },
+    {
+      id: 'tasks-reports',
+      title: 'Reports',
       type: 'item',
       url: '/tasks?pane=reports',
-      icon: IconReportAnalytics
+      icon: IconLayoutBoard
     }
   ]
 };

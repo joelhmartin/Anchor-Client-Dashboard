@@ -52,10 +52,6 @@ export function runTaskBoardsReport(payload) {
   return client.post('/tasks/reports/boards', payload).then((res) => res.data.rows || []);
 }
 
-export function fetchMyWork() {
-  return client.get('/tasks/my-work').then((res) => res.data.boards || []);
-}
-
 export function createTaskGroup(boardId, payload) {
   return client.post(`/tasks/boards/${boardId}/groups`, payload).then((res) => res.data.group);
 }
@@ -150,6 +146,10 @@ export function fetchTaskItemAiSummary(itemId) {
 
 export function refreshTaskItemAiSummary(itemId) {
   return client.post(`/tasks/items/${itemId}/ai-summary/refresh`).then((res) => res.data.summary);
+}
+
+export function fetchMyWork() {
+  return client.get('/tasks/my-work').then((res) => res.data.boards || []);
 }
 
 
