@@ -30,8 +30,8 @@ import BoardHeader from './components/BoardHeader';
 import BoardTable from './components/BoardTable';
 import HomePane from './panes/HomePane';
 import MyWorkPane from './panes/MyWorkPane';
-import ReportsPane from './panes/ReportsPane';
 import AutomationsPane from './panes/AutomationsPane';
+import BillingPane from './panes/BillingPane';
 import {
   createTaskGroup,
   createTaskItem,
@@ -42,6 +42,7 @@ import {
   fetchTaskBoardAutomations,
   fetchTaskBoardReport,
   fetchTaskBoardsAll,
+  fetchTaskBoards,
   fetchTaskItemUpdates,
   createTaskItemUpdate,
   fetchTaskItemFiles,
@@ -73,7 +74,7 @@ export default function TaskManager() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawPane = searchParams.get('pane') || 'home';
-  const pane = ['home', 'boards', 'reports', 'my-work', 'automations'].includes(rawPane) ? rawPane : 'home';
+  const pane = ['home', 'boards', 'my-work', 'automations', 'billing'].includes(rawPane) ? rawPane : 'home';
   const reportRun = searchParams.get('report_run') || '';
   const reportStart = searchParams.get('report_start') || '';
   const reportEnd = searchParams.get('report_end') || '';
@@ -160,6 +161,10 @@ export default function TaskManager() {
   // My Work
   const [myWorkBoards, setMyWorkBoards] = useState([]);
   const [myWorkLoading, setMyWorkLoading] = useState(false);
+
+  // Workspace boards (when only workspace selected)
+  const [workspaceBoards, setWorkspaceBoards] = useState([]);
+  const [workspaceBoardsLoading, setWorkspaceBoardsLoading] = useState(false);
 
   // Close overlays when pane changes to avoid blocking navigation (e.g., reports)
   useEffect(() => {
@@ -256,9 +261,35 @@ export default function TaskManager() {
       loadBoardView(activeBoardId);
       loadAutomations(activeBoardId);
       loadBoardReport(activeBoardId);
+      // When only workspace is selected, load boards list for that workspace
+      if (!activeBoardId && activeWorkspaceId) {
+        setWorkspaceBoardsLoading(true);
+        fetchTaskBoards(activeWorkspaceId)
+          .then((rows) => setWorkspaceBoards(rows || []))
+          .catch(() => setWorkspaceBoards([]))
+          .finally(() => setWorkspaceBoardsLoading(false));
+      } else {
+        setWorkspaceBoards([]);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBoardId, pane]);
+
+  // Reload boards list when workspace changes (even if board was previously selected)
+  useEffect(() => {
+    if (pane !== 'boards') return;
+    setWorkspaceBoards([]);
+    setWorkspaceBoardsLoading(true);
+    if (!activeWorkspaceId) {
+      setWorkspaceBoardsLoading(false);
+      return;
+    }
+    fetchTaskBoards(activeWorkspaceId)
+      .then((rows) => setWorkspaceBoards(rows || []))
+      .catch(() => setWorkspaceBoards([]))
+      .finally(() => setWorkspaceBoardsLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspaceId, pane]);
 
   // Load all boards for reporting pane
   useEffect(() => {
@@ -274,10 +305,46 @@ export default function TaskManager() {
   useEffect(() => {
     if (pane !== 'my-work') return;
     setMyWorkLoading(true);
-    fetchMyWork()
-      .then((rows) => setMyWorkBoards(rows))
-      .catch(() => setMyWorkBoards([]))
-      .finally(() => setMyWorkLoading(false));
+    const run = async () => {
+      try {
+        const rows = await fetchMyWork();
+        if (rows && rows.length) {
+          setMyWorkBoards(rows);
+          return;
+        }
+        // Fallback: derive my work client-side across all boards
+        const boards = await fetchTaskBoardsAll();
+        const me = user?.id;
+        const grouped = [];
+        for (const b of boards) {
+          try {
+            const view = await fetchTaskBoardView(b.id);
+            const assigneesByItem = view?.assignees_by_item || {};
+            const items = (view?.items || []).filter((it) => {
+              const assignees = assigneesByItem[it.id] || [];
+              return assignees.some((a) => a.user_id === me);
+            });
+            if (items.length) {
+              grouped.push({
+                board_id: b.id,
+                board_name: b.name,
+                workspace_id: b.workspace_id,
+                workspace_name: b.workspace_name,
+                items
+              });
+            }
+          } catch (_err) {
+            // ignore individual board errors
+          }
+        }
+        setMyWorkBoards(grouped);
+      } catch (_err) {
+        setMyWorkBoards([]);
+      } finally {
+        setMyWorkLoading(false);
+      }
+    };
+    run();
   }, [pane]);
 
   // Sync reporting selections from URL
@@ -885,38 +952,41 @@ export default function TaskManager() {
 
     if (pane === 'automations') return <AutomationsPane />;
 
-    if (pane === 'my-work') return <MyWorkPane boards={myWorkBoards} loading={myWorkLoading} />;
+    if (pane === 'billing') return <BillingPane />;
 
-    if (pane === 'reports') {
-      return (
-        <ReportsPane
-          reportBoardQuery={reportBoardQuery}
-          setReportBoardQuery={setReportBoardQuery}
-          reportStartInput={reportStartInput}
-          setReportStartInput={setReportStartInput}
-          reportEndInput={reportEndInput}
-          setReportEndInput={setReportEndInput}
-          filteredReportBoards={filteredReportBoards}
-          selectedReportBoards={selectedReportBoards}
-          toggleReportBoard={toggleReportBoard}
-          toggleAllReportBoards={toggleAllReportBoards}
-          allBoardsLoading={allBoardsLoading}
-          handleRunReport={handleRunReport}
-          reportLoading={reportLoading}
-          reportRows={reportRows}
-          handleExportReportCsv={handleExportReportCsv}
-        />
-      );
-    }
+    if (pane === 'my-work') return <MyWorkPane boards={myWorkBoards} loading={myWorkLoading} />;
 
     // Boards pane
     return (
       <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
         <Stack spacing={1.5}>
           {!activeBoardId && (
-            <Typography variant="body2" color="text.secondary">
-              Select a board from the left sidebar to view its groups and items.
-            </Typography>
+            <Stack spacing={1}>
+              <Typography variant="h6">Boards</Typography>
+              {workspaceBoardsLoading && <CircularProgress size={18} />}
+              {!workspaceBoardsLoading && workspaceBoards.length === 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  Select a workspace to see its boards.
+                </Typography>
+              )}
+              <Stack spacing={0.5}>
+                {workspaceBoards.map((b) => (
+                  <Button
+                    key={b.id}
+                    onClick={() => {
+                      const next = new URLSearchParams(searchParams);
+                      next.set('workspace', b.workspace_id);
+                      next.set('board', b.id);
+                      setSearchParams(next, { replace: true });
+                    }}
+                    variant="outlined"
+                    sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                  >
+                    {b.name}
+                  </Button>
+                ))}
+              </Stack>
+            </Stack>
           )}
 
           {activeBoardId && (
@@ -946,6 +1016,15 @@ export default function TaskManager() {
                 highlightedItemId={highlightedItemId}
                 onUpdateItem={updateItemInline}
                 onToggleAssignee={toggleAssigneeInline}
+                newItemNameByGroup={newItemNameByGroup}
+                creatingItemByGroup={creatingItemByGroup}
+                onChangeNewItemName={(groupId, val) =>
+                  setNewItemNameByGroup((prev) => ({
+                    ...prev,
+                    [groupId]: val
+                  }))
+                }
+                onCreateItem={handleCreateItem}
                 onClickItem={(it, tab) => {
                   if (tab) setDrawerTab(tab);
                   openItemDrawer(it);
@@ -962,7 +1041,7 @@ export default function TaskManager() {
     <MainCard title="Task Manager">
       <Stack spacing={2}>
         {error && <Alert severity="error">{error}</Alert>}
-        {pane !== 'reports' && pane !== 'my-work' && pane !== 'home' && (
+        {pane === 'boards' && activeBoardId && (
           <BoardHeader
             board={boardView?.board}
             view={boardViewType}
@@ -1069,12 +1148,14 @@ export default function TaskManager() {
             </Stack>
           </Paper>
         </Popper>
-        <Drawer
-          anchor="right"
-          open={itemDrawerOpen}
-          onClose={() => setItemDrawerOpen(false)}
-          PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}
-        >
+      </Stack>
+
+      <Drawer
+        anchor="right"
+        open={itemDrawerOpen}
+        onClose={() => setItemDrawerOpen(false)}
+        PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}
+      >
         <Box sx={{ p: 2 }}>
           <Stack spacing={1.5}>
             <Typography variant="h6">{activeItem?.name || 'Item'}</Typography>
@@ -1098,24 +1179,6 @@ export default function TaskManager() {
                 value={activeItem?.due_date || ''}
                 onChange={(e) => updateItemField({ due_date: e.target.value || null })}
                 InputLabelProps={{ shrink: true }}
-              />
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={Boolean(activeItem?.is_voicemail)}
-                    onChange={(e) => updateItemField({ is_voicemail: e.target.checked })}
-                  />
-                }
-                label="Voicemail"
-              />
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={Boolean(activeItem?.needs_attention)}
-                    onChange={(e) => updateItemField({ needs_attention: e.target.checked })}
-                  />
-                }
-                label="Needs attention (flag)"
               />
             </Stack>
 
@@ -1242,26 +1305,6 @@ export default function TaskManager() {
             )}
 
             <Divider />
-
-            <Typography variant="subtitle1">AI Summary</Typography>
-            {aiSummaryLoading ? (
-              <CircularProgress size={18} />
-            ) : aiSummary?.summary ? (
-              <Box sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Provider: {aiSummary.provider || 'vertex'}
-                  {aiSummary.model ? ` • ${aiSummary.model}` : ''}
-                  {aiSummaryMeta.is_stale ? ' • stale' : ''}
-                </Typography>
-                <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
-                  {aiSummary.summary}
-                </Typography>
-              </Box>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                No summary yet.
-              </Typography>
-            )}
 
             <Button variant="outlined" onClick={handleRefreshAiSummary} disabled={!activeItem?.id || aiSummaryRefreshing}>
               {aiSummaryRefreshing ? 'Refreshing…' : aiSummary?.summary ? 'Refresh summary' : 'Generate summary'}

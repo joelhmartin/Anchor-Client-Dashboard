@@ -1,18 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Box, Button, CircularProgress, Divider, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Box,
+  Button,
+  CircularProgress,
+  Divider,
+  IconButton,
+  Stack,
+  TextField,
+  Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
+} from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import AddIcon from '@mui/icons-material/Add';
 
 import useAuth from 'hooks/useAuth';
-import {
-  addTaskWorkspaceMember,
-  createTaskBoard,
-  createTaskWorkspace,
-  fetchTaskBoards,
-  fetchTaskWorkspaceMembers,
-  fetchTaskWorkspaces,
-  removeTaskWorkspaceMember,
-  updateTaskWorkspaceMember
-} from 'api/tasks';
+import { createTaskBoard, fetchTaskBoards, fetchTaskWorkspaces } from 'api/tasks';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -21,98 +30,51 @@ function getEffectiveRole(user) {
 export default function TaskSidebarPanel() {
   const { user } = useAuth();
   const effRole = useMemo(() => getEffectiveRole(user), [user]);
-  const canCreateWorkspace = effRole === 'superadmin' || effRole === 'admin';
+  const canCreateBoard = effRole === 'superadmin' || effRole === 'admin';
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const pane = searchParams.get('pane') || 'home';
   const workspaceIdFromUrl = searchParams.get('workspace') || '';
   const boardIdFromUrl = searchParams.get('board') || '';
 
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
   const [workspaces, setWorkspaces] = useState([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(workspaceIdFromUrl);
+  const [boardsByWorkspace, setBoardsByWorkspace] = useState({});
+  const [expanded, setExpanded] = useState(workspaceIdFromUrl || '');
 
-  const [boardsLoading, setBoardsLoading] = useState(false);
-  const [boards, setBoards] = useState([]);
-
-  const [membersLoading, setMembersLoading] = useState(false);
-  const [members, setMembers] = useState([]);
-
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
-
+  const [creatingBoardFor, setCreatingBoardFor] = useState('');
   const [newBoardName, setNewBoardName] = useState('');
   const [creatingBoard, setCreatingBoard] = useState(false);
 
-  const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [addingMember, setAddingMember] = useState(false);
-
   useEffect(() => {
-    // Keep internal selection in sync with URL
-    if (workspaceIdFromUrl !== activeWorkspaceId) {
-      setActiveWorkspaceId(workspaceIdFromUrl);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setExpanded(workspaceIdFromUrl || '');
   }, [workspaceIdFromUrl]);
 
-  const loadWorkspaces = async () => {
-    setLoadingWorkspaces(true);
-    try {
-      const ws = await fetchTaskWorkspaces();
-      setWorkspaces(ws);
-      // default selection
-      if (!workspaceIdFromUrl && ws.length) {
-        const next = new URLSearchParams(searchParams);
-        next.set('workspace', ws[0].id);
-        setSearchParams(next, { replace: true });
-      }
-    } catch (_err) {
-      setWorkspaces([]);
-    } finally {
-      setLoadingWorkspaces(false);
-    }
-  };
-
   useEffect(() => {
-    loadWorkspaces();
+    const load = async () => {
+      setLoadingWorkspaces(true);
+      try {
+        const ws = await fetchTaskWorkspaces();
+        setWorkspaces(ws);
+        if (!workspaceIdFromUrl && ws.length) {
+          const next = new URLSearchParams(searchParams);
+          next.set('workspace', ws[0].id);
+          setSearchParams(next, { replace: true });
+        }
+        // Preload boards for all workspaces
+        const allBoards = await Promise.all(ws.map((w) => fetchTaskBoards(w.id).then((b) => [w.id, b])));
+        setBoardsByWorkspace(Object.fromEntries(allBoards));
+      } catch (_err) {
+        setWorkspaces([]);
+        setBoardsByWorkspace({});
+      } finally {
+        setLoadingWorkspaces(false);
+      }
+    };
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadWorkspaceData = async (workspaceId) => {
-    if (!workspaceId) {
-      setBoards([]);
-      setMembers([]);
-      return;
-    }
-    setBoardsLoading(true);
-    setMembersLoading(true);
-    try {
-      const [b, m] = await Promise.all([fetchTaskBoards(workspaceId), fetchTaskWorkspaceMembers(workspaceId)]);
-      setBoards(b);
-      setMembers(m);
-      // default board selection (if missing)
-      if (!boardIdFromUrl && b.length) {
-        const next = new URLSearchParams(searchParams);
-        next.set('workspace', workspaceId);
-        next.set('board', b[0].id);
-        next.delete('item');
-        setSearchParams(next, { replace: true });
-      }
-    } catch (_err) {
-      setBoards([]);
-      setMembers([]);
-    } finally {
-      setBoardsLoading(false);
-      setMembersLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadWorkspaceData(activeWorkspaceId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId]);
-
-  const handleSelectWorkspace = (workspaceId) => {
+  const selectWorkspace = (workspaceId) => {
     const next = new URLSearchParams(searchParams);
     if (workspaceId) next.set('workspace', workspaceId);
     else next.delete('workspace');
@@ -122,46 +84,32 @@ export default function TaskSidebarPanel() {
     setSearchParams(next, { replace: true });
   };
 
-  const handleSelectBoard = (boardId) => {
+  const selectBoard = (workspaceId, boardId) => {
     const next = new URLSearchParams(searchParams);
-    if (activeWorkspaceId) next.set('workspace', activeWorkspaceId);
+    if (workspaceId) next.set('workspace', workspaceId);
     if (boardId) next.set('board', boardId);
-    else next.delete('board');
     next.delete('item');
     next.set('pane', 'boards');
     setSearchParams(next, { replace: true });
   };
 
-  const setPane = (nextPane) => {
-    const next = new URLSearchParams(searchParams);
-    if (nextPane) next.set('pane', nextPane);
-    else next.delete('pane');
-    setSearchParams(next, { replace: true });
-  };
-
-  const handleCreateWorkspace = async () => {
-    if (!newWorkspaceName.trim()) return;
-    setCreatingWorkspace(true);
-    try {
-      const ws = await createTaskWorkspace({ name: newWorkspaceName.trim() });
-      setWorkspaces((prev) => [ws, ...prev]);
-      setNewWorkspaceName('');
-      handleSelectWorkspace(ws.id);
-    } catch (_err) {
-      // ignore
-    } finally {
-      setCreatingWorkspace(false);
-    }
+  const openCreateBoard = (workspaceId) => {
+    setCreatingBoardFor(workspaceId);
+    setNewBoardName('');
   };
 
   const handleCreateBoard = async () => {
-    if (!activeWorkspaceId || !newBoardName.trim()) return;
+    if (!creatingBoardFor || !newBoardName.trim()) return;
     setCreatingBoard(true);
     try {
-      const board = await createTaskBoard(activeWorkspaceId, { name: newBoardName.trim() });
-      setBoards((prev) => [board, ...prev]);
+      const board = await createTaskBoard(creatingBoardFor, { name: newBoardName.trim() });
+      setBoardsByWorkspace((prev) => ({
+        ...prev,
+        [creatingBoardFor]: [board, ...(prev[creatingBoardFor] || [])]
+      }));
       setNewBoardName('');
-      handleSelectBoard(board.id);
+      setCreatingBoardFor('');
+      selectBoard(board.workspace_id, board.id);
     } catch (_err) {
       // ignore
     } finally {
@@ -169,205 +117,119 @@ export default function TaskSidebarPanel() {
     }
   };
 
-  const handleAddMember = async () => {
-    if (!activeWorkspaceId || !newMemberEmail.trim()) return;
-    setAddingMember(true);
-    try {
-      const member = await addTaskWorkspaceMember(activeWorkspaceId, { email: newMemberEmail.trim(), role: 'member' });
-      setMembers((prev) => {
-        const existing = prev.find((m) => m.user_id === member.user_id);
-        if (existing) return prev.map((m) => (m.user_id === member.user_id ? member : m));
-        return [...prev, member];
-      });
-      setNewMemberEmail('');
-    } catch (_err) {
-      // ignore
-    } finally {
-      setAddingMember(false);
-    }
-  };
-
-  const handleChangeMemberRole = async (memberUserId, role) => {
-    if (!activeWorkspaceId) return;
-    try {
-      const updated = await updateTaskWorkspaceMember(activeWorkspaceId, memberUserId, { role });
-      setMembers((prev) => prev.map((m) => (m.user_id === memberUserId ? updated : m)));
-    } catch (_err) {
-      // ignore
-    }
-  };
-
-  const handleRemoveMember = async (memberUserId) => {
-    if (!activeWorkspaceId) return;
-    try {
-      await removeTaskWorkspaceMember(activeWorkspaceId, memberUserId);
-      setMembers((prev) => prev.filter((m) => m.user_id !== memberUserId));
-    } catch (_err) {
-      // ignore
-    }
-  };
-
   return (
-    <Box sx={{ mt: 1 }}>
+    <Box
+      sx={{
+        mt: 1,
+        // Ensure all buttons in the panel keep labels on one line
+        '& .MuiButton-root': { whiteSpace: 'nowrap' }
+      }}
+    >
       <Stack spacing={1.5}>
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-          <Typography variant="subtitle1">Workspace</Typography>
+          <Typography variant="subtitle1">Workspaces</Typography>
           {loadingWorkspaces && <CircularProgress size={16} />}
         </Stack>
 
-        <Select size="small" value={activeWorkspaceId} displayEmpty onChange={(e) => handleSelectWorkspace(e.target.value)}>
-          <MenuItem value="">
-            <em>Select workspace…</em>
-          </MenuItem>
-          {workspaces.map((w) => (
-            <MenuItem key={w.id} value={w.id}>
-              {w.name}
-            </MenuItem>
-          ))}
-        </Select>
-
-        {canCreateWorkspace && (
-          <Stack direction="row" spacing={1}>
-            <TextField
-              fullWidth
-              size="small"
-              label="New workspace"
-              value={newWorkspaceName}
-              onChange={(e) => setNewWorkspaceName(e.target.value)}
-            />
-            <Button variant="contained" onClick={handleCreateWorkspace} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
-              Create
-            </Button>
-          </Stack>
+        {workspaces.length === 0 && !loadingWorkspaces && (
+          <Typography variant="body2" color="text.secondary">
+            No workspaces found.
+          </Typography>
         )}
 
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25 }}>
-          <Stack spacing={1}>
-            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-              <Typography variant="subtitle1">Members</Typography>
-              {membersLoading && <CircularProgress size={16} />}
-            </Stack>
-
-            <Stack direction="row" spacing={1}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Add member by email"
-                value={newMemberEmail}
-                onChange={(e) => setNewMemberEmail(e.target.value)}
-                disabled={!activeWorkspaceId}
-              />
-              <Button variant="contained" onClick={handleAddMember} disabled={addingMember || !activeWorkspaceId || !newMemberEmail.trim()}>
-                Add
-              </Button>
-            </Stack>
-
-            <Stack spacing={0.75}>
-              {!members.length && (
-                <Typography variant="body2" color="text.secondary">
-                  No members yet.
-                </Typography>
-              )}
-              {members.map((m) => {
-                const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
-                const display = name || m.email || 'User';
-                const isImplicitStaff = ['superadmin', 'admin', 'team'].includes(m.user_role);
-                return (
-                  <Box
-                    key={m.user_id}
-                    sx={{
-                      p: 1,
-                      border: '1px solid',
-                      borderColor: 'divider',
-                      borderRadius: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 1
-                    }}
-                  >
-                    <Stack sx={{ minWidth: 0 }}>
-                      <Typography variant="body2" noWrap>
-                        {display}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap>
-                        {m.email || ''} {m.user_role ? `• ${m.user_role}` : ''} {isImplicitStaff ? '• auto' : ''}
-                      </Typography>
-                    </Stack>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Select
-                        size="small"
-                        value={m.membership_role || 'member'}
-                        onChange={(e) => handleChangeMemberRole(m.user_id, e.target.value)}
-                        disabled={isImplicitStaff}
-                      >
-                        <MenuItem value="admin">Admin</MenuItem>
-                        <MenuItem value="member">Member</MenuItem>
-                      </Select>
-                      <Button
-                        size="small"
-                        color="error"
-                        variant="outlined"
-                        onClick={() => handleRemoveMember(m.user_id)}
-                        disabled={isImplicitStaff}
-                      >
-                        Remove
-                      </Button>
-                    </Stack>
-                  </Box>
-                );
-              })}
-            </Stack>
-          </Stack>
-        </Box>
-
-        <Divider />
-
-        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-          <Typography variant="subtitle1">Boards</Typography>
-          {boardsLoading && <CircularProgress size={16} />}
-        </Stack>
-
-        <Stack direction="row" spacing={1}>
-          <TextField
-            fullWidth
-            size="small"
-            label="New board"
-            value={newBoardName}
-            onChange={(e) => setNewBoardName(e.target.value)}
-            disabled={!activeWorkspaceId}
-          />
-          <Button variant="contained" onClick={handleCreateBoard} disabled={creatingBoard || !newBoardName.trim() || !activeWorkspaceId}>
-            Create
-          </Button>
-        </Stack>
-
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-          <Stack spacing={0} sx={{ py: 0.5 }}>
-            {boards.length === 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ px: 1.5, py: 1 }}>
-                No boards yet.
-              </Typography>
-            )}
-            {boards.map((b) => (
-              <Button
-                key={b.id}
-                onClick={() => handleSelectBoard(b.id)}
-                sx={{
-                  justifyContent: 'flex-start',
-                  textTransform: 'none',
-                  px: 1.5,
-                  py: 1,
-                  borderRadius: 0,
-                  ...(b.id === boardIdFromUrl && { bgcolor: 'action.selected' })
+        <Stack spacing={0.75}>
+          {workspaces.map((w) => {
+            const boards = boardsByWorkspace[w.id] || [];
+            const isExpanded = expanded === w.id;
+            return (
+              <Accordion
+                key={w.id}
+                expanded={isExpanded}
+                onChange={(_e, exp) => {
+                  setExpanded(exp ? w.id : '');
+                  if (exp) selectWorkspace(w.id);
                 }}
               >
-                {b.name}
-              </Button>
-            ))}
-          </Stack>
-        </Box>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ py: 0, '& .MuiAccordionSummary-content': { my: 0 } }}>
+                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
+                    <Button
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectWorkspace(w.id);
+                      }}
+                      sx={{
+                        textTransform: 'none',
+                        justifyContent: 'flex-start',
+                        py: 0,
+                        minHeight: 0,
+                        height: 'auto',
+                        lineHeight: 1.2,
+                        whiteSpace: 'nowrap',
+                        '&.MuiButton-root': { minHeight: 0, paddingTop: 0, paddingBottom: 0 }
+                      }}
+                    >
+                      {w.name}
+                    </Button>
+                    {canCreateBoard && (
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openCreateBoard(w.id);
+                        }}
+                      >
+                        <AddIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {boards.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No boards yet.
+                    </Typography>
+                  ) : (
+                    <Stack spacing={0.5}>
+                      {boards.map((b) => (
+                        <Button
+                          key={b.id}
+                          onClick={() => selectBoard(w.id, b.id)}
+                          variant={b.id === boardIdFromUrl ? 'contained' : 'text'}
+                          color={b.id === boardIdFromUrl ? 'primary' : 'inherit'}
+                          sx={{ justifyContent: 'flex-start', textTransform: 'none', whiteSpace: 'nowrap' }}
+                        >
+                          {b.name}
+                        </Button>
+                      ))}
+                    </Stack>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+            );
+          })}
+        </Stack>
       </Stack>
+
+      <Dialog open={Boolean(creatingBoardFor)} onClose={() => setCreatingBoardFor('')}>
+        <DialogTitle>Create board</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Board name"
+            fullWidth
+            value={newBoardName}
+            onChange={(e) => setNewBoardName(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreatingBoardFor('')}>Cancel</Button>
+          <Button onClick={handleCreateBoard} disabled={creatingBoard || !newBoardName.trim()}>
+            Create
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

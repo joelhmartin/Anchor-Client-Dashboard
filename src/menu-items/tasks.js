@@ -27,10 +27,10 @@ export const tasksNavGroup = {
       icon: IconLayoutBoard
     },
     {
-      id: 'tasks-reports',
-      title: 'Reports',
+      id: 'tasks-billing',
+      title: 'Billing',
       type: 'item',
-      url: '/tasks?pane=reports',
+      url: '/tasks?pane=billing',
       icon: IconLayoutBoard
     }
   ]

@@ -50,9 +50,12 @@ export default function BoardTable({
   timeTotalsByItem = {},
   highlightedItemId,
   onClickItem,
-  onUpdateItem
-  ,
-  onToggleAssignee
+  onUpdateItem,
+  onToggleAssignee,
+  newItemNameByGroup = {},
+  creatingItemByGroup = {},
+  onChangeNewItemName,
+  onCreateItem
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [editingItemId, setEditingItemId] = useState('');
@@ -201,153 +204,181 @@ export default function BoardTable({
                 <Chip size="small" label={groupCounts[g.id] || 0} />
               </Box>
 
-              {!collapsed &&
-                items.map((it) => {
-                  const status = it.status || 'todo';
-                  const sc = statusColor(status);
-                  const assignees = assigneesByItem[it.id] || [];
-                  const updateCount = updateCountsByItem[it.id] || 0;
-                  const timeTotal = timeTotalsByItem[it.id] || 0;
-                  const isHighlighted = highlightedItemId === it.id;
-                  const isEditing = editingItemId === it.id;
-                  return (
-                    <Box
-                      key={it.id}
-                      onClick={() => onClickItem?.(it)}
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns,
-                        alignItems: 'center',
-                        borderBottom: '1px solid',
-                        borderColor: 'divider',
-                        cursor: 'pointer',
-                        ...(isHighlighted && { bgcolor: 'action.selected' }),
-                        '&:hover': { bgcolor: 'action.hover' }
-                      }}
-                    >
-                      {/* name */}
-                      <Box
-                        sx={{
-                          p: 1,
-                          borderRight: '1px solid',
-                          borderColor: 'divider',
-                          position: 'sticky',
-                          left: 0,
-                          zIndex: 3,
-                          bgcolor: 'background.default'
+              {!collapsed && (
+                <Stack spacing={1} sx={{ p: 1, pt: 0 }}>
+                  {/* New item row */}
+                  {onCreateItem && (
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        placeholder="New item"
+                        value={newItemNameByGroup[g.id] || ''}
+                        onChange={(e) => onChangeNewItemName?.(g.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') onCreateItem?.(g.id);
                         }}
-                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <Button
+                        variant="contained"
+                        onClick={() => onCreateItem?.(g.id)}
+                        disabled={creatingItemByGroup[g.id] || !(newItemNameByGroup[g.id] || '').trim()}
                       >
-                        {isEditing ? (
-                          <TextField
-                            size="small"
-                            fullWidth
-                            value={draftName}
-                            onChange={(e) => setDraftName(e.target.value)}
-                            onBlur={() => commitEditName(it.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') commitEditName(it.id);
-                              if (e.key === 'Escape') {
-                                setEditingItemId('');
-                                setDraftName('');
-                              }
-                            }}
-                            autoFocus
-                          />
-                        ) : (
-                          <Typography
-                            variant="body2"
-                            sx={{ fontWeight: 600 }}
-                            onClick={() => handleNameClick(it)}
-                            onDoubleClick={() => handleNameDoubleClick(it)}
-                          >
-                            {it.name}
-                          </Typography>
-                        )}
-                      </Box>
+                        {creatingItemByGroup[g.id] ? 'Adding…' : 'Add item'}
+                      </Button>
+                    </Stack>
+                  )}
 
-                      {/* status */}
-                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          size="small"
-                          value={status}
-                          onChange={(e) => onUpdateItem?.(it.id, { status: e.target.value })}
-                          sx={{
-                            width: '100%',
-                            '& .MuiSelect-select': { py: 0.5 },
-                            bgcolor: sc.bg,
-                            color: sc.fg,
-                            borderRadius: 999,
-                            '.MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' }
-                          }}
-                        >
-                          <MenuItem value="todo">Todo</MenuItem>
-                          <MenuItem value="working">Working</MenuItem>
-                          <MenuItem value="blocked">Blocked</MenuItem>
-                          <MenuItem value="done">Done</MenuItem>
-                          <MenuItem value="needs_attention">Needs Attention</MenuItem>
-                        </Select>
-                      </Box>
+                  {/* Items */}
+                  {items.map((it) => {
+                    const status = it.status || 'todo';
+                    const sc = statusColor(status);
+                    const assignees = assigneesByItem[it.id] || [];
+                    const updateCount = updateCountsByItem[it.id] || 0;
+                    const timeTotal = timeTotalsByItem[it.id] || 0;
+                    const isHighlighted = highlightedItemId === it.id;
+                    const isEditing = editingItemId === it.id;
 
-                      {/* people */}
+                    return (
                       <Box
-                        sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}
-                        onClick={(e) => openPeoplePicker(e, it.id)}
+                        key={it.id}
+                        onClick={() => onClickItem?.(it)}
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns,
+                          alignItems: 'center',
+                          borderBottom: '1px solid',
+                          borderColor: 'divider',
+                          cursor: 'pointer',
+                          ...(isHighlighted && { bgcolor: 'action.selected' }),
+                          '&:hover': { bgcolor: 'action.hover' }
+                        }}
                       >
-                        <Stack direction="row" spacing={-0.5} alignItems="center">
-                          {assignees.slice(0, 3).map((a) => {
-                            const label =
-                              [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || a.email || a.user_id?.slice?.(0, 6) || 'U';
-                            return (
-                              <Avatar key={a.user_id} src={a.avatar_url || ''} sx={{ width: 26, height: 26, fontSize: 12 }}>
-                                {label.slice(0, 1).toUpperCase()}
-                              </Avatar>
-                            );
-                          })}
-                          {assignees.length > 3 && (
-                            <Avatar sx={{ width: 26, height: 26, fontSize: 12 }}>{`+${assignees.length - 3}`}</Avatar>
-                          )}
-                          {!assignees.length && (
-                            <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                              —
+                        {/* name */}
+                        <Box
+                          sx={{
+                            p: 1,
+                            borderRight: '1px solid',
+                            borderColor: 'divider',
+                            position: 'sticky',
+                            left: 0,
+                            zIndex: 3,
+                            bgcolor: 'background.default'
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {isEditing ? (
+                            <TextField
+                              size="small"
+                              fullWidth
+                              value={draftName}
+                              onChange={(e) => setDraftName(e.target.value)}
+                              onBlur={() => commitEditName(it.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') commitEditName(it.id);
+                                if (e.key === 'Escape') {
+                                  setEditingItemId('');
+                                  setDraftName('');
+                                }
+                              }}
+                              autoFocus
+                            />
+                          ) : (
+                            <Typography
+                              variant="body2"
+                              sx={{ fontWeight: 600 }}
+                              onClick={() => handleNameClick(it)}
+                              onDoubleClick={() => handleNameDoubleClick(it)}
+                            >
+                              {it.name}
                             </Typography>
                           )}
-                        </Stack>
-                      </Box>
+                        </Box>
 
-                      {/* due */}
-                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
-                        <TextField
-                          size="small"
-                          type="date"
-                          value={it.due_date || ''}
-                          onChange={(e) => onUpdateItem?.(it.id, { due_date: e.target.value || null })}
-                          InputLabelProps={{ shrink: true }}
-                          sx={{ width: '100%' }}
-                        />
-                      </Box>
+                        {/* status */}
+                        <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
+                          <Select
+                            size="small"
+                            value={status}
+                            onChange={(e) => onUpdateItem?.(it.id, { status: e.target.value })}
+                            sx={{
+                              width: '100%',
+                              '& .MuiSelect-select': { py: 0.5 },
+                              bgcolor: sc.bg,
+                              color: sc.fg,
+                              borderRadius: 999,
+                              '.MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' }
+                            }}
+                          >
+                            <MenuItem value="todo">Todo</MenuItem>
+                            <MenuItem value="working">Working</MenuItem>
+                            <MenuItem value="blocked">Blocked</MenuItem>
+                            <MenuItem value="done">Done</MenuItem>
+                            <MenuItem value="needs_attention">Needs Attention</MenuItem>
+                          </Select>
+                        </Box>
 
-                      {/* updates */}
-                      <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          size="small"
-                          variant="text"
-                          startIcon={<IconMessageCircle size={16} />}
-                          onClick={() => onClickItem?.(it, 'updates')}
+                        {/* people */}
+                        <Box
+                          sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}
+                          onClick={(e) => openPeoplePicker(e, it.id)}
                         >
-                          {updateCount}
-                        </Button>
-                      </Box>
+                          <Stack direction="row" spacing={-0.5} alignItems="center">
+                            {assignees.slice(0, 3).map((a) => {
+                              const label =
+                                [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || a.email || a.user_id?.slice?.(0, 6) || 'U';
+                              return (
+                                <Avatar key={a.user_id} src={a.avatar_url || ''} sx={{ width: 26, height: 26, fontSize: 12 }}>
+                                  {label.slice(0, 1).toUpperCase()}
+                                </Avatar>
+                              );
+                            })}
+                            {assignees.length > 3 && (
+                              <Avatar sx={{ width: 26, height: 26, fontSize: 12 }}>{`+${assignees.length - 3}`}</Avatar>
+                            )}
+                            {!assignees.length && (
+                              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                —
+                              </Typography>
+                            )}
+                          </Stack>
+                        </Box>
 
-                      {/* time */}
-                      <Box sx={{ p: 1 }} onClick={(e) => e.stopPropagation()}>
-                        <Button size="small" variant="text" startIcon={<IconClock size={16} />} onClick={() => onClickItem?.(it, 'time')}>
-                          {fmtMinutes(timeTotal)}
-                        </Button>
+                        {/* due */}
+                        <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
+                          <TextField
+                            size="small"
+                            type="date"
+                            value={it.due_date || ''}
+                            onChange={(e) => onUpdateItem?.(it.id, { due_date: e.target.value || null })}
+                            InputLabelProps={{ shrink: true }}
+                            sx={{ width: '100%' }}
+                          />
+                        </Box>
+
+                        {/* updates */}
+                        <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="small"
+                            variant="text"
+                            startIcon={<IconMessageCircle size={16} />}
+                            onClick={() => onClickItem?.(it, 'updates')}
+                          >
+                            {updateCount}
+                          </Button>
+                        </Box>
+
+                        {/* time */}
+                        <Box sx={{ p: 1 }} onClick={(e) => e.stopPropagation()}>
+                          <Button size="small" variant="text" startIcon={<IconClock size={16} />} onClick={() => onClickItem?.(it, 'time')}>
+                            {fmtMinutes(timeTotal)}
+                          </Button>
+                        </Box>
                       </Box>
-                    </Box>
-                  );
-                })}
+                    );
+                  })}
+                </Stack>
+              )}
             </Box>
           );
         })}

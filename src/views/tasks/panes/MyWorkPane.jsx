@@ -7,9 +7,6 @@ export default function MyWorkPane({ boards, loading }) {
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
           <Stack spacing={0.25}>
             <Typography variant="h5">My Work</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Items assigned to you, across all boards.
-            </Typography>
           </Stack>
           {loading && <CircularProgress size={18} />}
         </Stack>
