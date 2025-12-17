@@ -52,6 +52,10 @@ export function runTaskBoardsReport(payload) {
   return client.post('/tasks/reports/boards', payload).then((res) => res.data.rows || []);
 }
 
+export function runBillingReport(payload) {
+  return client.post('/tasks/reports/billing', payload).then((res) => res.data.items || []);
+}
+
 export function createTaskGroup(boardId, payload) {
   return client.post(`/tasks/boards/${boardId}/groups`, payload).then((res) => res.data.group);
 }
@@ -152,4 +156,38 @@ export function fetchMyWork() {
   return client.get('/tasks/my-work').then((res) => res.data.boards || []);
 }
 
+// Update view tracking
+export function markUpdatesViewed(updateIds) {
+  return client.post('/tasks/updates/mark-viewed', { update_ids: updateIds }).then((res) => res.data);
+}
+
+export function fetchUpdateViews(updateIds) {
+  return client.post('/tasks/updates/views', { update_ids: updateIds }).then((res) => res.data.views || {});
+}
+
+// AI Daily Overview
+export function fetchAiDailyOverview(refresh = false) {
+  return client.get('/tasks/ai/daily-overview', { params: refresh ? { refresh: '1' } : {} }).then((res) => res.data);
+}
+
+// Status Labels
+export function fetchBoardStatusLabels(boardId) {
+  return client.get(`/tasks/boards/${boardId}/status-labels`).then((res) => res.data.status_labels || []);
+}
+
+export function createBoardStatusLabel(boardId, payload) {
+  return client.post(`/tasks/boards/${boardId}/status-labels`, payload).then((res) => res.data.status_label);
+}
+
+export function updateStatusLabel(labelId, payload) {
+  return client.patch(`/tasks/status-labels/${labelId}`, payload).then((res) => res.data.status_label);
+}
+
+export function deleteStatusLabel(labelId) {
+  return client.delete(`/tasks/status-labels/${labelId}`).then((res) => res.data);
+}
+
+export function initBoardStatusLabels(boardId) {
+  return client.post(`/tasks/boards/${boardId}/status-labels/init`).then((res) => res.data.status_labels || []);
+}
 

@@ -1,60 +1,65 @@
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
+import BoardTable from '../components/BoardTable';
 
-export default function MyWorkPane({ boards, loading }) {
+// Default status labels for My Work (since items come from multiple boards)
+const DEFAULT_STATUS_LABELS = [
+  { id: 'default-todo', label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+  { id: 'default-working', label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+  { id: 'default-stuck', label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+  { id: 'default-done', label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+  { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+];
+
+export default function MyWorkPane({
+  loading,
+  groups,
+  itemsByGroup,
+  assigneesByItem,
+  updateCountsByItem,
+  timeTotalsByItem,
+  workspaceMembers,
+  onUpdateItem,
+  onToggleAssignee,
+  onClickItem
+}) {
   return (
     <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
       <Stack spacing={1.5}>
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
           <Stack spacing={0.25}>
             <Typography variant="h5">My Work</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Items assigned to you across all boards
+            </Typography>
           </Stack>
           {loading && <CircularProgress size={18} />}
         </Stack>
-        {!loading && !boards.length && (
+
+        {!loading && groups.length === 0 && (
           <Typography variant="body2" color="text.secondary">
             No assigned items yet.
           </Typography>
         )}
-        {boards.map((b) => (
-          <Box key={b.board_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-            <Box sx={{ p: 1.25, bgcolor: 'grey.100', borderBottom: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-                {b.board_name}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {b.workspace_name}
-              </Typography>
-            </Box>
-            <Box>
-              {(b.items || []).map((it) => (
-                <Box key={it.id} sx={{ p: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                      {it.name}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {it.status || 'todo'} {it.due_date ? `• due ${it.due_date}` : ''}
-                    </Typography>
-                  </Stack>
-                  {Array.isArray(it.subitems) && it.subitems.length > 0 && (
-                    <Box sx={{ pl: 2, mt: 0.5 }}>
-                      {it.subitems.slice(0, 6).map((s) => (
-                        <Typography key={s.id} variant="caption" color="text.secondary" display="block">
-                          - {s.name} ({s.status || 'todo'})
-                        </Typography>
-                      ))}
-                      {it.subitems.length > 6 && (
-                        <Typography variant="caption" color="text.secondary" display="block">
-                          +{it.subitems.length - 6} more…
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        ))}
+
+        {!loading && groups.length > 0 && (
+          <BoardTable
+            groups={groups}
+            itemsByGroup={itemsByGroup}
+            assigneesByItem={assigneesByItem}
+            workspaceMembers={workspaceMembers}
+            updateCountsByItem={updateCountsByItem}
+            timeTotalsByItem={timeTotalsByItem}
+            statusLabels={DEFAULT_STATUS_LABELS}
+            onUpdateItem={onUpdateItem}
+            onToggleAssignee={onToggleAssignee}
+            onClickItem={onClickItem}
+            // disable creation in My Work
+            onCreateItem={null}
+            onChangeNewItemName={null}
+            newItemNameByGroup={{}}
+            creatingItemByGroup={{}}
+          />
+        )}
       </Stack>
     </Box>
   );

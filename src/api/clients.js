@@ -12,8 +12,9 @@ export function updateClient(id, payload) {
   return client.put(`/hub/clients/${id}`, payload).then((res) => res.data.client);
 }
 
-export function deleteClient(id) {
-  return client.delete(`/hub/clients/${id}`).then((res) => res.data);
+export function deleteClient(id, { deleteBoard = false } = {}) {
+  const params = deleteBoard ? '?delete_board=true' : '';
+  return client.delete(`/hub/clients/${id}${params}`).then((res) => res.data);
 }
 
 export function fetchClientDetail(id) {

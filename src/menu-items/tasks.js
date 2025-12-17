@@ -1,4 +1,4 @@
-import { IconLayoutBoard } from '@tabler/icons-react';
+import { IconHome, IconChecklist, IconBolt, IconReceipt } from '@tabler/icons-react';
 
 export const tasksNavGroup = {
   id: 'tasks-nav-group',
@@ -10,28 +10,28 @@ export const tasksNavGroup = {
       title: 'Home',
       type: 'item',
       url: '/tasks',
-      icon: IconLayoutBoard
+      icon: IconHome
     },
     {
       id: 'tasks-my-work',
       title: 'My Work',
       type: 'item',
       url: '/tasks?pane=my-work',
-      icon: IconLayoutBoard
+      icon: IconChecklist
     },
     {
       id: 'tasks-automations',
       title: 'Automations',
       type: 'item',
       url: '/tasks?pane=automations',
-      icon: IconLayoutBoard
+      icon: IconBolt
     },
     {
       id: 'tasks-billing',
       title: 'Billing',
       type: 'item',
       url: '/tasks?pane=billing',
-      icon: IconLayoutBoard
+      icon: IconReceipt
     }
   ]
 };

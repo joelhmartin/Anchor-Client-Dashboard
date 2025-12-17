@@ -58,7 +58,7 @@ import {
   archiveJourney,
   restoreJourney
 } from 'api/journeys';
-import { CLIENT_SYMPTOM_PRESETS } from 'constants/clientPresets';
+import { CLIENT_CONCERN_PRESETS } from 'constants/clientPresets';
 
 const SECTION_CONFIG = [
   { value: 'profile', label: 'Profile' },
@@ -163,8 +163,8 @@ export default function ClientPortal() {
   const [selectedServices, setSelectedServices] = useState([]);
   const [journeys, setJourneys] = useState([]);
   const [journeysLoading, setJourneysLoading] = useState(false);
-  const [symptomDialog, setSymptomDialog] = useState({ open: false, lead: null, journeyId: null, values: [] });
-  const [symptomSaving, setSymptomSaving] = useState(false);
+  const [concernDialog, setConcernDialog] = useState({ open: false, lead: null, journeyId: null, values: [] });
+  const [concernSaving, setConcernSaving] = useState(false);
   const [stepDialog, setStepDialog] = useState({
     open: false,
     journeyId: null,
@@ -707,8 +707,8 @@ export default function ClientPortal() {
     });
   }, []);
 
-  const handleOpenSymptomDialog = (lead, journey = null) => {
-    setSymptomDialog({
+  const handleOpenConcernDialog = (lead, journey = null) => {
+    setConcernDialog({
       open: true,
       lead: lead || null,
       journeyId: journey?.id || null,
@@ -716,44 +716,44 @@ export default function ClientPortal() {
     });
   };
 
-  const handleCloseSymptomDialog = () => {
-    setSymptomDialog({ open: false, lead: null, journeyId: null, values: [] });
+  const handleCloseConcernDialog = () => {
+    setConcernDialog({ open: false, lead: null, journeyId: null, values: [] });
   };
 
-  const handleSymptomDialogChange = (_event, values) => {
-    setSymptomDialog((prev) => ({ ...prev, values }));
+  const handleConcernDialogChange = (_event, values) => {
+    setConcernDialog((prev) => ({ ...prev, values }));
   };
 
-  const handleSymptomDialogSave = async () => {
+  const handleConcernDialogSave = async () => {
     const selections = Array.from(
-      new Set(symptomDialog.values.map((value) => String(value || '').trim()).filter(Boolean))
+      new Set(concernDialog.values.map((value) => String(value || '').trim()).filter(Boolean))
     );
-    if (!symptomDialog.lead && !symptomDialog.journeyId) {
-      handleCloseSymptomDialog();
+    if (!concernDialog.lead && !concernDialog.journeyId) {
+      handleCloseConcernDialog();
       return;
     }
-    setSymptomSaving(true);
+    setConcernSaving(true);
     try {
       let journey;
-      if (symptomDialog.journeyId) {
-        journey = await updateJourney(symptomDialog.journeyId, { symptoms: selections });
+      if (concernDialog.journeyId) {
+        journey = await updateJourney(concernDialog.journeyId, { symptoms: selections });
       } else {
         const payload = {
-          lead_call_id: symptomDialog.lead?.id,
-          client_name: symptomDialog.lead?.caller_name || symptomDialog.lead?.name || '',
-          client_phone: symptomDialog.lead?.caller_number || '',
-          client_email: symptomDialog.lead?.caller_email || '',
+          lead_call_id: concernDialog.lead?.id,
+          client_name: concernDialog.lead?.caller_name || concernDialog.lead?.name || '',
+          client_phone: concernDialog.lead?.caller_number || '',
+          client_email: concernDialog.lead?.caller_email || '',
           symptoms: selections
         };
         journey = await createJourney(payload);
       }
       upsertJourney(journey);
       triggerMessage('success', 'Client journey updated');
-      handleCloseSymptomDialog();
+      handleCloseConcernDialog();
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to save journey');
     } finally {
-      setSymptomSaving(false);
+      setConcernSaving(false);
     }
   };
 
@@ -1009,13 +1009,18 @@ export default function ClientPortal() {
     return map;
   }, [journeys]);
 
-  const symptomOptions = useMemo(() => {
-    if (profile?.client_subtype && CLIENT_SYMPTOM_PRESETS[profile.client_subtype]) {
-      return CLIENT_SYMPTOM_PRESETS[profile.client_subtype];
+  const concernOptions = useMemo(() => {
+    // First try client_subtype (e.g., 'hvac', 'dental', 'tmj_sleep')
+    if (profile?.client_subtype && CLIENT_CONCERN_PRESETS[profile.client_subtype]) {
+      return CLIENT_CONCERN_PRESETS[profile.client_subtype];
     }
-    const presets = Object.values(CLIENT_SYMPTOM_PRESETS || {}).flat();
-    return presets.length ? Array.from(new Set(presets)) : [];
-  }, [profile?.client_subtype]);
+    // Then try client_type (e.g., 'food_service', 'other')
+    if (profile?.client_type && CLIENT_CONCERN_PRESETS[profile.client_type]) {
+      return CLIENT_CONCERN_PRESETS[profile.client_type];
+    }
+    // Default to general concerns only (not all concerns)
+    return CLIENT_CONCERN_PRESETS.other || [];
+  }, [profile?.client_subtype, profile?.client_type]);
 
   return (
     <MainCard title="Client Portal">
@@ -1401,35 +1406,29 @@ export default function ClientPortal() {
                     </MenuItem>
                   ))}
               </TextField>
-              <TextField
-                select
-                label="Category"
-                value={callFilters.category}
-                onChange={(e) => setCallFilters((prev) => ({ ...prev, category: e.target.value }))}
-              >
-                <MenuItem value="all">All</MenuItem>
-                {['warm', 'very_good', 'applicant', 'needs_attention', 'voicemail', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
-                  <MenuItem key={cat} value={cat}>
-                    {cat.replace('_', ' ')}
-                  </MenuItem>
-                ))}
-              </TextField>
             </Stack>
             {callsLoading && <LinearProgress />}
-            <Grid container spacing={2}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              <Button
+                variant={callFilters.category === 'all' ? 'contained' : 'outlined'}
+                size="small"
+                onClick={() => setCallFilters((prev) => ({ ...prev, category: 'all' }))}
+                sx={{ textTransform: 'none' }}
+              >
+                All
+              </Button>
               {['warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map((cat) => (
-                <Grid item xs={6} md={3} key={cat}>
-                  <Card variant="outlined">
-                    <CardContent>
-                      <Typography variant="subtitle2" color="text.secondary">
-                        {cat.replace('_', ' ').toUpperCase()}
-                      </Typography>
-                      <Typography variant="h4">{callCategories[cat] || 0}</Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
+                <Button
+                  key={cat}
+                  variant={callFilters.category === cat ? 'contained' : 'outlined'}
+                  size="small"
+                  onClick={() => setCallFilters((prev) => ({ ...prev, category: prev.category === cat ? 'all' : cat }))}
+                  sx={{ textTransform: 'none' }}
+                >
+                  {cat.replace('_', ' ').toUpperCase()} ({callCategories[cat] || 0})
+                </Button>
               ))}
-            </Grid>
+            </Box>
             <Divider />
             <Stack spacing={2}>
               {callsLoading && !filteredCalls.length && (
@@ -1490,8 +1489,8 @@ export default function ClientPortal() {
                                 size="small"
                                 color={leadJourney.paused ? 'warning' : 'success'}
                               />
-                              {leadJourney.symptoms?.slice(0, 3).map((symptom) => (
-                                <Chip key={symptom} label={symptom} size="small" variant="outlined" />
+                              {leadJourney.symptoms?.slice(0, 3).map((concern) => (
+                                <Chip key={concern} label={concern} size="small" variant="outlined" />
                               ))}
                               {leadJourney.symptoms?.length > 3 && (
                                 <Chip label={`+${leadJourney.symptoms.length - 3}`} size="small" variant="outlined" />
@@ -1515,9 +1514,9 @@ export default function ClientPortal() {
                             <Button
                               variant="text"
                               size="small"
-                              onClick={() => handleOpenSymptomDialog(call, leadJourney)}
+                              onClick={() => handleOpenConcernDialog(call, leadJourney)}
                             >
-                              {leadJourney ? 'Update Journey' : 'Assign Symptoms'}
+                              {leadJourney ? 'Update Journey' : 'Assign Concerns'}
                             </Button>
                             <Button 
                               variant="contained" 
@@ -1578,7 +1577,7 @@ export default function ClientPortal() {
             </Stack>
             {journeysLoading && <LinearProgress />}
             {!journeysLoading && !journeys.length && (
-              <Alert severity="info">Assign symptoms to a lead from the Leads tab to begin a client journey.</Alert>
+              <Alert severity="info">Assign concerns to a lead from the Leads tab to begin a client journey.</Alert>
             )}
             {journeys.map((journey) => {
               const steps = journey.steps || [];
@@ -1606,8 +1605,8 @@ export default function ClientPortal() {
                         <Chip label="Paused" color="warning" size="small" />
                       )}
                         <Stack direction="row" spacing={1} sx={{ ml: { md: 'auto' } }}>
-                          <Button size="small" onClick={() => handleOpenSymptomDialog(null, journey)}>
-                            Edit Symptoms
+                          <Button size="small" onClick={() => handleOpenConcernDialog(null, journey)}>
+                            Edit Concerns
                           </Button>
                           <Button
                             size="small"
@@ -1627,14 +1626,14 @@ export default function ClientPortal() {
                       )}
             {journey.symptoms?.length > 0 && (
               <Stack direction="row" spacing={1} flexWrap="wrap">
-                {journey.symptoms.map((symptom) => (
-                  <Chip key={`${journey.id}-${symptom}`} label={symptom} size="small" variant="outlined" />
+                {journey.symptoms.map((concern) => (
+                  <Chip key={`${journey.id}-${concern}`} label={concern} size="small" variant="outlined" />
                 ))}
               </Stack>
             )}
             {journey.symptoms_redacted && (
               <Typography variant="caption" color="text.secondary">
-                Symptoms redacted after 90 days.
+                Concerns redacted after 90 days.
               </Typography>
             )}
                       <Box
@@ -1759,8 +1758,8 @@ export default function ClientPortal() {
                         </Stack>
                         {journey.symptoms?.length > 0 && (
                           <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                            {journey.symptoms.map((symptom) => (
-                              <Chip key={`${journey.id}-archived-${symptom}`} label={symptom} size="small" variant="outlined" />
+                            {journey.symptoms.map((concern) => (
+                              <Chip key={`${journey.id}-archived-${concern}`} label={concern} size="small" variant="outlined" />
                             ))}
                           </Stack>
                         )}
@@ -2097,27 +2096,34 @@ export default function ClientPortal() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={symptomDialog.open} onClose={handleCloseSymptomDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{symptomDialog.journeyId ? 'Update Journey Symptoms' : 'Assign Symptoms to Lead'}</DialogTitle>
+      <Dialog open={concernDialog.open} onClose={handleCloseConcernDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>{concernDialog.journeyId ? 'Update Journey Concerns' : 'Assign Concerns to Lead'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Select the symptoms this lead mentioned to start or update their Client Journey.
+              Select the concerns this lead mentioned to start or update their Client Journey.
             </Typography>
             <Autocomplete
               multiple
               freeSolo
-              options={symptomOptions}
-              value={symptomDialog.values}
-              onChange={handleSymptomDialogChange}
-              renderInput={(params) => <TextField {...params} label="Symptoms" placeholder="Type and press Enter" />}
+              options={concernOptions}
+              value={concernDialog.values}
+              onChange={handleConcernDialogChange}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Concerns"
+                  placeholder="Select or type a custom concern"
+                  helperText="Select from suggestions or type a custom concern and press Enter"
+                />
+              )}
             />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseSymptomDialog}>Cancel</Button>
-          <Button variant="contained" onClick={handleSymptomDialogSave} disabled={symptomSaving}>
-            {symptomSaving ? 'Saving…' : 'Save'}
+          <Button onClick={handleCloseConcernDialog}>Cancel</Button>
+          <Button variant="contained" onClick={handleConcernDialogSave} disabled={concernSaving}>
+            {concernSaving ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>

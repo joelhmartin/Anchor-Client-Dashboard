@@ -49,6 +49,7 @@ import useTableSearch from 'hooks/useTableSearch';
 import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
 import { requestPasswordReset } from 'api/auth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
+import { fetchTaskWorkspaces } from 'api/tasks';
 import client from 'api/client';
 import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPresets';
 import { fetchClientServices, saveClientServices } from 'api/services';
@@ -120,7 +121,7 @@ export default function AdminHub() {
   const lastAppliedPromptRef = useRef('');
   const fileInputRef = useRef(null);
   const [deletingClientId, setDeletingClientId] = useState(null);
-  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, clientId: null, label: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false });
   const [selectedClientIds, setSelectedClientIds] = useState([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkSendingOnboarding, setBulkSendingOnboarding] = useState(false);
@@ -131,6 +132,8 @@ export default function AdminHub() {
   const [onboardingLoading, setOnboardingLoading] = useState(false);
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
+  const [taskWorkspaces, setTaskWorkspaces] = useState([]);
+  const [taskWorkspacesLoading, setTaskWorkspacesLoading] = useState(false);
 
   const effectiveRole = user?.effective_role || user?.role;
   const isSuperAdmin = effectiveRole === 'superadmin';
@@ -169,6 +172,28 @@ export default function AdminHub() {
       .then((p) => setPeople(p))
       .catch((err) => setError(err.message || 'Unable to load Monday users'))
       .finally(() => setLoadingPeople(false));
+  }, [canAccessHub]);
+
+  useEffect(() => {
+    if (!canAccessHub) return;
+    let active = true;
+    setTaskWorkspacesLoading(true);
+    fetchTaskWorkspaces()
+      .then((rows) => {
+        if (!active) return;
+        setTaskWorkspaces(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTaskWorkspaces([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setTaskWorkspacesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [canAccessHub]);
 
   useEffect(() => {
@@ -370,12 +395,12 @@ export default function AdminHub() {
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
         await startOnboardingFlow(res.client.id);
-      } else if (res.client.role === 'admin') {
+      } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
-          setSuccess('Admin created. Password reset email sent.');
+          setSuccess(`${res.client.role === 'team' ? 'Team user' : 'Admin'} created. Password reset email sent.`);
         } catch (resetErr) {
-          setError(resetErr.message || 'Admin created, but failed to send reset email.');
+          setError(resetErr.message || 'User created, but failed to send reset email.');
         }
       }
     } catch (err) {
@@ -474,6 +499,8 @@ export default function AdminHub() {
         monday_active_group_id: editing.monday_active_group_id,
         monday_completed_group_id: editing.monday_completed_group_id,
         client_identifier_value: editing.client_identifier_value,
+        task_workspace_id: editing.task_workspace_id,
+        board_prefix: editing.board_prefix,
         account_manager_person_id: editing.account_manager_person_id,
         ai_prompt: editing.ai_prompt,
         ctm_account_number: editing.ctm_account_number,
@@ -524,7 +551,8 @@ export default function AdminHub() {
   const confirmDeleteClient = (clientId) => {
     const target = clients.find((c) => c.id === clientId);
     const label = target ? target.email || `${target.first_name || ''} ${target.last_name || ''}`.trim() : 'this client';
-    setDeleteConfirm({ open: true, clientId, label });
+    const hasBoard = Boolean(target?.task_board_id);
+    setDeleteConfirm({ open: true, clientId, label, hasBoard, deleteBoard: false });
   };
 
   const handleDeleteClient = async () => {
@@ -534,21 +562,21 @@ export default function AdminHub() {
     setError('');
     setSuccess('');
     try {
-      await deleteClient(clientId);
+      const result = await deleteClient(clientId, { deleteBoard: deleteConfirm.deleteBoard });
       setClients((prev) => prev.filter((c) => c.id !== clientId));
       if (editing?.id === clientId) {
         setEditing(null);
       }
-      setSuccess('Client deleted');
+      setSuccess(result.boardDeleted ? 'Client and associated board deleted' : 'Client deleted');
     } catch (err) {
       setError(err.message || 'Unable to delete client');
     } finally {
       setDeletingClientId(null);
-      setDeleteConfirm({ open: false, clientId: null, label: '' });
+      setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false });
     }
   };
 
-  const newRolesOptions = isSuperAdmin ? ['client', 'admin'] : ['client'];
+  const newRolesOptions = isSuperAdmin ? ['client', 'admin', 'team'] : ['client', 'team'];
 
   const handleDocUpload = async () => {
     if (!editing?.id || !docUpload.files.length) return;
@@ -654,29 +682,39 @@ export default function AdminHub() {
  
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
-      <Typography variant="subtitle1">Account</Typography>
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
-          <FormControl fullWidth>
-            <InputLabel>Email</InputLabel>
-            <OutlinedInput value={editing.email || ''} onChange={handleEditChange('email')} label="Email" />
-          </FormControl>
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Display Name" value={editing.display_name || ''} onChange={handleEditChange('display_name')} fullWidth />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <FormControl fullWidth>
-            <InputLabel>Role</InputLabel>
-            <Select value={editing.role || 'client'} onChange={handleEditChange('role')} disabled={!isSuperAdmin} label="Role">
-              <MenuItem value="client">Client</MenuItem>
-              <MenuItem value="admin">Admin</MenuItem>
-              <MenuItem value="superadmin">Superadmin</MenuItem>
-            </Select>
-          </FormControl>
-        </Grid>
-      </Grid>
-
+      {editing?.role === 'client' && (
+        <>
+          <Typography variant="subtitle1">Internal Task Board</Typography>
+          <Autocomplete
+            options={taskWorkspaces}
+            getOptionLabel={(option) => option?.name || ''}
+            value={taskWorkspaces.find((w) => String(w.id) === String(editing.task_workspace_id)) || null}
+            onChange={(_e, val) => setEditing((prev) => ({ ...prev, task_workspace_id: val?.id || '' }))}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Task Workspace"
+                placeholder="Select a workspace"
+                required
+                error={!editing.task_workspace_id && editing.client_identifier_value}
+                helperText={!editing.task_workspace_id && editing.client_identifier_value ? 'Workspace is required when Client Identifier is set' : ''}
+              />
+            )}
+            loading={taskWorkspacesLoading}
+          />
+          <TextField
+            label="Board Prefix"
+            value={editing.board_prefix || ''}
+            onChange={handleEditChange('board_prefix')}
+            helperText="Prepended to every item created on this client board (ex: ACME - Fix homepage)."
+          />
+          {editing.task_board_id && (
+            <Alert severity="success" sx={{ borderRadius: 1 }}>
+              Task board is provisioned for this client.
+            </Alert>
+          )}
+        </>
+      )}
       <Typography variant="subtitle1">Monday.com & Looker</Typography>
       <Autocomplete
         options={boards}
@@ -968,7 +1006,7 @@ export default function AdminHub() {
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
           <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
             <Typography variant="h5" sx={{ mb: 2 }}>
-              Add Client
+              Add User
             </Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} md={4}>
@@ -1265,18 +1303,29 @@ export default function AdminHub() {
         )}
       </Drawer>
 
-      <Dialog open={deleteConfirm.open} onClose={() => setDeleteConfirm({ open: false, clientId: null, label: '' })} maxWidth="xs" fullWidth>
+      <Dialog open={deleteConfirm.open} onClose={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })} maxWidth="xs" fullWidth>
         <DialogTitle>Delete Client</DialogTitle>
         <DialogContent>
-          <Alert severity="warning" sx={{ mb: 1 }}>
+          <Alert severity="warning" sx={{ mb: 2 }}>
             This action cannot be undone.
           </Alert>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Are you sure you want to delete {deleteConfirm.label || 'this client'}?
           </Typography>
+          {deleteConfirm.hasBoard && (
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={deleteConfirm.deleteBoard}
+                  onChange={(e) => setDeleteConfirm((prev) => ({ ...prev, deleteBoard: e.target.checked }))}
+                />
+              }
+              label="Also delete associated task board"
+            />
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '' })}>Cancel</Button>
+          <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })}>Cancel</Button>
           <Button variant="contained" color="error" onClick={handleDeleteClient} disabled={Boolean(deletingClientId)}>
             {deletingClientId ? 'Deleting…' : 'Delete'}
           </Button>

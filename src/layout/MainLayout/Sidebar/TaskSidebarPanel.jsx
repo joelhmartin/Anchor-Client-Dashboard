@@ -27,7 +27,7 @@ function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
 }
 
-export default function TaskSidebarPanel() {
+export default function TaskPanel() {
   const { user } = useAuth();
   const effRole = useMemo(() => getEffectiveRole(user), [user]);
   const canCreateBoard = effRole === 'superadmin' || effRole === 'admin';

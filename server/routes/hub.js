@@ -114,7 +114,7 @@ const DEFAULT_JOURNEY_TEMPLATE = [
     label: 'Week 8 Call + Text/Email',
     channel: 'call,text,email',
     offset_weeks: 8,
-    message: 'Fourth follow-up. Reinforce importance of exam to understand symptoms.',
+    message: 'Fourth follow-up. Reinforce importance of exam to understand concerns.',
     tone: 'empathetic'
   },
   {
@@ -588,7 +588,7 @@ You can review it inside the Anchor admin hub.
 router.get('/profile', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { rows } = await query(
-    `SELECT u.*, cp.monthly_revenue_goal 
+    `SELECT u.*, cp.monthly_revenue_goal, cp.client_type, cp.client_subtype 
      FROM users u 
      LEFT JOIN client_profiles cp ON cp.user_id = u.id 
      WHERE u.id = $1`,
@@ -1111,7 +1111,10 @@ If you were not expecting this email, ignore it.`;
 });
 
 router.get('/notifications', async (req, res) => {
-  const userId = req.portalUserId || req.user.id;
+  const effRole = req.user?.effective_role || req.user?.role;
+  const isStaffRole = effRole === 'superadmin' || effRole === 'admin' || effRole === 'team';
+  // Staff should always see their own notifications (even if a portal/impersonation context exists).
+  const userId = isStaffRole ? req.user.id : req.portalUserId || req.user.id;
   try {
     const { notifications, unread } = await fetchUserNotifications(userId, Number(req.query.limit) || 25);
     res.json({ notifications, unread });
@@ -1122,7 +1125,9 @@ router.get('/notifications', async (req, res) => {
 });
 
 router.post('/notifications/:id/read', async (req, res) => {
-  const userId = req.portalUserId || req.user.id;
+  const effRole = req.user?.effective_role || req.user?.role;
+  const isStaffRole = effRole === 'superadmin' || effRole === 'admin' || effRole === 'team';
+  const userId = isStaffRole ? req.user.id : req.portalUserId || req.user.id;
   const notificationId = req.params.id;
   try {
     await markNotificationRead(userId, notificationId);
@@ -1134,7 +1139,9 @@ router.post('/notifications/:id/read', async (req, res) => {
 });
 
 router.post('/notifications/read-all', async (req, res) => {
-  const userId = req.portalUserId || req.user.id;
+  const effRole = req.user?.effective_role || req.user?.role;
+  const isStaffRole = effRole === 'superadmin' || effRole === 'admin' || effRole === 'team';
+  const userId = isStaffRole ? req.user.id : req.portalUserId || req.user.id;
   try {
     await markAllNotificationsRead(userId);
     res.json({ message: 'All notifications marked as read' });
@@ -1174,7 +1181,7 @@ router.get('/clients', isAdminOrEditor, async (_req, res) => {
             COALESCE(cp.ai_prompt, $1) as ai_prompt
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
-     WHERE u.role IN ('client', 'editor')
+     WHERE u.role IN ('client', 'editor', 'admin', 'team')
      ORDER BY u.created_at DESC`,
     [DEFAULT_AI_PROMPT]
   );
@@ -1185,7 +1192,9 @@ router.post('/clients', isAdminOrEditor, async (req, res) => {
   try {
     const { email, name, role } = req.body || {};
     if (!email) return res.status(400).json({ message: 'Email is required' });
-    const newRole = role === 'editor' ? (req.user.role === 'admin' ? 'editor' : 'client') : 'client';
+    const allowedRoles = ['client', 'admin', 'team'];
+    const requestedRole = allowedRoles.includes(role) ? role : 'client';
+    const newRole = requestedRole;
     const existing = await query('SELECT id, email, first_name, last_name FROM users WHERE email = $1 LIMIT 1', [email]);
     const [first, ...rest] = (name || '').trim().split(' ').filter(Boolean);
     const last = rest.join(' ');
@@ -1236,6 +1245,8 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
     monday_active_group_id,
     monday_completed_group_id,
     client_identifier_value,
+    task_workspace_id,
+    board_prefix,
     account_manager_person_id,
     ai_prompt,
     ctm_account_number,
@@ -1252,8 +1263,8 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
   if (user_email) {
     await query('UPDATE users SET email=$1 WHERE id=$2', [user_email, clientId]);
   }
-  if (role && req.user.role === 'admin') {
-    const nextRole = ['client', 'editor', 'admin'].includes(role) ? role : 'client';
+  if (role && (req.user.effective_role || req.user.role) === 'superadmin') {
+    const nextRole = ['client', 'editor', 'admin', 'team'].includes(role) ? role : 'client';
     await query('UPDATE users SET role=$1 WHERE id=$2', [nextRole, clientId]);
   }
   const exists = await query('SELECT user_id FROM client_profiles WHERE user_id = $1', [clientId]);
@@ -1264,6 +1275,8 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
     monday_active_group_id || null,
     monday_completed_group_id || null,
     client_identifier_value || null,
+    task_workspace_id || null,
+    board_prefix || null,
     account_manager_person_id || null,
     ai_prompt || null,
     ctm_account_number || null,
@@ -1278,18 +1291,76 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
     await query(
       `UPDATE client_profiles
          SET looker_url=$1,monday_board_id=$2,monday_group_id=$3,monday_active_group_id=$4,monday_completed_group_id=$5,
-             client_identifier_value=$6, account_manager_person_id=$7, ai_prompt=$8, ctm_account_number=$9, ctm_api_key=$10, ctm_api_secret=$11,
-             auto_star_enabled=$12, client_type=$13, client_subtype=$14, updated_at=NOW()
-       WHERE user_id=$15`,
+             client_identifier_value=$6, task_workspace_id=$7, board_prefix=$8,
+             account_manager_person_id=$9, ai_prompt=$10, ctm_account_number=$11, ctm_api_key=$12, ctm_api_secret=$13,
+             auto_star_enabled=$14, client_type=$15, client_subtype=$16, updated_at=NOW()
+       WHERE user_id=$17`,
       params
     );
   } else {
     await query(
-      `INSERT INTO client_profiles (looker_url,monday_board_id,monday_group_id,monday_active_group_id,monday_completed_group_id,client_identifier_value,account_manager_person_id,ai_prompt,ctm_account_number,ctm_api_key,ctm_api_secret,auto_star_enabled,client_type,client_subtype,user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      `INSERT INTO client_profiles (
+         looker_url,monday_board_id,monday_group_id,monday_active_group_id,monday_completed_group_id,
+         client_identifier_value,task_workspace_id,board_prefix,
+         account_manager_person_id,ai_prompt,ctm_account_number,ctm_api_key,ctm_api_secret,auto_star_enabled,
+         client_type,client_subtype,user_id
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       params
     );
   }
+
+  // If this is a client account and we have a task workspace + identifier, provision (or update) their internal task board.
+  try {
+    const { rows: userRoleRows } = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [clientId]);
+    const targetRole = userRoleRows[0]?.role;
+    if (targetRole === 'client' && task_workspace_id && client_identifier_value) {
+      const name = String(client_identifier_value || '').trim();
+      const prefix = String(board_prefix || '').trim();
+
+      const { rows: wsRows } = await query('SELECT id FROM task_workspaces WHERE id = $1 LIMIT 1', [task_workspace_id]);
+      if (!wsRows.length) {
+        return res.status(400).json({ message: 'Selected task workspace is invalid' });
+      }
+
+      const { rows: profileRows } = await query(
+        'SELECT task_board_id FROM client_profiles WHERE user_id = $1 LIMIT 1',
+        [clientId]
+      );
+      const existingBoardId = profileRows[0]?.task_board_id;
+
+      if (existingBoardId) {
+        // Keep board name/prefix in sync with latest onboarding values.
+        await query('UPDATE task_boards SET name = $1, board_prefix = $2 WHERE id = $3', [name, prefix || null, existingBoardId]);
+        await query(
+          'UPDATE client_profiles SET board_prefix = $1, task_workspace_id = $2, updated_at = NOW() WHERE user_id = $3',
+          [prefix || null, task_workspace_id, clientId]
+        );
+      } else {
+        const { rows: boardRows } = await query(
+          `INSERT INTO task_boards (workspace_id, name, description, created_by, board_prefix)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id`,
+          [task_workspace_id, name, `Client board: ${name}`, req.user.id, prefix || null]
+        );
+        const newBoardId = boardRows[0]?.id;
+        if (newBoardId) {
+          // Create a default group so items can be added immediately.
+          await query(`INSERT INTO task_groups (board_id, name, order_index) VALUES ($1,$2,$3)`, [newBoardId, 'Main', 0]);
+          await query(
+            `UPDATE client_profiles
+               SET task_board_id = $1, task_workspace_id = $2, board_prefix = $3, updated_at = NOW()
+             WHERE user_id = $4`,
+            [newBoardId, task_workspace_id, prefix || null, clientId]
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[clients:task-board:provision]', err);
+    // Do not fail the whole client update if board provisioning fails.
+  }
+
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_name, u.email, u.role, cp.*
      FROM users u LEFT JOIN client_profiles cp ON cp.user_id = u.id WHERE u.id=$1`,
@@ -1300,18 +1371,35 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
 
 router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    const effRole = req.user.effective_role || req.user.role;
+    if (effRole !== 'superadmin' && effRole !== 'admin') {
       return res.status(403).json({ message: 'Only admins can delete clients.' });
     }
     const clientId = req.params.id;
+    const deleteBoard = req.query.delete_board === 'true';
+
     const { rows } = await query('SELECT id, role FROM users WHERE id = $1 LIMIT 1', [clientId]);
     if (!rows.length) return res.status(404).json({ message: 'Client not found' });
     if (rows[0].role !== 'client') {
       return res.status(400).json({ message: 'Only client accounts can be deleted.' });
     }
+
+    // Check if client has an associated task board
+    const { rows: profileRows } = await query(
+      'SELECT task_board_id FROM client_profiles WHERE user_id = $1',
+      [clientId]
+    );
+    const taskBoardId = profileRows[0]?.task_board_id;
+
+    // Delete the associated task board if requested
+    if (deleteBoard && taskBoardId) {
+      await query('DELETE FROM task_boards WHERE id = $1', [taskBoardId]);
+      logEvent('clients:delete', 'Associated task board deleted', { clientId, boardId: taskBoardId, deletedBy: req.user.id });
+    }
+
     await query('DELETE FROM users WHERE id = $1', [clientId]);
-    logEvent('clients:delete', 'Client deleted', { clientId, deletedBy: req.user.id });
-    res.json({ message: 'Client deleted' });
+    logEvent('clients:delete', 'Client deleted', { clientId, deletedBy: req.user.id, boardDeleted: deleteBoard && !!taskBoardId });
+    res.json({ message: 'Client deleted', boardDeleted: deleteBoard && !!taskBoardId });
   } catch (err) {
     console.error('[clients:delete]', err);
     res.status(500).json({ message: 'Unable to delete client' });

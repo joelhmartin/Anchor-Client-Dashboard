@@ -73,20 +73,18 @@ export default function NotificationList({ notifications = [], onSelect, loading
             >
               <IconBell stroke={1.5} size="18px" />
             </Avatar>
-            <Stack spacing={0.5} sx={{ flex: 1 }}>
+            <Stack spacing={0.25} sx={{ flex: 1 }}>
               <Typography variant="caption" color="text.secondary">
                 {formatTimestamp(notification.created_at)}
               </Typography>
-              {notification.body && (
-                <Typography variant="body2" color="text.primary" sx={{ fontSize: '0.85rem' }}>
+              <Typography variant="subtitle2" color="text.primary" sx={{ lineHeight: 1.25 }}>
+                {notification.title || 'Notification'}
+              </Typography>
+              {notification.body ? (
+                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.82rem' }}>
                   {notification.body}
                 </Typography>
-              )}
-              {!notification.body && (
-                <Typography variant="body2" color="text.primary" sx={{ fontSize: '0.85rem' }}>
-                  {notification.title}
-                </Typography>
-              )}
+              ) : null}
             </Stack>
           </Stack>
         </ListItemWrapper>

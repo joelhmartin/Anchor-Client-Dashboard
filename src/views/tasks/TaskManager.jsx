@@ -3,13 +3,20 @@ import { useSearchParams } from 'react-router-dom';
 
 import {
   Alert,
+  Avatar,
+  AvatarGroup,
   Box,
   Button,
   Checkbox,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   Drawer,
   FormControlLabel,
+  IconButton,
   List,
   ListItemButton,
   ListItemText,
@@ -21,8 +28,10 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography
 } from '@mui/material';
+import { IconEye, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
@@ -63,11 +72,80 @@ import {
   updateTaskBoard,
   updateTaskItem,
   runTaskBoardsReport,
-  fetchMyWork
+  fetchMyWork,
+  markUpdatesViewed,
+  fetchUpdateViews,
+  createBoardStatusLabel,
+  updateStatusLabel,
+  deleteStatusLabel,
+  initBoardStatusLabels
 } from 'api/tasks';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
+}
+
+function normalizeDateStr(value) {
+  if (!value) return value;
+  if (typeof value === 'string') return value.slice(0, 10);
+  return value;
+}
+
+function normalizeBoardView(view) {
+  if (!view) return view;
+  const items = Array.isArray(view?.items)
+    ? view.items.map((it) => ({
+        ...it,
+        due_date: normalizeDateStr(it.due_date)
+      }))
+    : [];
+  return { ...view, items };
+}
+
+// Default status labels (used when board has none)
+const DEFAULT_STATUS_LABELS = [
+  { id: 'default-todo', label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+  { id: 'default-working', label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+  { id: 'default-stuck', label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+  { id: 'default-done', label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+  { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+];
+
+// Get status color from labels array
+function getStatusColor(status, statusLabels = []) {
+  const labels = statusLabels.length ? statusLabels : DEFAULT_STATUS_LABELS;
+  const match = labels.find((l) => l.label === status);
+  if (match) {
+    return { bg: match.color, fg: '#ffffff' };
+  }
+  // Fallback for legacy status values
+  const legacyMap = {
+    done: '#00c875',
+    working: '#fdab3d',
+    blocked: '#e2445c',
+    stuck: '#e2445c',
+    needs_attention: '#ff642e',
+    todo: '#808080'
+  };
+  return { bg: legacyMap[status] || '#808080', fg: '#ffffff' };
+}
+
+function clampNonNegInt(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.floor(n));
+}
+
+function normalizeHm({ hours, minutes }) {
+  const h = clampNonNegInt(hours);
+  let mRaw = Number(minutes);
+  if (!Number.isFinite(mRaw)) mRaw = 0;
+  mRaw = Math.max(0, mRaw);
+  // enforce 15-minute increments
+  const mRounded = Math.round(mRaw / 15) * 15;
+  const carry = Math.floor(mRounded / 60);
+  const m = mRounded % 60;
+  return { hours: h + carry, minutes: m };
 }
 
 export default function TaskManager() {
@@ -94,10 +172,17 @@ export default function TaskManager() {
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [creatingAutomation, setCreatingAutomation] = useState(false);
   const [automationsAnchorEl, setAutomationsAnchorEl] = useState(null);
-  const [automationToStatus, setAutomationToStatus] = useState('needs_attention');
+  const [automationToStatus, setAutomationToStatus] = useState('Needs Attention');
   const [automationAction, setAutomationAction] = useState('notify_admins');
   const [automationTitle, setAutomationTitle] = useState('Task needs attention');
-  const [automationBody, setAutomationBody] = useState('An item was moved to needs_attention.');
+  const [automationBody, setAutomationBody] = useState('An item was moved to Needs Attention.');
+
+  // Status labels editor
+  const [statusLabelsDialogOpen, setStatusLabelsDialogOpen] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(null);
+  const [newLabelText, setNewLabelText] = useState('');
+  const [newLabelColor, setNewLabelColor] = useState('#808080');
+  const [savingLabel, setSavingLabel] = useState(false);
   const [boardReport, setBoardReport] = useState(null);
   const [boardReportLoading, setBoardReportLoading] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
@@ -121,16 +206,24 @@ export default function TaskManager() {
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionOptions, setMentionOptions] = useState([]);
   const [mentionLoading, setMentionLoading] = useState(false);
+  // Update view tracking
+  const [updateViews, setUpdateViews] = useState({}); // { updateId: [{ user_id, user_name, avatar_url, viewed_at }] }
+  const [viewPopperAnchor, setViewPopperAnchor] = useState(null);
+  const [viewPopperUpdateId, setViewPopperUpdateId] = useState(null);
   const [itemFiles, setItemFiles] = useState([]);
   const [itemFilesLoading, setItemFilesLoading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [timeEntries, setTimeEntries] = useState([]);
   const [timeEntriesLoading, setTimeEntriesLoading] = useState(false);
   const [loggingTime, setLoggingTime] = useState(false);
-  const [timeMinutes, setTimeMinutes] = useState('');
   const [timeBillable, setTimeBillable] = useState(true);
   const [timeCategory, setTimeCategory] = useState('Other');
   const [timeDescription, setTimeDescription] = useState('');
+  const [timeHours, setTimeHours] = useState(0);
+  const [timeMins, setTimeMins] = useState(0);
+  const [billableHours, setBillableHours] = useState(0);
+  const [billableMins, setBillableMins] = useState(0);
+  const [billableTouched, setBillableTouched] = useState(false);
   const [aiSummary, setAiSummary] = useState(null);
   const [aiSummaryMeta, setAiSummaryMeta] = useState({ is_stale: false, latest_update_at: null });
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
@@ -143,6 +236,15 @@ export default function TaskManager() {
   const [subitemsLoading, setSubitemsLoading] = useState(false);
   const [newSubitemName, setNewSubitemName] = useState('');
   const [creatingSubitem, setCreatingSubitem] = useState(false);
+
+  const closeItemDrawer = () => {
+    setItemDrawerOpen(false);
+    setActiveItem(null);
+    // Clear deep-link params so background board refreshes don't re-open the drawer.
+    const next = new URLSearchParams(searchParams);
+    next.delete('item');
+    setSearchParams(next, { replace: true });
+  };
 
   // Board scroll/highlight helpers
   const itemCardRefs = useRef({});
@@ -161,15 +263,118 @@ export default function TaskManager() {
   // My Work
   const [myWorkBoards, setMyWorkBoards] = useState([]);
   const [myWorkLoading, setMyWorkLoading] = useState(false);
+  const [myWorkMembers, setMyWorkMembers] = useState([]);
+  const refreshMyWork = async () => {
+    try {
+      const rows = await fetchMyWork();
+      if (Array.isArray(rows)) setMyWorkBoards(rows);
+    } catch (_err) {
+      // ignore
+    }
+  };
 
   // Workspace boards (when only workspace selected)
   const [workspaceBoards, setWorkspaceBoards] = useState([]);
   const [workspaceBoardsLoading, setWorkspaceBoardsLoading] = useState(false);
 
+  // Current status labels (from boardView or defaults)
+  const statusLabels = boardView?.status_labels || DEFAULT_STATUS_LABELS;
+  const isAdmin = ['superadmin', 'admin'].includes(user?.effective_role);
+
+  // Status label management functions
+  const handleInitializeLabels = async () => {
+    if (!activeBoardId) return;
+    setSavingLabel(true);
+    try {
+      const labels = await initBoardStatusLabels(activeBoardId);
+      setBoardView((prev) => ({ ...prev, status_labels: labels }));
+    } catch (err) {
+      console.error('Failed to initialize status labels:', err);
+    }
+    setSavingLabel(false);
+  };
+
+  const handleAddLabel = async () => {
+    if (!activeBoardId || !newLabelText.trim()) return;
+    setSavingLabel(true);
+    try {
+      const label = await createBoardStatusLabel(activeBoardId, {
+        label: newLabelText.trim(),
+        color: newLabelColor
+      });
+      setBoardView((prev) => ({
+        ...prev,
+        status_labels: [...(prev.status_labels || []), label]
+      }));
+      setNewLabelText('');
+      setNewLabelColor('#808080');
+    } catch (err) {
+      console.error('Failed to add status label:', err);
+    }
+    setSavingLabel(false);
+  };
+
+  const handleUpdateLabel = async (labelId, updates) => {
+    setSavingLabel(true);
+    try {
+      const updated = await updateStatusLabel(labelId, updates);
+      setBoardView((prev) => ({
+        ...prev,
+        status_labels: (prev.status_labels || []).map((l) => (l.id === labelId ? updated : l))
+      }));
+      setEditingLabel(null);
+    } catch (err) {
+      console.error('Failed to update status label:', err);
+    }
+    setSavingLabel(false);
+  };
+
+  const handleDeleteLabel = async (labelId) => {
+    if (!confirm('Delete this status label? Items using it will keep their current status text.')) return;
+    setSavingLabel(true);
+    try {
+      await deleteStatusLabel(labelId);
+      setBoardView((prev) => ({
+        ...prev,
+        status_labels: (prev.status_labels || []).filter((l) => l.id !== labelId)
+      }));
+    } catch (err) {
+      console.error('Failed to delete status label:', err);
+    }
+    setSavingLabel(false);
+  };
+
   // Close overlays when pane changes to avoid blocking navigation (e.g., reports)
   useEffect(() => {
     setAutomationsAnchorEl(null);
   }, [pane]);
+
+  // When billable is toggled, keep billable duration in sync unless user overrides it.
+  useEffect(() => {
+    if (!timeBillable) {
+      setBillableTouched(false);
+      setBillableHours(0);
+      setBillableMins(0);
+      return;
+    }
+    // billable on: default billable duration == duration
+    if (!billableTouched) {
+      const next = normalizeHm({ hours: timeHours, minutes: timeMins });
+      setBillableHours(next.hours);
+      setBillableMins(next.minutes);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeBillable]);
+
+  // If billable duration hasn't been manually edited, keep it mirrored to Duration.
+  useEffect(() => {
+    if (!timeBillable) return;
+    if (billableTouched) return;
+    const next = normalizeHm({ hours: timeHours, minutes: timeMins });
+    if (billableHours !== next.hours) setBillableHours(next.hours);
+    if (billableMins !== next.minutes) setBillableMins(next.minutes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeHours, timeMins, timeBillable, billableTouched]);
 
   const updateItemField = async (patch) => {
     if (!activeItem?.id) return;
@@ -208,7 +413,7 @@ export default function TaskManager() {
     setError('');
     try {
       const data = await fetchTaskBoardView(boardId);
-      setBoardView(data);
+      setBoardView(normalizeBoardView(data));
       // Ensure workspace param is populated for sidebar + dropdowns when deep-linked by board only
       if (data?.board?.workspace_id && !activeWorkspaceId) {
         const next = new URLSearchParams(searchParams);
@@ -306,13 +511,21 @@ export default function TaskManager() {
     if (pane !== 'my-work') return;
     setMyWorkLoading(true);
     const run = async () => {
+      let rows = [];
       try {
-        const rows = await fetchMyWork();
-        if (rows && rows.length) {
-          setMyWorkBoards(rows);
-          return;
-        }
-        // Fallback: derive my work client-side across all boards
+        rows = await fetchMyWork();
+      } catch (_err) {
+        rows = [];
+      }
+
+      if (rows && rows.length) {
+        setMyWorkBoards(rows);
+        setMyWorkLoading(false);
+        return;
+      }
+
+      // Fallback: derive my work client-side across all boards
+      try {
         const boards = await fetchTaskBoardsAll();
         const me = user?.id;
         const grouped = [];
@@ -346,6 +559,102 @@ export default function TaskManager() {
     };
     run();
   }, [pane]);
+
+  // Load members for all workspaces represented in My Work so the People picker works
+  useEffect(() => {
+    if (pane !== 'my-work') return;
+    const workspaceIds = Array.from(new Set((myWorkBoards || []).map((b) => b.workspace_id).filter(Boolean)));
+    if (!workspaceIds.length) {
+      setMyWorkMembers([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const lists = await Promise.all(
+          workspaceIds.map((wsId) =>
+            fetchTaskWorkspaceMembers(wsId)
+              .then((m) => m || [])
+              .catch(() => [])
+          )
+        );
+        if (cancelled) return;
+        const merged = [];
+        const seen = new Set();
+        for (const list of lists) {
+          for (const m of list) {
+            if (m?.user_id && !seen.has(m.user_id)) {
+              seen.add(m.user_id);
+              merged.push(m);
+            }
+          }
+        }
+        setMyWorkMembers(merged);
+      } catch (_err) {
+        if (!cancelled) setMyWorkMembers([]);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [pane, myWorkBoards]);
+
+  // My Work derived structures for BoardTable reuse
+  const myWorkGroups = useMemo(() => {
+    if (!Array.isArray(myWorkBoards)) return [];
+    return myWorkBoards.map((b) => ({
+      id: b.board_id,
+      name: b.board_name,
+      count: (b.items || []).length
+    }));
+  }, [myWorkBoards]);
+
+  const myWorkItemsByGroup = useMemo(() => {
+    const map = {};
+    if (!Array.isArray(myWorkBoards)) return map;
+    for (const b of myWorkBoards) {
+      const gid = b.board_id;
+      map[gid] = (b.items || []).map((it) => ({
+        ...it,
+        group_id: gid
+      }));
+    }
+    return map;
+  }, [myWorkBoards]);
+
+  const myWorkAssigneesByItem = useMemo(() => {
+    const map = {};
+    if (!Array.isArray(myWorkBoards)) return map;
+    for (const b of myWorkBoards) {
+      for (const it of b.items || []) {
+        if (it.id) map[it.id] = it.assignees || [];
+      }
+    }
+    return map;
+  }, [myWorkBoards]);
+
+  const myWorkUpdateCounts = useMemo(() => {
+    const map = {};
+    if (!Array.isArray(myWorkBoards)) return map;
+    for (const b of myWorkBoards) {
+      for (const it of b.items || []) {
+        if (it.id) map[it.id] = Number(it.update_count || 0);
+      }
+    }
+    return map;
+  }, [myWorkBoards]);
+
+  const myWorkTimeTotals = useMemo(() => {
+    const map = {};
+    if (!Array.isArray(myWorkBoards)) return map;
+    for (const b of myWorkBoards) {
+      for (const it of b.items || []) {
+        if (it.id) map[it.id] = Number(it.time_total_minutes || 0);
+      }
+    }
+    return map;
+  }, [myWorkBoards]);
 
   // Sync reporting selections from URL
   useEffect(() => {
@@ -592,10 +901,14 @@ export default function TaskManager() {
     setItemFilesLoading(true);
     setTimeEntries([]);
     setTimeEntriesLoading(true);
-    setTimeMinutes('');
+    setTimeHours(0);
+    setTimeMins(0);
     setTimeBillable(true);
     setTimeCategory('Other');
     setTimeDescription('');
+    setBillableHours(0);
+    setBillableMins(0);
+    setBillableTouched(false);
     setAiSummary(null);
     setAiSummaryMeta({ is_stale: false, latest_update_at: null });
     setAiSummaryLoading(true);
@@ -621,6 +934,17 @@ export default function TaskManager() {
       setAiSummaryMeta({ is_stale: Boolean(ai.is_stale), latest_update_at: ai.latest_update_at || null });
       setAssignees(ass);
       setSubitems(subs);
+
+      // Mark updates as viewed by current user & fetch view info
+      if (updates.length) {
+        const updateIds = updates.map((u) => u.id);
+        markUpdatesViewed(updateIds).catch(() => {}); // fire-and-forget
+        fetchUpdateViews(updateIds)
+          .then((views) => setUpdateViews(views))
+          .catch(() => {});
+      } else {
+        setUpdateViews({});
+      }
     } catch (err) {
       setError(err.message || 'Unable to load item updates');
     } finally {
@@ -639,15 +963,26 @@ export default function TaskManager() {
     // optimistic update board view
     setBoardView((prev) => {
       if (!prev?.items) return prev;
-      return { ...prev, items: prev.items.map((it) => (it.id === itemId ? { ...it, ...patch } : it)) };
+      return {
+        ...prev,
+        items: prev.items.map((it) =>
+          it.id === itemId ? { ...it, ...patch, due_date: normalizeDateStr(patch.due_date ?? it.due_date) } : it
+        )
+      };
     });
     try {
       const updated = await updateTaskItem(itemId, patch);
       setBoardView((prev) => {
         if (!prev?.items) return prev;
-        return { ...prev, items: prev.items.map((it) => (it.id === itemId ? updated : it)) };
+        return {
+          ...prev,
+          items: prev.items.map((it) => (it.id === itemId ? { ...updated, due_date: normalizeDateStr(updated.due_date) } : it))
+        };
       });
-      if (activeItem?.id === itemId) setActiveItem(updated);
+      if (activeItem?.id === itemId) setActiveItem({ ...updated, due_date: normalizeDateStr(updated.due_date) });
+      if (pane === 'my-work') {
+        refreshMyWork();
+      }
     } catch (err) {
       setError(err.message || 'Unable to update item');
       // reload view to recover
@@ -691,6 +1026,11 @@ export default function TaskManager() {
         const ass = await fetchTaskItemAssignees(itemId);
         setAssignees(ass);
       }
+      // Refresh board view so assignee chips/avatars update immediately.
+      if (activeBoardId) await loadBoardView(activeBoardId);
+      if (pane === 'my-work') {
+        refreshMyWork();
+      }
     } catch (err) {
       setError(err.message || 'Unable to update assignees');
       if (activeBoardId) loadBoardView(activeBoardId);
@@ -733,6 +1073,14 @@ export default function TaskManager() {
       setNewUpdateText('');
       // Mark summary as stale locally; user can refresh.
       setAiSummaryMeta((prev) => ({ ...prev, is_stale: true }));
+      // Refresh view tracking
+      if (updates.length) {
+        const updateIds = updates.map((u) => u.id);
+        markUpdatesViewed(updateIds).catch(() => {});
+        fetchUpdateViews(updateIds)
+          .then((views) => setUpdateViews(views))
+          .catch(() => {});
+      }
     } catch (err) {
       setError(err.message || 'Unable to post update');
     } finally {
@@ -910,21 +1258,37 @@ export default function TaskManager() {
 
   const handleLogTime = async () => {
     if (!activeItem?.id) return;
-    const minutes = Number(timeMinutes);
-    if (!Number.isFinite(minutes) || minutes < 0) return;
+    const dur = normalizeHm({ hours: timeHours, minutes: timeMins });
+    const minutes = dur.hours * 60 + dur.minutes;
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
     setLoggingTime(true);
     setError('');
     try {
-      await createTaskItemTimeEntry(activeItem.id, {
+      const payload = {
         time_spent_minutes: minutes,
         is_billable: timeBillable,
         work_category: timeCategory,
         description: timeDescription || ''
-      });
+      };
+      if (timeBillable) {
+        const bdur = billableTouched ? normalizeHm({ hours: billableHours, minutes: billableMins }) : dur;
+        let billableMinutes = bdur.hours * 60 + bdur.minutes;
+        if (!Number.isFinite(billableMinutes) || billableMinutes < 0) billableMinutes = minutes;
+        // Billable minutes cannot exceed total duration
+        billableMinutes = Math.min(minutes, billableMinutes);
+        payload.billable_minutes = billableMinutes;
+      }
+      await createTaskItemTimeEntry(activeItem.id, payload);
       const times = await fetchTaskItemTimeEntries(activeItem.id);
       setTimeEntries(times);
-      setTimeMinutes('');
+      // Refresh board view so time_totals_by_item updates in the grid immediately.
+      if (activeBoardId) await loadBoardView(activeBoardId);
+      setTimeHours(0);
+      setTimeMins(0);
       setTimeDescription('');
+      setBillableHours(0);
+      setBillableMins(0);
+      setBillableTouched(false);
     } catch (err) {
       setError(err.message || 'Unable to log time');
     } finally {
@@ -954,7 +1318,24 @@ export default function TaskManager() {
 
     if (pane === 'billing') return <BillingPane />;
 
-    if (pane === 'my-work') return <MyWorkPane boards={myWorkBoards} loading={myWorkLoading} />;
+    if (pane === 'my-work')
+      return (
+        <MyWorkPane
+          loading={myWorkLoading}
+          groups={myWorkGroups}
+          itemsByGroup={myWorkItemsByGroup}
+          assigneesByItem={myWorkAssigneesByItem}
+          updateCountsByItem={myWorkUpdateCounts}
+          timeTotalsByItem={myWorkTimeTotals}
+          workspaceMembers={myWorkMembers}
+          onUpdateItem={updateItemInline}
+          onToggleAssignee={toggleAssigneeInline}
+          onClickItem={(it, tab) => {
+            if (tab) setDrawerTab(tab);
+            openItemDrawer(it);
+          }}
+        />
+      );
 
     // Boards pane
     return (
@@ -1013,6 +1394,7 @@ export default function TaskManager() {
                 workspaceMembers={workspaceMembers}
                 updateCountsByItem={boardView?.update_counts_by_item || {}}
                 timeTotalsByItem={boardView?.time_totals_by_item || {}}
+                statusLabels={statusLabels}
                 highlightedItemId={highlightedItemId}
                 onUpdateItem={updateItemInline}
                 onToggleAssignee={toggleAssigneeInline}
@@ -1120,11 +1502,11 @@ export default function TaskManager() {
 
               <Typography variant="subtitle2">Create automation</Typography>
               <Select size="small" value={automationToStatus} onChange={(e) => setAutomationToStatus(e.target.value)}>
-                <MenuItem value="todo">Todo</MenuItem>
-                <MenuItem value="working">Working</MenuItem>
-                <MenuItem value="blocked">Blocked</MenuItem>
-                <MenuItem value="done">Done</MenuItem>
-                <MenuItem value="needs_attention">Needs Attention</MenuItem>
+                {statusLabels.map((sl) => (
+                  <MenuItem key={sl.id} value={sl.label}>
+                    {sl.label}
+                  </MenuItem>
+                ))}
               </Select>
               <Select size="small" value={automationAction} onChange={(e) => setAutomationAction(e.target.value)}>
                 <MenuItem value="notify_admins">Notify admins</MenuItem>
@@ -1150,165 +1532,62 @@ export default function TaskManager() {
         </Popper>
       </Stack>
 
-      <Drawer
-        anchor="right"
-        open={itemDrawerOpen}
-        onClose={() => setItemDrawerOpen(false)}
-        PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}
-      >
+      <Drawer anchor="right" open={itemDrawerOpen} onClose={closeItemDrawer} PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}>
         <Box sx={{ p: 2 }}>
           <Stack spacing={1.5}>
-            <Typography variant="h6">{activeItem?.name || 'Item'}</Typography>
-            <Typography variant="caption" color="text.secondary">
-              Status: {activeItem?.status || '-'}
-            </Typography>
-            <Divider />
-
-            <Typography variant="subtitle1">Fields</Typography>
-            <Stack spacing={1}>
-              <Select size="small" value={activeItem?.status || 'todo'} onChange={(e) => updateItemField({ status: e.target.value })}>
-                <MenuItem value="todo">Todo</MenuItem>
-                <MenuItem value="working">Working</MenuItem>
-                <MenuItem value="blocked">Blocked</MenuItem>
-                <MenuItem value="done">Done</MenuItem>
-                <MenuItem value="needs_attention">Needs Attention</MenuItem>
-              </Select>
-              <TextField
-                label="Due date"
-                type="date"
-                value={activeItem?.due_date || ''}
-                onChange={(e) => updateItemField({ due_date: e.target.value || null })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Stack>
-
-            <Divider />
-
-            <Typography variant="subtitle1">Assignees</Typography>
-            {assigneesLoading ? (
-              <CircularProgress size={18} />
-            ) : (
-              <Stack spacing={1}>
-                {!assignees.length && (
-                  <Typography variant="body2" color="text.secondary">
-                    No assignees yet.
-                  </Typography>
-                )}
-                {assignees.map((a) => {
-                  const name = `${a.first_name || ''} ${a.last_name || ''}`.trim();
-                  const display = name || a.email || a.user_id;
-                  return (
+            <Typography variant="h3">{activeItem?.name || 'Item'}</Typography>
+            <Stack spacing={0.5}>
+              <Typography variant="caption" color="text.secondary">
+                Status
+              </Typography>
+              <Select
+                size="small"
+                value={activeItem?.status || 'To Do'}
+                onChange={(e) => updateItemField({ status: e.target.value })}
+                sx={{
+                  width: '100%',
+                  '& .MuiSelect-select': { py: 0.5 },
+                  ...(activeItem?.status
+                    ? {
+                        bgcolor: getStatusColor(activeItem.status, statusLabels).bg,
+                        // MUI Select renders text/icon inside nested elements; set them explicitly.
+                        color: getStatusColor(activeItem.status, statusLabels).fg,
+                        '& .MuiSelect-select': { color: getStatusColor(activeItem.status, statusLabels).fg, py: 0.5 },
+                        '& .MuiSvgIcon-root': { color: getStatusColor(activeItem.status, statusLabels).fg },
+                        borderRadius: 999,
+                        '.MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' }
+                      }
+                    : {})
+                }}
+              >
+                {statusLabels.map((sl) => (
+                  <MenuItem key={sl.id} value={sl.label}>
                     <Box
-                      key={a.user_id}
+                      component="span"
                       sx={{
-                        p: 1,
-                        border: '1px solid',
-                        borderColor: 'divider',
-                        borderRadius: 2,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 1
+                        display: 'inline-block',
+                        width: 12,
+                        height: 12,
+                        borderRadius: '50%',
+                        bgcolor: sl.color,
+                        mr: 1
                       }}
-                    >
-                      <Stack sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" noWrap>
-                          {display}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.email || ''} {a.user_role ? `• ${a.user_role}` : ''}
-                        </Typography>
-                      </Stack>
-                      <Button size="small" color="error" variant="outlined" onClick={() => handleRemoveAssignee(a.user_id)}>
-                        Remove
-                      </Button>
-                    </Box>
-                  );
-                })}
-                <Stack direction="row" spacing={1}>
-                  <Select
-                    fullWidth
-                    size="small"
-                    displayEmpty
-                    value={newAssigneeUserId}
-                    onChange={(e) => setNewAssigneeUserId(e.target.value)}
-                  >
-                    <MenuItem value="">
-                      <em>Select member…</em>
-                    </MenuItem>
-                    {(workspaceMembers || []).map((m) => {
-                      const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
-                      const label = name ? `${name} (${m.email})` : m.email;
-                      return (
-                        <MenuItem key={m.user_id} value={m.user_id}>
-                          {label}
-                        </MenuItem>
-                      );
-                    })}
-                  </Select>
-                  <Button variant="contained" onClick={handleAddAssignee} disabled={addingAssignee || !newAssigneeUserId}>
-                    Add
-                  </Button>
-                </Stack>
-              </Stack>
-            )}
-
-            <Divider />
-
-            <Typography variant="subtitle1">Subitems</Typography>
-            {subitemsLoading ? (
-              <CircularProgress size={18} />
-            ) : (
-              <Stack spacing={1}>
-                {!subitems.length && (
-                  <Typography variant="body2" color="text.secondary">
-                    No subitems yet.
-                  </Typography>
-                )}
-                {subitems.map((s) => (
-                  <Box
-                    key={s.id}
-                    sx={{
-                      p: 1,
-                      border: '1px solid',
-                      borderColor: 'divider',
-                      borderRadius: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 1
-                    }}
-                  >
-                    <FormControlLabel
-                      control={<Checkbox checked={s.status === 'done'} onChange={() => handleToggleSubitemDone(s)} />}
-                      label={<Typography variant="body2">{s.name}</Typography>}
-                      sx={{ m: 0 }}
                     />
-                    <Button size="small" color="error" variant="outlined" onClick={() => handleDeleteSubitem(s.id)}>
-                      Delete
-                    </Button>
-                  </Box>
+                    {sl.label}
+                  </MenuItem>
                 ))}
-                <Stack direction="row" spacing={1}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="New subitem"
-                    value={newSubitemName}
-                    onChange={(e) => setNewSubitemName(e.target.value)}
-                  />
-                  <Button variant="contained" onClick={handleCreateSubitem} disabled={creatingSubitem || !newSubitemName.trim()}>
-                    Add
-                  </Button>
-                </Stack>
-              </Stack>
-            )}
-
-            <Divider />
-
-            <Button variant="outlined" onClick={handleRefreshAiSummary} disabled={!activeItem?.id || aiSummaryRefreshing}>
-              {aiSummaryRefreshing ? 'Refreshing…' : aiSummary?.summary ? 'Refresh summary' : 'Generate summary'}
-            </Button>
+              </Select>
+              {isAdmin && (
+                <Button
+                  size="small"
+                  startIcon={<IconPencil size={14} />}
+                  onClick={() => setStatusLabelsDialogOpen(true)}
+                  sx={{ mt: 0.5, alignSelf: 'flex-start' }}
+                >
+                  Edit Labels
+                </Button>
+              )}
+            </Stack>
 
             <Divider />
 
@@ -1406,16 +1685,61 @@ export default function TaskManager() {
                         No updates yet.
                       </Typography>
                     )}
-                    {itemUpdates.map((u) => (
-                      <Box key={u.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          {u.author_name || 'Unknown'}
-                        </Typography>
-                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                          {u.content}
-                        </Typography>
-                      </Box>
-                    ))}
+                    {itemUpdates.map((u) => {
+                      const viewers = updateViews[u.id] || [];
+                      return (
+                        <Box key={u.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                          <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                            <Stack>
+                              <Typography variant="caption" color="text.secondary">
+                                {u.author_name || 'Unknown'}
+                                {u.created_at && (
+                                  <span style={{ marginLeft: 8, opacity: 0.7 }}>
+                                    {new Date(u.created_at).toLocaleString(undefined, {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      hour: 'numeric',
+                                      minute: '2-digit'
+                                    })}
+                                  </span>
+                                )}
+                              </Typography>
+                              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                                {u.content}
+                              </Typography>
+                            </Stack>
+                            {viewers.length > 0 && (
+                              <Tooltip
+                                title={
+                                  <Stack spacing={0.5} sx={{ p: 0.5 }}>
+                                    <Typography variant="caption" fontWeight={600}>
+                                      Seen by {viewers.length}
+                                    </Typography>
+                                    {viewers.map((v) => (
+                                      <Stack key={v.user_id} direction="row" spacing={1} alignItems="center">
+                                        <Avatar src={v.avatar_url} sx={{ width: 20, height: 20, fontSize: 10 }}>
+                                          {(v.user_name || '?')[0]}
+                                        </Avatar>
+                                        <Typography variant="caption">{v.user_name}</Typography>
+                                      </Stack>
+                                    ))}
+                                  </Stack>
+                                }
+                                placement="left"
+                                arrow
+                              >
+                                <IconButton size="small" sx={{ p: 0.25 }}>
+                                  <IconEye size={14} />
+                                  <Typography variant="caption" sx={{ ml: 0.5, fontSize: '0.7rem' }}>
+                                    {viewers.length}
+                                  </Typography>
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </Stack>
+                        </Box>
+                      );
+                    })}
                   </Stack>
                 )}
               </Stack>
@@ -1496,13 +1820,6 @@ export default function TaskManager() {
                 )}
 
                 <Stack spacing={1}>
-                  <TextField
-                    label="Minutes"
-                    type="number"
-                    value={timeMinutes}
-                    onChange={(e) => setTimeMinutes(e.target.value)}
-                    inputProps={{ min: 0 }}
-                  />
                   <Select size="small" value={timeCategory} onChange={(e) => setTimeCategory(e.target.value)}>
                     <MenuItem value="Graphics">Graphics</MenuItem>
                     <MenuItem value="Web">Web</MenuItem>
@@ -1517,6 +1834,73 @@ export default function TaskManager() {
                     <MenuItem value="billable">Billable</MenuItem>
                     <MenuItem value="non_billable">Non-billable</MenuItem>
                   </Select>
+
+                  <Stack spacing={0.75}>
+                    <Typography variant="caption" color="text.secondary">
+                      Duration
+                    </Typography>
+                    <Stack direction="row" spacing={1}>
+                      <TextField
+                        label="Hours"
+                        type="number"
+                        value={timeHours}
+                        onChange={(e) => {
+                          const next = normalizeHm({ hours: e.target.value, minutes: timeMins });
+                          setTimeHours(next.hours);
+                          setTimeMins(next.minutes);
+                        }}
+                        inputProps={{ min: 0 }}
+                        sx={{ flex: 1 }}
+                      />
+                      <TextField
+                        label="Minutes"
+                        type="number"
+                        value={timeMins}
+                        onChange={(e) => {
+                          const next = normalizeHm({ hours: timeHours, minutes: e.target.value });
+                          setTimeHours(next.hours);
+                          setTimeMins(next.minutes);
+                        }}
+                        inputProps={{ min: 0, step: 15 }}
+                        sx={{ flex: 1 }}
+                      />
+                    </Stack>
+                  </Stack>
+
+                  {timeBillable && (
+                    <Stack spacing={0.75}>
+                      <Typography variant="caption" color="text.secondary">
+                        Billable hours
+                      </Typography>
+                      <Stack direction="row" spacing={1}>
+                        <TextField
+                          label="Hours"
+                          type="number"
+                          value={billableHours}
+                          onChange={(e) => {
+                            setBillableTouched(true);
+                            setBillableHours(clampNonNegInt(e.target.value));
+                          }}
+                          inputProps={{ min: 0 }}
+                          sx={{ flex: 1 }}
+                        />
+                        <TextField
+                          label="Minutes"
+                          type="number"
+                          value={billableMins}
+                          onChange={(e) => {
+                            setBillableTouched(true);
+                            const next = normalizeHm({ hours: billableHours, minutes: e.target.value });
+                            setBillableHours(next.hours);
+                            setBillableMins(next.minutes);
+                          }}
+                          inputProps={{ min: 0, step: 15 }}
+                          sx={{ flex: 1 }}
+                        />
+                      </Stack>
+                    </Stack>
+                  )}
+
                   <TextField
                     multiline
                     minRows={2}
@@ -1527,7 +1911,7 @@ export default function TaskManager() {
                   <Button
                     variant="contained"
                     onClick={handleLogTime}
-                    disabled={loggingTime || !activeItem?.id || timeMinutes === '' || Number(timeMinutes) < 0}
+                    disabled={loggingTime || !activeItem?.id || Number(timeHours) * 60 + Number(timeMins) <= 0}
                   >
                     {loggingTime ? 'Logging…' : 'Log time'}
                   </Button>
@@ -1537,6 +1921,143 @@ export default function TaskManager() {
           </Stack>
         </Box>
       </Drawer>
+
+      {/* Status Labels Editor Dialog */}
+      <Dialog open={statusLabelsDialogOpen} onClose={() => setStatusLabelsDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Edit Status Labels
+          <Typography variant="body2" color="text.secondary">
+            Customize status options for this board
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {/* Check if using defaults */}
+            {statusLabels.some((l) => l.id?.toString().startsWith('default-')) && (
+              <Alert
+                severity="info"
+                action={
+                  <Button size="small" onClick={handleInitializeLabels} disabled={savingLabel}>
+                    Customize
+                  </Button>
+                }
+              >
+                This board uses default status labels. Click &quot;Customize&quot; to create editable copies.
+              </Alert>
+            )}
+
+            {/* Existing labels */}
+            {statusLabels.map((sl) => (
+              <Box
+                key={sl.id}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}
+              >
+                {editingLabel === sl.id ? (
+                  <>
+                    <input
+                      type="color"
+                      value={sl.color}
+                      onChange={(e) => {
+                        setBoardView((prev) => ({
+                          ...prev,
+                          status_labels: prev.status_labels.map((l) => (l.id === sl.id ? { ...l, color: e.target.value } : l))
+                        }));
+                      }}
+                      style={{ width: 32, height: 32, border: 'none', cursor: 'pointer' }}
+                    />
+                    <TextField
+                      size="small"
+                      value={sl.label}
+                      onChange={(e) => {
+                        setBoardView((prev) => ({
+                          ...prev,
+                          status_labels: prev.status_labels.map((l) => (l.id === sl.id ? { ...l, label: e.target.value } : l))
+                        }));
+                      }}
+                      sx={{ flex: 1 }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={sl.is_done_state}
+                          onChange={(e) => {
+                            setBoardView((prev) => ({
+                              ...prev,
+                              status_labels: prev.status_labels.map((l) => (l.id === sl.id ? { ...l, is_done_state: e.target.checked } : l))
+                            }));
+                          }}
+                          size="small"
+                        />
+                      }
+                      label="Done state"
+                    />
+                    <Button
+                      size="small"
+                      onClick={() => handleUpdateLabel(sl.id, { label: sl.label, color: sl.color, is_done_state: sl.is_done_state })}
+                      disabled={savingLabel || sl.id?.toString().startsWith('default-')}
+                    >
+                      Save
+                    </Button>
+                    <IconButton size="small" onClick={() => setEditingLabel(null)}>
+                      ✕
+                    </IconButton>
+                  </>
+                ) : (
+                  <>
+                    <Box sx={{ width: 24, height: 24, borderRadius: '50%', bgcolor: sl.color }} />
+                    <Typography sx={{ flex: 1 }}>{sl.label}</Typography>
+                    {sl.is_done_state && (
+                      <Typography variant="caption" color="text.secondary">
+                        (marks complete)
+                      </Typography>
+                    )}
+                    <IconButton size="small" onClick={() => setEditingLabel(sl.id)} disabled={sl.id?.toString().startsWith('default-')}>
+                      <IconPencil size={16} />
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleDeleteLabel(sl.id)}
+                      disabled={savingLabel || sl.id?.toString().startsWith('default-')}
+                    >
+                      <IconTrash size={16} />
+                    </IconButton>
+                  </>
+                )}
+              </Box>
+            ))}
+
+            {/* Add new label */}
+            {!statusLabels.some((l) => l.id?.toString().startsWith('default-')) && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                <input
+                  type="color"
+                  value={newLabelColor}
+                  onChange={(e) => setNewLabelColor(e.target.value)}
+                  style={{ width: 32, height: 32, border: 'none', cursor: 'pointer' }}
+                />
+                <TextField
+                  size="small"
+                  placeholder="New label name"
+                  value={newLabelText}
+                  onChange={(e) => setNewLabelText(e.target.value)}
+                  sx={{ flex: 1 }}
+                />
+                <Button
+                  size="small"
+                  startIcon={<IconPlus size={14} />}
+                  onClick={handleAddLabel}
+                  disabled={savingLabel || !newLabelText.trim()}
+                >
+                  Add
+                </Button>
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStatusLabelsDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </MainCard>
   );
 }

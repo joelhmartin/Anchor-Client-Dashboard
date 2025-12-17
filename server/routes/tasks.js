@@ -43,7 +43,7 @@ const groupCreateSchema = z.object({
 
 const itemCreateSchema = z.object({
   name: z.string().min(1).max(500),
-  status: z.enum(['todo', 'working', 'blocked', 'done', 'needs_attention']).optional(),
+  status: z.string().max(100).optional(), // Now accepts any string - board-specific labels
   due_date: z.string().optional().nullable(), // YYYY-MM-DD
   is_voicemail: z.boolean().optional(),
   needs_attention: z.boolean().optional()
@@ -51,7 +51,7 @@ const itemCreateSchema = z.object({
 
 const itemUpdateSchema = z.object({
   name: z.string().min(1).max(500).optional(),
-  status: z.enum(['todo', 'working', 'blocked', 'done', 'needs_attention']).optional(),
+  status: z.string().max(100).optional(), // Now accepts any string - board-specific labels
   due_date: z.string().optional().nullable(),
   is_voicemail: z.boolean().optional(),
   needs_attention: z.boolean().optional()
@@ -74,7 +74,7 @@ const automationCreateSchema = z.object({
   trigger_type: z.enum(['status_change']),
   trigger_config: z
     .object({
-      to_status: z.enum(['todo', 'working', 'blocked', 'done', 'needs_attention']).optional()
+      to_status: z.string().max(100).optional() // Now accepts any string status label
     })
     .optional(),
   action_type: z.enum(['notify_admins', 'notify_assignees']),
@@ -109,14 +109,29 @@ const itemAssigneeAddSchema = z
 
 const subitemCreateSchema = z.object({
   name: z.string().min(1).max(500),
-  status: z.enum(['todo', 'working', 'blocked', 'done', 'needs_attention']).optional(),
+  status: z.string().max(100).optional(), // Now accepts any string status label
   due_date: z.string().optional().nullable() // YYYY-MM-DD
 });
 
 const subitemUpdateSchema = z.object({
   name: z.string().min(1).max(500).optional(),
-  status: z.enum(['todo', 'working', 'blocked', 'done', 'needs_attention']).optional(),
+  status: z.string().max(100).optional(), // Now accepts any string status label
   due_date: z.string().optional().nullable()
+});
+
+// Status label management schema
+const statusLabelCreateSchema = z.object({
+  label: z.string().min(1).max(100),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  order_index: z.number().int().min(0).optional(),
+  is_done_state: z.boolean().optional()
+});
+
+const statusLabelUpdateSchema = z.object({
+  label: z.string().min(1).max(100).optional(),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  order_index: z.number().int().min(0).optional(),
+  is_done_state: z.boolean().optional()
 });
 
 function getEffectiveRole(req) {
@@ -161,7 +176,9 @@ function extractMentionEmails(text = '') {
   const emails = new Set();
   let match;
   while ((match = regex.exec(input)) !== null) {
-    const email = String(match[1] || '').trim().toLowerCase();
+    const email = String(match[1] || '')
+      .trim()
+      .toLowerCase();
     if (email) emails.add(email);
   }
   return Array.from(emails);
@@ -179,12 +196,9 @@ async function notifyMentionedUsers({ itemId, workspaceId, actorUserId, content 
   );
   if (!users.length) return;
 
-  const staff = users.filter((u) => ['superadmin', 'admin', 'team'].includes(u.role));
-  if (!staff.length) return;
-
   // Only notify users who can access this workspace (avoid leaking references).
   const allowedIds = [];
-  for (const u of staff) {
+  for (const u of users) {
     if (!u?.id || u.id === actorUserId) continue;
     const ok = await assertWorkspaceAccess({ effRole: u.role, userId: u.id, workspaceId });
     if (ok) allowedIds.push(u.id);
@@ -194,7 +208,9 @@ async function notifyMentionedUsers({ itemId, workspaceId, actorUserId, content 
   const { rows: itemRows } = await query('SELECT id, name FROM task_items WHERE id = $1 LIMIT 1', [itemId]);
   const itemName = itemRows[0]?.name || 'Task item';
   const boardId = await getBoardIdForItem(itemId);
-  const linkUrl = boardId ? `/tasks?board=${encodeURIComponent(boardId)}&item=${encodeURIComponent(itemId)}` : '/tasks';
+  const linkUrl = boardId
+    ? `/tasks?pane=boards&board=${encodeURIComponent(boardId)}&item=${encodeURIComponent(itemId)}`
+    : '/tasks?pane=boards';
 
   await Promise.all(
     allowedIds.map((uid) =>
@@ -324,9 +340,7 @@ async function runBoardAutomationsForItemChange({ itemBefore, itemAfter, actorUs
       }
 
       if (rule.action_type === 'notify_assignees') {
-        const { rows: assignees } = await query(`SELECT user_id FROM task_item_assignees WHERE item_id = $1`, [
-          itemAfter.id
-        ]);
+        const { rows: assignees } = await query(`SELECT user_id FROM task_item_assignees WHERE item_id = $1`, [itemAfter.id]);
         await Promise.all(
           assignees.map((a) =>
             createNotification({
@@ -416,6 +430,7 @@ router.get('/workspaces/:workspaceId/members', async (req, res) => {
            u.first_name,
            u.last_name,
            u.role AS user_role,
+           u.avatar_url,
            1 AS precedence
          FROM task_workspace_memberships m
          JOIN users u ON u.id = m.user_id
@@ -430,12 +445,13 @@ router.get('/workspaces/:workspaceId/members', async (req, res) => {
            u.first_name,
            u.last_name,
            u.role AS user_role,
+           u.avatar_url,
            2 AS precedence
          FROM users u
          WHERE u.role IN ('superadmin','admin','team')
        )
        SELECT DISTINCT ON (user_id)
-         user_id, membership_role, created_at, email, first_name, last_name, user_role
+         user_id, membership_role, created_at, email, first_name, last_name, user_role, avatar_url
        FROM (
          SELECT * FROM explicit_members
          UNION ALL
@@ -613,10 +629,10 @@ router.delete('/workspaces/:workspaceId/members/:memberUserId', async (req, res)
   try {
     const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
-    const { rowCount } = await query(
-      `DELETE FROM task_workspace_memberships WHERE workspace_id = $1 AND user_id = $2`,
-      [workspaceId, memberUserId]
-    );
+    const { rowCount } = await query(`DELETE FROM task_workspace_memberships WHERE workspace_id = $1 AND user_id = $2`, [
+      workspaceId,
+      memberUserId
+    ]);
     if (!rowCount) return res.status(404).json({ message: 'Member not found' });
     return res.json({ ok: true });
   } catch (err) {
@@ -726,6 +742,217 @@ router.patch('/boards/:boardId', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STATUS LABELS (per board)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Get status labels for a board
+router.get('/boards/:boardId/status-labels', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { boardId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForBoard(boardId);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    const { rows } = await query(
+      `SELECT * FROM task_board_status_labels
+       WHERE board_id = $1
+       ORDER BY order_index ASC, label ASC`,
+      [boardId]
+    );
+
+    // Return defaults if none exist
+    const defaultLabels = [
+      { id: 'default-todo', label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+      { id: 'default-working', label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+      { id: 'default-stuck', label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+      { id: 'default-done', label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+      { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+    ];
+
+    return res.json({ status_labels: rows.length ? rows : defaultLabels });
+  } catch (err) {
+    console.error('[tasks:status-labels:list]', err);
+    return res.status(500).json({ message: 'Unable to load status labels' });
+  }
+});
+
+// Create a status label for a board
+router.post('/boards/:boardId/status-labels', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { boardId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForBoard(boardId);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    // Only admins can create status labels
+    if (!['superadmin', 'admin'].includes(eff)) {
+      return res.status(403).json({ message: 'Only admins can manage status labels' });
+    }
+
+    const payload = statusLabelCreateSchema.parse(req.body);
+
+    // Get max order_index
+    const { rows: maxRows } = await query(
+      `SELECT COALESCE(MAX(order_index), -1) + 1 AS next_order FROM task_board_status_labels WHERE board_id = $1`,
+      [boardId]
+    );
+    const orderIndex = payload.order_index ?? maxRows[0].next_order;
+
+    const { rows } = await query(
+      `INSERT INTO task_board_status_labels (board_id, label, color, order_index, is_done_state)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [boardId, payload.label.trim(), payload.color || '#808080', orderIndex, payload.is_done_state ?? false]
+    );
+
+    return res.status(201).json({ status_label: rows[0] });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:status-labels:create]', err);
+    return res.status(500).json({ message: 'Unable to create status label' });
+  }
+});
+
+// Update a status label
+router.patch('/status-labels/:labelId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { labelId } = req.params;
+  try {
+    // Get the label to find its board
+    const { rows: labelRows } = await query('SELECT * FROM task_board_status_labels WHERE id = $1', [labelId]);
+    if (!labelRows.length) return res.status(404).json({ message: 'Status label not found' });
+    const label = labelRows[0];
+
+    const workspaceId = await getWorkspaceIdForBoard(label.board_id);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    // Only admins can update status labels
+    if (!['superadmin', 'admin'].includes(eff)) {
+      return res.status(403).json({ message: 'Only admins can manage status labels' });
+    }
+
+    const payload = statusLabelUpdateSchema.parse(req.body);
+    const fields = [];
+    const values = [];
+    let i = 1;
+    if (payload.label !== undefined) {
+      fields.push(`label = $${i++}`);
+      values.push(payload.label.trim());
+    }
+    if (payload.color !== undefined) {
+      fields.push(`color = $${i++}`);
+      values.push(payload.color);
+    }
+    if (payload.order_index !== undefined) {
+      fields.push(`order_index = $${i++}`);
+      values.push(payload.order_index);
+    }
+    if (payload.is_done_state !== undefined) {
+      fields.push(`is_done_state = $${i++}`);
+      values.push(payload.is_done_state);
+    }
+    if (!fields.length) return res.status(400).json({ message: 'No changes provided' });
+    values.push(labelId);
+    const { rows } = await query(
+      `UPDATE task_board_status_labels SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
+      values
+    );
+    return res.json({ status_label: rows[0] });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:status-labels:update]', err);
+    return res.status(500).json({ message: 'Unable to update status label' });
+  }
+});
+
+// Delete a status label
+router.delete('/status-labels/:labelId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { labelId } = req.params;
+  try {
+    // Get the label to find its board
+    const { rows: labelRows } = await query('SELECT * FROM task_board_status_labels WHERE id = $1', [labelId]);
+    if (!labelRows.length) return res.status(404).json({ message: 'Status label not found' });
+    const label = labelRows[0];
+
+    const workspaceId = await getWorkspaceIdForBoard(label.board_id);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    // Only admins can delete status labels
+    if (!['superadmin', 'admin'].includes(eff)) {
+      return res.status(403).json({ message: 'Only admins can manage status labels' });
+    }
+
+    await query('DELETE FROM task_board_status_labels WHERE id = $1', [labelId]);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[tasks:status-labels:delete]', err);
+    return res.status(500).json({ message: 'Unable to delete status label' });
+  }
+});
+
+// Initialize default labels for a board (copies defaults to DB so they can be customized)
+router.post('/boards/:boardId/status-labels/init', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { boardId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForBoard(boardId);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    // Only admins can initialize status labels
+    if (!['superadmin', 'admin'].includes(eff)) {
+      return res.status(403).json({ message: 'Only admins can manage status labels' });
+    }
+
+    // Check if labels already exist
+    const { rows: existing } = await query('SELECT COUNT(*) FROM task_board_status_labels WHERE board_id = $1', [boardId]);
+    if (Number(existing[0].count) > 0) {
+      return res.status(400).json({ message: 'Status labels already initialized for this board' });
+    }
+
+    // Insert default labels
+    const defaults = [
+      { label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+      { label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+      { label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+      { label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+      { label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+    ];
+
+    const insertedLabels = [];
+    for (const d of defaults) {
+      const { rows } = await query(
+        `INSERT INTO task_board_status_labels (board_id, label, color, order_index, is_done_state)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [boardId, d.label, d.color, d.order_index, d.is_done_state]
+      );
+      insertedLabels.push(rows[0]);
+    }
+
+    return res.status(201).json({ status_labels: insertedLabels });
+  } catch (err) {
+    console.error('[tasks:status-labels:init]', err);
+    return res.status(500).json({ message: 'Unable to initialize status labels' });
+  }
+});
+
 router.post('/reports/boards', async (req, res) => {
   const eff = getEffectiveRole(req);
   const userId = req.user.id;
@@ -826,6 +1053,115 @@ router.post('/reports/boards', async (req, res) => {
   }
 });
 
+// Billing report - item-level time entries for selected boards within date range
+router.post('/reports/billing', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  try {
+    const payload = bulkBoardReportSchema.parse(req.body);
+    const boardIds = payload.board_ids;
+    const startDate = payload.start_date ? `${payload.start_date}T00:00:00.000Z` : null;
+    const endDate = payload.end_date ? `${payload.end_date}T23:59:59.999Z` : null;
+
+    // Ensure requester can access each board's workspace
+    const { rows: boardRows } = await query(
+      `SELECT b.id, b.name, b.workspace_id, w.name AS workspace_name
+       FROM task_boards b
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       WHERE b.id = ANY($1)`,
+      [boardIds]
+    );
+    if (!boardRows.length) return res.json({ items: [] });
+    for (const b of boardRows) {
+      const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId: b.workspace_id });
+      if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
+
+    // Get all items from selected boards
+    const { rows: items } = await query(
+      `SELECT
+         i.id AS item_id,
+         i.name AS item_name,
+         i.status,
+         to_char(i.due_date, 'YYYY-MM-DD') AS due_date,
+         g.name AS group_name,
+         b.id AS board_id,
+         b.name AS board_name,
+         w.name AS workspace_name
+       FROM task_items i
+       JOIN task_groups g ON g.id = i.group_id
+       JOIN task_boards b ON b.id = g.board_id
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       WHERE b.id = ANY($1)
+       ORDER BY w.name, b.name, g.name, i.name`,
+      [boardIds]
+    );
+
+    // Get time entries for these items within date range
+    const itemIds = items.map((i) => i.item_id);
+    let timeEntries = [];
+    if (itemIds.length) {
+      let timeQuery = `
+        SELECT
+          t.id AS entry_id,
+          t.item_id,
+          t.time_spent_minutes,
+          t.billable_minutes,
+          t.is_billable,
+          t.work_category,
+          t.description,
+          t.created_at,
+          COALESCE(u.first_name || ' ' || u.last_name, u.email, 'Unknown') AS user_name
+        FROM task_time_entries t
+        LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.item_id = ANY($1)
+      `;
+      const params = [itemIds];
+      if (startDate) {
+        timeQuery += ` AND t.created_at >= $${params.length + 1}`;
+        params.push(startDate);
+      }
+      if (endDate) {
+        timeQuery += ` AND t.created_at <= $${params.length + 1}`;
+        params.push(endDate);
+      }
+      timeQuery += ' ORDER BY t.created_at DESC';
+      const { rows } = await query(timeQuery, params);
+      timeEntries = rows;
+    }
+
+    // Group time entries by item
+    const timeByItem = {};
+    for (const t of timeEntries) {
+      if (!timeByItem[t.item_id]) timeByItem[t.item_id] = [];
+      timeByItem[t.item_id].push(t);
+    }
+
+    // Build final rows: one row per item with aggregated time info
+    const output = items.map((item) => {
+      const entries = timeByItem[item.item_id] || [];
+      const totalMinutes = entries.reduce((sum, e) => sum + (e.time_spent_minutes || 0), 0);
+      const billableMinutes = entries.reduce((sum, e) => sum + (e.billable_minutes || 0), 0);
+      return {
+        ...item,
+        time_entries: entries,
+        total_minutes: totalMinutes,
+        billable_minutes: billableMinutes,
+        entry_count: entries.length
+      };
+    });
+
+    // Filter to only items with time entries in range (for billing relevance)
+    const filtered = output.filter((r) => r.entry_count > 0);
+
+    return res.json({ items: filtered });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:reports:billing]', err);
+    return res.status(500).json({ message: 'Unable to run billing report' });
+  }
+});
+
 // Board view (board + groups + items)
 router.get('/boards/:boardId/view', async (req, res) => {
   const eff = getEffectiveRole(req);
@@ -902,13 +1238,31 @@ router.get('/boards/:boardId/view', async (req, res) => {
       }
     }
 
+    // Fetch status labels for this board
+    const { rows: statusLabels } = await query(
+      `SELECT * FROM task_board_status_labels
+       WHERE board_id = $1
+       ORDER BY order_index ASC, label ASC`,
+      [boardId]
+    );
+
+    // If no custom labels, return default labels
+    const defaultLabels = [
+      { id: 'default-todo', label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+      { id: 'default-working', label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+      { id: 'default-stuck', label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+      { id: 'default-done', label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+      { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+    ];
+
     return res.json({
       board: boardRes.rows[0],
       groups: groupsRes.rows,
       items: itemsRes.rows,
       assignees_by_item: assigneesByItem,
       time_totals_by_item: timeTotalsByItem,
-      update_counts_by_item: updateCountsByItem
+      update_counts_by_item: updateCountsByItem,
+      status_labels: statusLabels.length ? statusLabels : defaultLabels
     });
   } catch (err) {
     console.error('[tasks:boards:view]', err);
@@ -954,14 +1308,46 @@ router.post('/groups/:groupId/items', async (req, res) => {
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
 
     const payload = itemCreateSchema.parse(req.body);
+
+    const applyBoardPrefix = (prefix, rawName) => {
+      const p = String(prefix || '').trim();
+      const n = String(rawName || '').trim();
+      if (!p) return n;
+      const lowerP = p.toLowerCase();
+      const lowerN = n.toLowerCase();
+      if (lowerN === lowerP) return n;
+      if (lowerN.startsWith(lowerP)) {
+        // already prefixed (allow common separators)
+        const nextChar = lowerN.slice(lowerP.length, lowerP.length + 2);
+        if (!nextChar || nextChar.startsWith(' ') || nextChar.startsWith('-') || nextChar.startsWith(':')) return n;
+      }
+      return `${p} ${n}`.trim();
+    };
+
+    // If the board has a prefix configured, prepend it to the item name.
+    let finalName = payload.name.trim();
+    try {
+      const { rows: bpRows } = await query(
+        `SELECT b.board_prefix
+         FROM task_boards b
+         JOIN task_groups g ON g.board_id = b.id
+         WHERE g.id = $1
+         LIMIT 1`,
+        [groupId]
+      );
+      finalName = applyBoardPrefix(bpRows[0]?.board_prefix, finalName);
+    } catch (_err) {
+      // non-fatal: fallback to raw name
+    }
+
     const { rows } = await query(
       `INSERT INTO task_items (group_id, name, status, due_date, is_voicemail, needs_attention, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         groupId,
-        payload.name.trim(),
-        payload.status ?? 'todo',
+        finalName,
+        payload.status ?? 'To Do',
         payload.due_date ?? null,
         payload.is_voicemail ?? false,
         payload.needs_attention ?? false,
@@ -1197,17 +1583,7 @@ router.get('/boards/:boardId/export.csv', async (req, res) => {
       [boardId]
     );
 
-    const header = [
-      'id',
-      'name',
-      'status',
-      'due_date',
-      'needs_attention',
-      'is_voicemail',
-      'group_name',
-      'created_at',
-      'updated_at'
-    ];
+    const header = ['id', 'name', 'status', 'due_date', 'needs_attention', 'is_voicemail', 'group_name', 'created_at', 'updated_at'];
     const lines = [header.join(',')];
     for (const r of rows) {
       lines.push(
@@ -1234,6 +1610,88 @@ router.get('/boards/:boardId/export.csv', async (req, res) => {
   }
 });
 
+// My Work - items assigned to current user, grouped by board
+router.get('/my-work', async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const { rows } = await query(
+      `
+        WITH my_items AS (
+          SELECT
+            i.id,
+            i.name,
+            i.status,
+            i.due_date,
+            i.needs_attention,
+            i.is_voicemail,
+            i.updated_at,
+            g.board_id,
+            b.name AS board_name,
+            w.id AS workspace_id,
+            w.name AS workspace_name
+          FROM task_item_assignees a
+          JOIN task_items i ON i.id = a.item_id
+          JOIN task_groups g ON g.id = i.group_id
+          JOIN task_boards b ON b.id = g.board_id
+          JOIN task_workspaces w ON w.id = b.workspace_id
+          WHERE a.user_id = $1
+        ),
+        item_assignees AS (
+          SELECT
+            a.item_id,
+            json_agg(
+              json_build_object(
+                'user_id', u.id,
+                'email', u.email,
+                'first_name', u.first_name,
+                'last_name', u.last_name,
+                'avatar_url', u.avatar_url
+              )
+            ) AS assignees
+          FROM task_item_assignees a
+          JOIN users u ON u.id = a.user_id
+          WHERE a.item_id IN (SELECT id FROM my_items)
+          GROUP BY a.item_id
+        )
+        SELECT
+          m.board_id,
+          m.board_name,
+          m.workspace_id,
+          m.workspace_name,
+          json_agg(
+            json_build_object(
+              'id', m.id,
+              'name', m.name,
+              'status', m.status,
+              'due_date', to_char(m.due_date, 'YYYY-MM-DD'),
+              'needs_attention', m.needs_attention,
+              'is_voicemail', m.is_voicemail,
+              'assignees', COALESCE(ia.assignees, '[]'::json),
+              'update_count', COALESCE(uc.update_count, 0),
+              'time_total_minutes', COALESCE(tt.time_total_minutes, 0)
+            )
+            ORDER BY m.updated_at DESC
+          ) AS items
+        FROM my_items m
+        LEFT JOIN item_assignees ia ON ia.item_id = m.id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*) AS update_count FROM task_updates u WHERE u.item_id = m.id
+        ) uc ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(time_spent_minutes), 0) AS time_total_minutes FROM task_time_entries t WHERE t.item_id = m.id
+        ) tt ON TRUE
+        GROUP BY m.board_id, m.board_name, m.workspace_id, m.workspace_name
+        ORDER BY m.workspace_name, m.board_name
+      `,
+      [userId]
+    );
+    return res.json({ boards: rows || [] });
+  } catch (err) {
+    console.error('[tasks:my-work]', err);
+    return res.status(500).json({ message: 'Unable to load my work' });
+  }
+});
+
 function localSummarizeUpdates({ itemName, updates }) {
   const lines = [];
   lines.push(`Task: ${itemName}`);
@@ -1245,7 +1703,9 @@ function localSummarizeUpdates({ itemName, updates }) {
   lines.push('Recent updates:');
   for (const u of updates.slice(0, 6)) {
     const author = u.author_name || 'Unknown';
-    const content = String(u.content || '').trim().replace(/\s+/g, ' ');
+    const content = String(u.content || '')
+      .trim()
+      .replace(/\s+/g, ' ');
     lines.push(`- ${author}: ${content.slice(0, 180)}${content.length > 180 ? '…' : ''}`);
   }
   lines.push('');
@@ -1330,8 +1790,7 @@ router.post('/items/:itemId/ai-summary/refresh', async (req, res) => {
     try {
       summaryText = await generateAiResponse({
         prompt,
-        systemPrompt:
-          'You summarize internal task updates for a project management system. Keep it concise, factual, and useful.',
+        systemPrompt: 'You summarize internal task updates for a project management system. Keep it concise, factual, and useful.',
         temperature: 0.2,
         maxTokens: 350
       });
@@ -1516,7 +1975,7 @@ router.post('/items/:itemId/subitems', async (req, res) => {
       `INSERT INTO task_subitems (parent_item_id, name, status, due_date)
        VALUES ($1,$2,$3,$4)
        RETURNING *`,
-      [itemId, payload.name.trim(), payload.status ?? 'todo', payload.due_date ?? null]
+      [itemId, payload.name.trim(), payload.status ?? 'To Do', payload.due_date ?? null]
     );
     return res.status(201).json({ subitem: rows[0] });
   } catch (err) {
@@ -1604,7 +2063,8 @@ router.get('/items/:itemId/assignees', async (req, res) => {
          u.email,
          u.first_name,
          u.last_name,
-         u.role AS user_role
+         u.role AS user_role,
+         u.avatar_url
        FROM task_item_assignees a
        JOIN users u ON u.id = a.user_id
        WHERE a.item_id = $1
@@ -1642,19 +2102,44 @@ router.post('/items/:itemId/assignees', async (req, res) => {
     const targetOk = await assertWorkspaceAccess({ effRole: targetRole, userId: targetUserId, workspaceId });
     if (!targetOk) return res.status(403).json({ message: 'User does not have workspace access' });
 
-    await query(
+    const insertedRes = await query(
       `INSERT INTO task_item_assignees (item_id, user_id)
        VALUES ($1, $2)
-       ON CONFLICT (item_id, user_id) DO NOTHING`,
+       ON CONFLICT (item_id, user_id) DO NOTHING
+       RETURNING user_id`,
       [itemId, targetUserId]
     );
+
+    // Notify the assignee (in-app + email) when newly assigned, but never notify the actor.
+    if (insertedRes.rowCount && targetUserId !== req.user.id) {
+      const { rows: itemRows } = await query('SELECT id, name FROM task_items WHERE id = $1 LIMIT 1', [itemId]);
+      const itemName = itemRows[0]?.name || 'Task item';
+      const boardId = await getBoardIdForItem(itemId);
+      const linkUrl = boardId
+        ? `/tasks?pane=boards&board=${encodeURIComponent(boardId)}&item=${encodeURIComponent(itemId)}`
+        : '/tasks?pane=boards';
+      await createNotification({
+        userId: targetUserId,
+        title: 'You were assigned to a task',
+        body: itemName,
+        linkUrl,
+        meta: {
+          source: 'task_assignment',
+          item_id: itemId,
+          workspace_id: workspaceId,
+          actor_user_id: req.user.id
+        }
+      });
+    }
+
     const { rows } = await query(
       `SELECT
          a.user_id,
          u.email,
          u.first_name,
          u.last_name,
-         u.role AS user_role
+         u.role AS user_role,
+         u.avatar_url
        FROM task_item_assignees a
        JOIN users u ON u.id = a.user_id
        WHERE a.item_id = $1 AND a.user_id = $2
@@ -1679,10 +2164,7 @@ router.delete('/items/:itemId/assignees/:assigneeUserId', async (req, res) => {
     const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
 
-    const { rowCount } = await query('DELETE FROM task_item_assignees WHERE item_id = $1 AND user_id = $2', [
-      itemId,
-      assigneeUserId
-    ]);
+    const { rowCount } = await query('DELETE FROM task_item_assignees WHERE item_id = $1 AND user_id = $2', [itemId, assigneeUserId]);
     if (!rowCount) return res.status(404).json({ message: 'Assignee not found' });
     return res.json({ ok: true });
   } catch (err) {
@@ -1745,6 +2227,376 @@ router.post('/items/:itemId/time-entries', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// UPDATE VIEW TRACKING
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Mark updates as viewed by the current user (batch)
+router.post('/updates/mark-viewed', async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const { update_ids } = req.body;
+    if (!Array.isArray(update_ids) || !update_ids.length) {
+      return res.status(400).json({ message: 'update_ids required' });
+    }
+    // Insert views, ignoring duplicates
+    for (const updateId of update_ids) {
+      await query(
+        `INSERT INTO task_update_views (update_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (update_id, user_id) DO NOTHING`,
+        [updateId, userId]
+      );
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[tasks:updates:mark-viewed]', err);
+    return res.status(500).json({ message: 'Unable to mark updates as viewed' });
+  }
+});
+
+// Get view info for updates (who viewed each)
+router.post('/updates/views', async (req, res) => {
+  try {
+    const { update_ids } = req.body;
+    if (!Array.isArray(update_ids) || !update_ids.length) {
+      return res.status(400).json({ message: 'update_ids required' });
+    }
+    const { rows } = await query(
+      `SELECT v.update_id, v.user_id, v.viewed_at,
+              COALESCE(u.first_name || ' ' || u.last_name, u.email, 'Unknown') AS user_name,
+              u.avatar_url
+       FROM task_update_views v
+       JOIN users u ON u.id = v.user_id
+       WHERE v.update_id = ANY($1)
+       ORDER BY v.viewed_at ASC`,
+      [update_ids]
+    );
+    // Group by update_id
+    const viewsByUpdate = {};
+    for (const row of rows) {
+      if (!viewsByUpdate[row.update_id]) viewsByUpdate[row.update_id] = [];
+      viewsByUpdate[row.update_id].push({
+        user_id: row.user_id,
+        user_name: row.user_name,
+        avatar_url: row.avatar_url,
+        viewed_at: row.viewed_at
+      });
+    }
+    return res.json({ views: viewsByUpdate });
+  } catch (err) {
+    console.error('[tasks:updates:views]', err);
+    return res.status(500).json({ message: 'Unable to load update views' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI DAILY OVERVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/ai/daily-overview', async (req, res) => {
+  const userId = req.user.id;
+  const today = new Date().toISOString().slice(0, 10);
+
+  try {
+    // Check for cached overview from today
+    const { rows: cached } = await query(
+      `SELECT * FROM task_ai_daily_overviews
+       WHERE user_id = $1 AND overview_date = $2`,
+      [userId, today]
+    );
+    if (cached.length && !req.query.refresh) {
+      return res.json({ overview: cached[0], cached: true });
+    }
+
+    // Get user info
+    const { rows: userRows } = await query(
+      `SELECT first_name, last_name, email FROM users WHERE id = $1`,
+      [userId]
+    );
+    const userName = userRows[0]?.first_name || userRows[0]?.email || 'User';
+
+    // 1. Get items assigned to this user that are not done
+    const { rows: assignedItems } = await query(
+      `SELECT i.id, i.name, i.status, i.due_date, i.created_at,
+              g.name AS group_name,
+              b.name AS board_name,
+              w.name AS workspace_name
+       FROM task_items i
+       JOIN task_item_assignees a ON a.item_id = i.id AND a.user_id = $1
+       JOIN task_groups g ON g.id = i.group_id
+       JOIN task_boards b ON b.id = g.board_id
+       JOIN task_workspaces w ON w.id = b.workspace_id
+       WHERE i.status != 'done'
+       ORDER BY i.due_date ASC NULLS LAST, i.created_at DESC`,
+      [userId]
+    );
+
+    // 2. Get all updates from last 60 days for these items
+    const itemIds = assignedItems.map((i) => i.id);
+    let allUpdates = [];
+    if (itemIds.length) {
+      const { rows: updates } = await query(
+        `SELECT u.id, u.item_id, u.content, u.created_at, u.user_id,
+                COALESCE(us.first_name || ' ' || us.last_name, us.email, 'Unknown') AS author_name,
+                i.name AS item_name
+         FROM task_updates u
+         JOIN users us ON us.id = u.user_id
+         JOIN task_items i ON i.id = u.item_id
+         WHERE u.item_id = ANY($1)
+           AND u.created_at >= NOW() - INTERVAL '60 days'
+         ORDER BY u.created_at DESC`,
+        [itemIds]
+      );
+      allUpdates = updates;
+    }
+
+    // 3. Find mentions of this user (@mentions in content)
+    const { rows: userInfo } = await query(
+      `SELECT email, first_name, last_name FROM users WHERE id = $1`,
+      [userId]
+    );
+    const userEmail = userInfo[0]?.email || '';
+    const userFirstName = userInfo[0]?.first_name || '';
+    const mentionPatterns = [userEmail, userFirstName].filter(Boolean).map((s) => s.toLowerCase());
+
+    // Mentions received (updates by others that mention this user)
+    const mentionsReceived = allUpdates.filter((u) => {
+      if (u.user_id === userId) return false;
+      const contentLower = (u.content || '').toLowerCase();
+      return mentionPatterns.some((p) => contentLower.includes(`@${p}`) || contentLower.includes(p));
+    });
+
+    // Mentions made by user
+    const mentionsMade = allUpdates.filter((u) => u.user_id === userId && u.content.includes('@'));
+
+    // Check if user responded to mentions
+    const pendingMentions = [];
+    for (const mention of mentionsReceived) {
+      // Check if user replied after this mention
+      const replied = allUpdates.some(
+        (u) => u.user_id === userId && u.item_id === mention.item_id && new Date(u.created_at) > new Date(mention.created_at)
+      );
+      if (!replied) {
+        pendingMentions.push({
+          update_id: mention.id,
+          item_id: mention.item_id,
+          item_name: mention.item_name,
+          author_name: mention.author_name,
+          content: mention.content.slice(0, 200),
+          created_at: mention.created_at
+        });
+      }
+    }
+
+    // Check if mentions user made got replies
+    const unansweredMentions = [];
+    for (const mention of mentionsMade) {
+      // Check if anyone else replied after this mention
+      const replied = allUpdates.some(
+        (u) => u.user_id !== userId && u.item_id === mention.item_id && new Date(u.created_at) > new Date(mention.created_at)
+      );
+      if (!replied) {
+        unansweredMentions.push({
+          update_id: mention.id,
+          item_id: mention.item_id,
+          item_name: mention.item_name,
+          content: mention.content.slice(0, 200),
+          created_at: mention.created_at
+        });
+      }
+    }
+
+    // 4. Build AI prompt using structured agent prompt
+    const todayDate = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    // Prepare items with activity info
+    const itemsForPrompt = assignedItems.map((i) => {
+      const itemUpdates = allUpdates.filter((u) => u.item_id === i.id);
+      const lastActivity = itemUpdates.length ? itemUpdates[0].created_at : i.created_at;
+      const daysSinceActivity = Math.floor((Date.now() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24));
+      return {
+        name: i.name,
+        status: i.status,
+        due_date: i.due_date ? new Date(i.due_date).toLocaleDateString() : null,
+        board: i.board_name,
+        group: i.group_name,
+        created_at: new Date(i.created_at).toLocaleDateString(),
+        last_activity: new Date(lastActivity).toLocaleDateString(),
+        days_since_activity: daysSinceActivity,
+        update_count: itemUpdates.length
+      };
+    });
+
+    const prompt = `## Role
+
+You are a proactive personal work assistant. Your job is to generate a concise, actionable daily overview for ${userName} based on their assigned work items, activity feeds, and mentions.
+
+## Context Provided
+
+Today's date: ${todayDate}
+
+### Assigned Work Items (${assignedItems.length} total, excluding done):
+${JSON.stringify(itemsForPrompt, null, 2)}
+
+### Mentions Where ${userName} Was Mentioned But Has Not Responded (${pendingMentions.length}):
+${pendingMentions.slice(0, 15).map((m) => `- "${m.content}" from ${m.author_name} on item "${m.item_name}" (${new Date(m.created_at).toLocaleDateString()})`).join('\n') || 'None'}
+
+### Mentions ${userName} Made That Have Not Received Replies (${unansweredMentions.length}):
+${unansweredMentions.slice(0, 15).map((m) => `- "${m.content}" on item "${m.item_name}" (${new Date(m.created_at).toLocaleDateString()})`).join('\n') || 'None'}
+
+## Primary Objectives
+
+### Daily Overview Summary
+- Summarize what ${userName} should focus on today in plain language.
+- Highlight time-sensitive work, unresolved conversations, and priority risks.
+- Keep the tone clear, supportive, and efficient.
+
+### Mention Awareness
+- Identify mentions where ${userName} was mentioned and has not yet responded.
+- Identify mentions where ${userName} mentioned others and has not received a reply.
+- Group these separately and describe what follow-up is needed.
+
+### To-Do List Generation
+Generate a prioritized to-do list by analyzing:
+- Items due today or overdue (highest priority)
+- Items coming up soon
+- Titles that imply large or complex projects (e.g. words like "launch", "migration", "integration", "review", "phase", "rollout", "redesign", "implementation")
+- Promote large or high-impact items earlier in the list, even if not due today.
+- Items currently in "working" or "blocked" status need attention.
+- Exclude low-urgency items unless there is capacity.
+
+### Status Intelligence
+- Identify any items that appear stalled (no recent activity, days_since_activity > 7).
+- Flag items that may need attention based on inactivity, unclear ownership, or repeated mentions.
+
+## Constraints
+- Be concise and practical.
+- Do not repeat raw data back to the user.
+- Do not speculate beyond the provided information.
+- Do not assign new tasks, only summarize and prioritize existing ones.
+
+## Output Format
+
+Return a JSON object with these sections:
+
+{
+  "greeting": "A brief, friendly greeting appropriate for the time of day",
+  "today_at_a_glance": "3-5 sentences summarizing the day's focus, time-sensitive work, and key priorities",
+  "top_priorities": [
+    { "priority": 1, "task": "Clear task description", "item_name": "Original item name", "reason": "Brief rationale for priority" }
+  ],
+  "mentions_needing_response": [
+    { "from": "Person name", "item": "Item name", "summary": "Brief description of what needs response" }
+  ],
+  "mentions_awaiting_replies": [
+    { "item": "Item name", "summary": "Brief description of what you're waiting on" }
+  ],
+  "upcoming_and_at_risk": [
+    { "item_name": "Item name", "risk": "Brief explanation (due soon, stalled, blocked, etc.)" }
+  ],
+  "suggestions": ["Optional light suggestions for sequencing work or quick wins"]
+}`;
+
+    let aiResponse;
+    try {
+      aiResponse = await generateAiResponse(prompt, { maxTokens: 2000 });
+    } catch (aiErr) {
+      console.error('[tasks:ai:daily-overview:ai-call]', aiErr);
+      // Return a fallback response using new structure
+      const fallbackOverview = {
+        greeting: `Good ${new Date().getHours() < 12 ? 'morning' : 'afternoon'}, ${userName}!`,
+        today_at_a_glance: `You have ${assignedItems.length} active items assigned to you. ${pendingMentions.length > 0 ? `There are ${pendingMentions.length} mentions waiting for your response.` : ''} ${unansweredMentions.length > 0 ? `You have ${unansweredMentions.length} mentions awaiting replies from others.` : ''}`.trim(),
+        top_priorities: assignedItems.slice(0, 5).map((i, idx) => ({
+          priority: idx + 1,
+          task: i.name,
+          item_name: i.name,
+          reason: i.due_date ? `Due: ${new Date(i.due_date).toLocaleDateString()}` : 'Active task'
+        })),
+        mentions_needing_response: pendingMentions.slice(0, 5).map((m) => ({
+          from: m.author_name,
+          item: m.item_name,
+          summary: m.content.slice(0, 100)
+        })),
+        mentions_awaiting_replies: unansweredMentions.slice(0, 5).map((m) => ({
+          item: m.item_name,
+          summary: m.content.slice(0, 100)
+        })),
+        upcoming_and_at_risk: [],
+        suggestions: ['Focus on one task at a time', 'Address pending mentions early in the day']
+      };
+      return res.json({
+        overview: {
+          user_id: userId,
+          overview_date: today,
+          summary: JSON.stringify(fallbackOverview),
+          todo_items: fallbackOverview.top_priorities,
+          pending_mentions: pendingMentions.slice(0, 20),
+          unanswered_mentions: unansweredMentions.slice(0, 20),
+          generated_at: new Date().toISOString()
+        },
+        cached: false,
+        ai_error: true
+      });
+    }
+
+    // Parse AI response
+    let parsed;
+    try {
+      // Extract JSON from response (may have markdown code blocks)
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(aiResponse);
+    } catch (parseErr) {
+      console.error('[tasks:ai:daily-overview:parse]', parseErr);
+      parsed = {
+        greeting: `Good ${new Date().getHours() < 12 ? 'morning' : 'afternoon'}, ${userName}!`,
+        today_at_a_glance: aiResponse.slice(0, 500),
+        top_priorities: [],
+        mentions_needing_response: [],
+        mentions_awaiting_replies: [],
+        upcoming_and_at_risk: [],
+        suggestions: []
+      };
+    }
+
+    // Save to cache
+    await query(
+      `INSERT INTO task_ai_daily_overviews (user_id, overview_date, summary, todo_items, pending_mentions, unanswered_mentions, provider, model)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (user_id, overview_date) DO UPDATE SET
+         summary = EXCLUDED.summary,
+         todo_items = EXCLUDED.todo_items,
+         pending_mentions = EXCLUDED.pending_mentions,
+         unanswered_mentions = EXCLUDED.unanswered_mentions,
+         generated_at = NOW()`,
+      [
+        userId,
+        today,
+        JSON.stringify(parsed),
+        JSON.stringify(parsed.top_priorities || []),
+        JSON.stringify(pendingMentions.slice(0, 20)),
+        JSON.stringify(unansweredMentions.slice(0, 20)),
+        'vertex',
+        null
+      ]
+    );
+
+    return res.json({
+      overview: {
+        user_id: userId,
+        overview_date: today,
+        summary: JSON.stringify(parsed),
+        todo_items: parsed.top_priorities || [],
+        pending_mentions: pendingMentions.slice(0, 20),
+        unanswered_mentions: unansweredMentions.slice(0, 20),
+        generated_at: new Date().toISOString()
+      },
+      cached: false
+    });
+  } catch (err) {
+    console.error('[tasks:ai:daily-overview]', err);
+    return res.status(500).json({ message: 'Unable to generate daily overview' });
+  }
+});
+
 export default router;
-
-

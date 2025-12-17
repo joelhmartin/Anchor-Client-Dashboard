@@ -17,20 +17,31 @@ import {
 } from '@mui/material';
 import { IconChevronDown, IconChevronRight, IconMessageCircle, IconClock } from '@tabler/icons-react';
 
-function statusColor(status) {
-  switch (status) {
-    case 'done':
-      return { bg: 'success.main', fg: 'common.white' };
-    case 'working':
-      return { bg: 'info.main', fg: 'common.white' };
-    case 'blocked':
-      return { bg: 'error.main', fg: 'common.white' };
-    case 'needs_attention':
-      return { bg: 'warning.main', fg: 'common.white' };
-    case 'todo':
-    default:
-      return { bg: 'grey.400', fg: 'common.white' };
+// Default status labels
+const DEFAULT_STATUS_LABELS = [
+  { id: 'default-todo', label: 'To Do', color: '#808080', order_index: 0, is_done_state: false },
+  { id: 'default-working', label: 'Working on it', color: '#fdab3d', order_index: 1, is_done_state: false },
+  { id: 'default-stuck', label: 'Stuck', color: '#e2445c', order_index: 2, is_done_state: false },
+  { id: 'default-done', label: 'Done', color: '#00c875', order_index: 3, is_done_state: true },
+  { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
+];
+
+function getStatusColor(status, statusLabels = []) {
+  const labels = statusLabels.length ? statusLabels : DEFAULT_STATUS_LABELS;
+  const match = labels.find((l) => l.label === status);
+  if (match) {
+    return { bg: match.color, fg: '#ffffff' };
   }
+  // Fallback for legacy status values
+  const legacyMap = {
+    done: '#00c875',
+    working: '#fdab3d',
+    blocked: '#e2445c',
+    stuck: '#e2445c',
+    needs_attention: '#ff642e',
+    todo: '#808080'
+  };
+  return { bg: legacyMap[status] || '#808080', fg: '#ffffff' };
 }
 
 function fmtMinutes(mins) {
@@ -48,6 +59,7 @@ export default function BoardTable({
   workspaceMembers = [],
   updateCountsByItem = {},
   timeTotalsByItem = {},
+  statusLabels = [],
   highlightedItemId,
   onClickItem,
   onUpdateItem,
@@ -57,6 +69,8 @@ export default function BoardTable({
   onChangeNewItemName,
   onCreateItem
 }) {
+  // Use provided labels or defaults
+  const labels = statusLabels.length ? statusLabels : DEFAULT_STATUS_LABELS;
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [editingItemId, setEditingItemId] = useState('');
   const [draftName, setDraftName] = useState('');
@@ -77,9 +91,15 @@ export default function BoardTable({
     return list.filter((m) => {
       const email = String(m.email || '').toLowerCase();
       const name = `${m.first_name || ''} ${m.last_name || ''}`.trim().toLowerCase();
-      return email.includes(q) || name.includes(q);
+      const userRole = String(m.user_role || '').toLowerCase();
+      const membershipRole = String(m.membership_role || '').toLowerCase();
+      return email.includes(q) || name.includes(q) || userRole.includes(q) || membershipRole.includes(q);
     });
   }, [workspaceMembers, peopleQuery]);
+
+  const availableMembers = useMemo(() => {
+    return (filteredMembers || []).filter((m) => !currentAssigneeIds.has(m.user_id));
+  }, [filteredMembers, currentAssigneeIds]);
 
   const groupCounts = useMemo(() => {
     const map = {};
@@ -128,11 +148,13 @@ export default function BoardTable({
   };
 
   const columns = [
-    { key: 'name', label: 'Item Name', width: 320, sticky: true },
+    // Monday-style: the first column typically has no header label (item name).
+    { key: 'name', label: '', width: 320, sticky: true },
     { key: 'status', label: 'Status', width: 160 },
     { key: 'people', label: 'People', width: 180 },
-    { key: 'due', label: 'Due Date', width: 160 },
-    { key: 'updates', label: 'Updates', width: 90 },
+    { key: 'due', label: 'Date', width: 160 },
+    // Updates count icon/button column does not need a header label.
+    { key: 'updates', label: '', width: 90 },
     { key: 'time', label: 'Time', width: 110 }
   ];
 
@@ -140,32 +162,6 @@ export default function BoardTable({
 
   return (
     <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-      {/* Sticky header row */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 4, bgcolor: 'background.default', borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns, alignItems: 'center' }}>
-          {columns.map((c) => (
-            <Box
-              key={c.key}
-              sx={{
-                p: 1,
-                fontWeight: 700,
-                fontSize: '0.85rem',
-                borderRight: '1px solid',
-                borderColor: 'divider',
-                ...(c.sticky && {
-                  position: 'sticky',
-                  left: 0,
-                  zIndex: 5,
-                  bgcolor: 'background.default'
-                })
-              }}
-            >
-              {c.label}
-            </Box>
-          ))}
-        </Box>
-      </Box>
-
       {/* Groups (each group is its own element: header + table beneath it) */}
       <Box sx={{ maxHeight: 'calc(100vh - 280px)', overflow: 'auto', p: 1.25 }}>
         {groups.map((g) => {
@@ -183,56 +179,65 @@ export default function BoardTable({
                 mb: 1.25
               }}
             >
-              {/* group header */}
+              {/* group header row (Monday-style): group name sits in the first column header slot */}
               <Box
                 sx={{
-                  display: 'flex',
+                  display: 'grid',
+                  gridTemplateColumns,
                   alignItems: 'center',
-                  gap: 1,
-                  p: 1,
                   bgcolor: 'grey.100',
                   borderBottom: '1px solid',
                   borderColor: 'divider'
                 }}
               >
-                <IconButton size="small" onClick={() => setCollapsedGroups((p) => ({ ...p, [g.id]: !p[g.id] }))}>
-                  {collapsed ? <IconChevronRight size={18} /> : <IconChevronDown size={18} />}
-                </IconButton>
-                <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                  {g.name}
-                </Typography>
-                <Chip size="small" label={groupCounts[g.id] || 0} />
+                {/* first (name) column: caret + group name + count */}
+                <Box
+                  sx={{
+                    p: 1,
+                    borderRight: '1px solid',
+                    borderColor: 'divider',
+                    position: 'sticky',
+                    left: 0,
+                    zIndex: 6,
+                    bgcolor: 'grey.100'
+                  }}
+                >
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <IconButton size="small" onClick={() => setCollapsedGroups((p) => ({ ...p, [g.id]: !p[g.id] }))}>
+                      {collapsed ? <IconChevronRight size={18} /> : <IconChevronDown size={18} />}
+                    </IconButton>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                      {g.name}
+                    </Typography>
+                    <Chip size="small" label={groupCounts[g.id] || 0} />
+                  </Stack>
+                </Box>
+
+                {/* remaining column headers */}
+                {columns.slice(1).map((c) => (
+                  <Box
+                    key={`${g.id}-${c.key}-hdr`}
+                    sx={{
+                      p: 1,
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      color: 'text.secondary',
+                      borderRight: c.key === 'time' ? 'none' : '1px solid',
+                      borderColor: 'divider',
+                      textAlign: 'center'
+                    }}
+                  >
+                    {c.label}
+                  </Box>
+                ))}
               </Box>
 
               {!collapsed && (
                 <Stack spacing={1} sx={{ p: 1, pt: 0 }}>
-                  {/* New item row */}
-                  {onCreateItem && (
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
-                      <TextField
-                        fullWidth
-                        size="small"
-                        placeholder="New item"
-                        value={newItemNameByGroup[g.id] || ''}
-                        onChange={(e) => onChangeNewItemName?.(g.id, e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') onCreateItem?.(g.id);
-                        }}
-                      />
-                      <Button
-                        variant="contained"
-                        onClick={() => onCreateItem?.(g.id)}
-                        disabled={creatingItemByGroup[g.id] || !(newItemNameByGroup[g.id] || '').trim()}
-                      >
-                        {creatingItemByGroup[g.id] ? 'Adding…' : 'Add item'}
-                      </Button>
-                    </Stack>
-                  )}
-
                   {/* Items */}
                   {items.map((it) => {
-                    const status = it.status || 'todo';
-                    const sc = statusColor(status);
+                    const status = it.status || 'To Do';
+                    const sc = getStatusColor(status, labels);
                     const assignees = assigneesByItem[it.id] || [];
                     const updateCount = updateCountsByItem[it.id] || 0;
                     const timeTotal = timeTotalsByItem[it.id] || 0;
@@ -242,7 +247,6 @@ export default function BoardTable({
                     return (
                       <Box
                         key={it.id}
-                        onClick={() => onClickItem?.(it)}
                         sx={{
                           display: 'grid',
                           gridTemplateColumns,
@@ -303,26 +307,35 @@ export default function BoardTable({
                             onChange={(e) => onUpdateItem?.(it.id, { status: e.target.value })}
                             sx={{
                               width: '100%',
-                              '& .MuiSelect-select': { py: 0.5 },
+                              '& .MuiSelect-select': { py: 0.5, color: sc.fg },
+                              '& .MuiSvgIcon-root': { color: sc.fg },
                               bgcolor: sc.bg,
                               color: sc.fg,
                               borderRadius: 999,
                               '.MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' }
                             }}
                           >
-                            <MenuItem value="todo">Todo</MenuItem>
-                            <MenuItem value="working">Working</MenuItem>
-                            <MenuItem value="blocked">Blocked</MenuItem>
-                            <MenuItem value="done">Done</MenuItem>
-                            <MenuItem value="needs_attention">Needs Attention</MenuItem>
+                            {labels.map((sl) => (
+                              <MenuItem key={sl.id} value={sl.label}>
+                                <Box
+                                  component="span"
+                                  sx={{
+                                    display: 'inline-block',
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: '50%',
+                                    bgcolor: sl.color,
+                                    mr: 1
+                                  }}
+                                />
+                                {sl.label}
+                              </MenuItem>
+                            ))}
                           </Select>
                         </Box>
 
                         {/* people */}
-                        <Box
-                          sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }}
-                          onClick={(e) => openPeoplePicker(e, it.id)}
-                        >
+                        <Box sx={{ p: 1, borderRight: '1px solid', borderColor: 'divider' }} onClick={(e) => openPeoplePicker(e, it.id)}>
                           <Stack direction="row" spacing={-0.5} alignItems="center">
                             {assignees.slice(0, 3).map((a) => {
                               const label =
@@ -349,7 +362,7 @@ export default function BoardTable({
                           <TextField
                             size="small"
                             type="date"
-                            value={it.due_date || ''}
+                            value={it.due_date ? it.due_date.slice(0, 10) : ''}
                             onChange={(e) => onUpdateItem?.(it.id, { due_date: e.target.value || null })}
                             InputLabelProps={{ shrink: true }}
                             sx={{ width: '100%' }}
@@ -370,13 +383,41 @@ export default function BoardTable({
 
                         {/* time */}
                         <Box sx={{ p: 1 }} onClick={(e) => e.stopPropagation()}>
-                          <Button size="small" variant="text" startIcon={<IconClock size={16} />} onClick={() => onClickItem?.(it, 'time')}>
+                          <Button size="small" variant="text" startIcon={<IconClock size={16} />}>
                             {fmtMinutes(timeTotal)}
                           </Button>
                         </Box>
                       </Box>
                     );
                   })}
+
+                  {/* New item row (bottom of group, Monday-style) */}
+                  {onCreateItem && (
+                    <Stack
+                      direction={{ xs: 'column', sm: 'row' }}
+                      spacing={1}
+                      alignItems={{ xs: 'stretch', sm: 'center' }}
+                      sx={{ pt: 0.5 }}
+                    >
+                      <TextField
+                        fullWidth
+                        size="small"
+                        placeholder="New item"
+                        value={newItemNameByGroup[g.id] || ''}
+                        onChange={(e) => onChangeNewItemName?.(g.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') onCreateItem?.(g.id);
+                        }}
+                      />
+                      <Button
+                        variant="contained"
+                        onClick={() => onCreateItem?.(g.id)}
+                        disabled={creatingItemByGroup[g.id] || !(newItemNameByGroup[g.id] || '').trim()}
+                      >
+                        {creatingItemByGroup[g.id] ? 'Adding…' : 'Add item'}
+                      </Button>
+                    </Stack>
+                  )}
                 </Stack>
               )}
             </Box>
@@ -387,48 +428,67 @@ export default function BoardTable({
       <Popper open={peopleOpen} anchorEl={peopleAnchor} placement="bottom-start" sx={{ zIndex: 2000 }}>
         <Paper sx={{ p: 1, width: 320 }}>
           <Stack spacing={1}>
-            <Typography variant="subtitle2">People</Typography>
             <TextField
               size="small"
-              placeholder="Search people"
+              placeholder="Search names, roles or teams"
               value={peopleQuery}
               onChange={(e) => setPeopleQuery(e.target.value)}
               InputProps={{
                 startAdornment: <InputAdornment position="start">@</InputAdornment>
               }}
             />
+            {currentAssignees.length > 0 && (
+              <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
+                {currentAssignees.map((a) => {
+                  const label =
+                    [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || a.email || a.user_id?.slice?.(0, 6) || 'User';
+                  return (
+                    <Chip
+                      key={a.user_id}
+                      size="small"
+                      label={label}
+                      avatar={
+                        <Avatar src={a.avatar_url || ''} sx={{ width: 22, height: 22, fontSize: 11 }}>
+                          {label.slice(0, 1).toUpperCase()}
+                        </Avatar>
+                      }
+                      onMouseDown={(e) => e.preventDefault()}
+                      onDelete={() => onToggleAssignee?.(peopleItemId, a.user_id, true)}
+                      sx={{ maxWidth: '100%' }}
+                    />
+                  );
+                })}
+              </Stack>
+            )}
             <Divider />
             <Box sx={{ maxHeight: 260, overflow: 'auto' }}>
               <Stack spacing={0.5}>
-                {filteredMembers.slice(0, 25).map((m) => {
+                {availableMembers.slice(0, 25).map((m) => {
                   const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
                   const label = name ? `${name}` : m.email;
-                  const selected = currentAssigneeIds.has(m.user_id);
                   return (
                     <Button
                       key={m.user_id}
                       size="small"
-                      variant={selected ? 'contained' : 'outlined'}
-                      onClick={() => onToggleAssignee?.(peopleItemId, m.user_id, selected)}
+                      variant="outlined"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => onToggleAssignee?.(peopleItemId, m.user_id, false)}
                       sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
                     >
                       <Stack direction="row" spacing={1} alignItems="center">
                         <Avatar src={m.avatar_url || ''} sx={{ width: 22, height: 22, fontSize: 11 }}>
                           {(label || 'U').slice(0, 1).toUpperCase()}
                         </Avatar>
-                        <Stack sx={{ minWidth: 0 }}>
-                          <Typography variant="body2" noWrap>
+                        <Stack sx={{ minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
+                          <Typography variant="body2" noWrap sx={{ width: '100%', display: 'block', textAlign: 'left' }}>
                             {label}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary" noWrap>
-                            {m.email || ''}
                           </Typography>
                         </Stack>
                       </Stack>
                     </Button>
                   );
                 })}
-                {!filteredMembers.length && (
+                {!availableMembers.length && (
                   <Typography variant="body2" color="text.secondary">
                     No matches.
                   </Typography>
@@ -444,5 +504,3 @@ export default function BoardTable({
     </Box>
   );
 }
-
-

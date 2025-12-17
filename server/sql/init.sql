@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   monday_active_group_id TEXT,
   monday_completed_group_id TEXT,
   client_identifier_value TEXT,
+  -- Internal Task Manager board provisioning
+  task_workspace_id UUID REFERENCES task_workspaces(id) ON DELETE SET NULL,
+  task_board_id UUID REFERENCES task_boards(id) ON DELETE SET NULL,
+  board_prefix TEXT,
   account_manager_person_id TEXT,
   ctm_account_number TEXT,
   ctm_api_key TEXT,
@@ -277,6 +281,7 @@ CREATE TABLE IF NOT EXISTS task_boards (
   workspace_id UUID NOT NULL REFERENCES task_workspaces(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
+  board_prefix TEXT,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -294,14 +299,14 @@ CREATE TABLE IF NOT EXISTS task_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id UUID NOT NULL REFERENCES task_groups(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo',
+  status TEXT NOT NULL DEFAULT 'To Do',
   due_date DATE,
   is_voicemail BOOLEAN NOT NULL DEFAULT FALSE,
   needs_attention BOOLEAN NOT NULL DEFAULT FALSE,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT task_items_status_check CHECK (status IN ('todo','working','blocked','done','needs_attention'))
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Status is now a free-form text field to support custom board status labels
 );
 CREATE INDEX IF NOT EXISTS idx_task_items_group ON task_items(group_id);
 CREATE INDEX IF NOT EXISTS idx_task_items_status ON task_items(status);
@@ -310,10 +315,10 @@ CREATE TABLE IF NOT EXISTS task_subitems (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   parent_item_id UUID NOT NULL REFERENCES task_items(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo',
+  status TEXT NOT NULL DEFAULT 'To Do',
   due_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT task_subitems_status_check CHECK (status IN ('todo','working','blocked','done','needs_attention'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Status is now a free-form text field to support custom board status labels
 );
 CREATE INDEX IF NOT EXISTS idx_task_subitems_parent ON task_subitems(parent_item_id);
 
@@ -389,6 +394,45 @@ CREATE TABLE IF NOT EXISTS task_item_ai_summaries (
 );
 CREATE INDEX IF NOT EXISTS idx_task_item_ai_summaries_generated_at ON task_item_ai_summaries(generated_at);
 
+-- Board status labels (customizable per board)
+CREATE TABLE IF NOT EXISTS task_board_status_labels (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  board_id UUID NOT NULL REFERENCES task_boards(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#808080',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  is_done_state BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_board_status_labels_board ON task_board_status_labels(board_id);
+
+-- Update view tracking (who saw each update)
+CREATE TABLE IF NOT EXISTS task_update_views (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  update_id UUID NOT NULL REFERENCES task_updates(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(update_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_update_views_update ON task_update_views(update_id);
+CREATE INDEX IF NOT EXISTS idx_task_update_views_user ON task_update_views(user_id);
+
+-- AI daily overview cache
+CREATE TABLE IF NOT EXISTS task_ai_daily_overviews (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  overview_date DATE NOT NULL,
+  summary TEXT NOT NULL,
+  todo_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  pending_mentions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  unanswered_mentions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provider TEXT NOT NULL DEFAULT 'vertex',
+  model TEXT,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, overview_date)
+);
+CREATE INDEX IF NOT EXISTS idx_task_ai_daily_overviews_user_date ON task_ai_daily_overviews(user_id, overview_date);
+
 -- Idempotent alter helpers
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'client';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
@@ -401,6 +445,11 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS auto_star_enabled BOOLEAN D
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS monthly_revenue_goal DECIMAL(10, 2);
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_type TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_subtype TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_workspace_id UUID REFERENCES task_workspaces(id) ON DELETE SET NULL;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_board_id UUID REFERENCES task_boards(id) ON DELETE SET NULL;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS board_prefix TEXT;
+
+ALTER TABLE task_boards ADD COLUMN IF NOT EXISTS board_prefix TEXT;
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS business_name TEXT;
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS business_description TEXT;
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS website_url TEXT;

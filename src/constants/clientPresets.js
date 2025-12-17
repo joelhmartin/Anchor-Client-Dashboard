@@ -8,34 +8,187 @@ const TMJ_AND_SLEEP_SERVICES = [
   'Sleep Study',
   'Nuvola',
   'Botox',
-  'Oral Surgery',
+  'Oral Surgery'
 ];
 
-export const TMJ_AND_SLEEP_SYMPTOMS = [
+// ─────────────────────────────────────────────────────────────────────────────
+// CONCERN PRESETS BY SUBTYPE
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Medical - TMJ & Sleep
+export const TMJ_AND_SLEEP_CONCERNS = [
   'Jaw Pain',
   'Snoring',
   'Clenching',
   'Headaches',
   'Sleep Apnea',
-  'Headaches',
   'Jaw Popping',
-  'Popping',
   'Teeth Grinding',
   'Locked Jaw',
   'Insomnia',
-  'Ear',
-  'Ringing',
+  'Ear Pain',
+  'Tinnitus / Ringing',
   'Clicking',
   'Neck Pain',
-  'Jaw Pain',
-  'Ringing',
-  'Popping'
+  'Fatigue',
+  'Difficulty Sleeping',
+  'CPAP Issues'
 ];
 
-export const CLIENT_SYMPTOM_PRESETS = {
-  tmj_sleep: TMJ_AND_SLEEP_SYMPTOMS
-};
+// Medical - Dental
+export const DENTAL_CONCERNS = [
+  'Tooth Pain',
+  'Cavity',
+  'Broken Tooth',
+  'Missing Teeth',
+  'Crooked Teeth',
+  'Gum Disease',
+  'Bleeding Gums',
+  'Bad Breath',
+  'Teeth Whitening',
+  'Tooth Sensitivity',
+  'Wisdom Teeth',
+  'Dental Emergency',
+  'Cosmetic Concerns',
+  'Braces / Aligners'
+];
 
+// Medical - Med Spa
+export const MED_SPA_CONCERNS = [
+  'Wrinkles',
+  'Fine Lines',
+  'Acne Scars',
+  'Sun Damage',
+  'Uneven Skin Tone',
+  'Sagging Skin',
+  'Stubborn Fat',
+  'Unwanted Hair',
+  'Age Spots',
+  'Cellulite',
+  'Dull Skin',
+  'Large Pores',
+  'Rosacea',
+  'Stretch Marks'
+];
+
+// Medical - Chiropractic
+export const CHIROPRACTIC_CONCERNS = [
+  'Back Pain',
+  'Neck Pain',
+  'Sciatica',
+  'Poor Posture',
+  'Sports Injury',
+  'Headaches',
+  'Shoulder Pain',
+  'Hip Pain',
+  'Muscle Tension',
+  'Limited Mobility',
+  'Herniated Disc',
+  'Whiplash',
+  'Pregnancy Discomfort',
+  'Joint Stiffness'
+];
+
+// Home Service - Roofing
+export const ROOFING_CONCERNS = [
+  'Roof Leak',
+  'Storm Damage',
+  'Missing Shingles',
+  'Hail Damage',
+  'Old Roof',
+  'Roof Inspection',
+  'Insurance Claim',
+  'Gutter Issues',
+  'Ice Dam',
+  'Sagging Roof',
+  'Ventilation Problems',
+  'Skylight Leak',
+  'Flashing Damage',
+  'Moss / Algae Growth'
+];
+
+// Home Service - Plumbing
+export const PLUMBING_CONCERNS = [
+  'Clogged Drain',
+  'Leaky Faucet',
+  'No Hot Water',
+  'Water Heater Issue',
+  'Low Water Pressure',
+  'Running Toilet',
+  'Sewer Backup',
+  'Pipe Leak',
+  'Frozen Pipes',
+  'Garbage Disposal',
+  'Water Bill High',
+  'Gas Line Issue',
+  'Sump Pump',
+  'Water Quality'
+];
+
+// Home Service - HVAC
+export const HVAC_CONCERNS = [
+  'AC Not Cooling',
+  'Furnace Not Heating',
+  'Strange Noises',
+  'High Energy Bills',
+  'Uneven Temperatures',
+  'Thermostat Issues',
+  'Poor Air Quality',
+  'Bad Smell',
+  'Unit Not Starting',
+  'Refrigerant Leak',
+  'Ductwork Issues',
+  'Seasonal Tune-Up',
+  'New System Quote',
+  'Emergency Repair'
+];
+
+// Food Service
+export const FOOD_SERVICE_CONCERNS = [
+  'Catering Quote',
+  'Event Planning',
+  'Menu Questions',
+  'Dietary Restrictions',
+  'Group Reservation',
+  'Private Event',
+  'Delivery Issue',
+  'Order Problem',
+  'Feedback / Complaint',
+  'Gift Cards',
+  'Hours / Location',
+  'Job Inquiry'
+];
+
+// General / Other
+export const GENERAL_CONCERNS = [
+  'Pricing / Quote',
+  'Availability',
+  'Service Area',
+  'Emergency Service',
+  'Follow-Up',
+  'Rescheduling',
+  'Billing Question',
+  'Insurance',
+  'Warranty',
+  'Complaint',
+  'General Inquiry'
+];
+
+export const CLIENT_CONCERN_PRESETS = {
+  // Medical
+  tmj_sleep: TMJ_AND_SLEEP_CONCERNS,
+  dental: DENTAL_CONCERNS,
+  med_spa: MED_SPA_CONCERNS,
+  chiropractic: CHIROPRACTIC_CONCERNS,
+  // Home Service
+  roofing: ROOFING_CONCERNS,
+  plumbing: PLUMBING_CONCERNS,
+  hvac: HVAC_CONCERNS,
+  // Food Service
+  food_service: FOOD_SERVICE_CONCERNS,
+  // General / Other
+  other: GENERAL_CONCERNS
+};
 
 export const CLIENT_TYPE_PRESETS = [
   {
