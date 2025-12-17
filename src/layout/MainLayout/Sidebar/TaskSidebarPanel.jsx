@@ -21,7 +21,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AddIcon from '@mui/icons-material/Add';
 
 import useAuth from 'hooks/useAuth';
-import { createTaskBoard, fetchTaskBoards, fetchTaskWorkspaces } from 'api/tasks';
+import { createTaskBoard, createTaskWorkspace, fetchTaskBoards, fetchTaskWorkspaces } from 'api/tasks';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -44,6 +44,10 @@ export default function TaskPanel() {
   const [creatingBoardFor, setCreatingBoardFor] = useState('');
   const [newBoardName, setNewBoardName] = useState('');
   const [creatingBoard, setCreatingBoard] = useState(false);
+
+  const [creatingWorkspaceOpen, setCreatingWorkspaceOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
 
   useEffect(() => {
     setExpanded(workspaceIdFromUrl || '');
@@ -98,6 +102,28 @@ export default function TaskPanel() {
     setNewBoardName('');
   };
 
+  const openCreateWorkspace = () => {
+    setCreatingWorkspaceOpen(true);
+    setNewWorkspaceName('');
+  };
+
+  const handleCreateWorkspace = async () => {
+    if (!newWorkspaceName.trim()) return;
+    setCreatingWorkspace(true);
+    try {
+      const workspace = await createTaskWorkspace({ name: newWorkspaceName.trim() });
+      setWorkspaces((prev) => [workspace, ...(prev || [])]);
+      setBoardsByWorkspace((prev) => ({ ...prev, [workspace.id]: [] }));
+      setCreatingWorkspaceOpen(false);
+      // Auto-select the new workspace (mirrors "add board" UX)
+      selectWorkspace(workspace.id);
+    } catch (_err) {
+      // ignore
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  };
+
   const handleCreateBoard = async () => {
     if (!creatingBoardFor || !newBoardName.trim()) return;
     setCreatingBoard(true);
@@ -128,7 +154,14 @@ export default function TaskPanel() {
       <Stack spacing={1.5}>
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
           <Typography variant="subtitle1">Workspaces</Typography>
-          {loadingWorkspaces && <CircularProgress size={16} />}
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            {canCreateBoard && (
+              <IconButton size="small" onClick={openCreateWorkspace} aria-label="create workspace">
+                <AddIcon fontSize="small" />
+              </IconButton>
+            )}
+            {loadingWorkspaces && <CircularProgress size={16} />}
+          </Stack>
         </Stack>
 
         {workspaces.length === 0 && !loadingWorkspaces && (
@@ -150,7 +183,18 @@ export default function TaskPanel() {
                   if (exp) selectWorkspace(w.id);
                 }}
               >
-                <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ py: 0, '& .MuiAccordionSummary-content': { my: 0 } }}>
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon />}
+                  sx={{
+                    px: 0,
+                    py: 0,
+                    minHeight: 'auto',
+                    '&.MuiButtonBase-root': { px: 0, py: 0, minHeight: 'auto' },
+                    '& .MuiAccordionSummary-content': { my: 0 },
+                    '& .MuiAccordionSummary-contentGutters': { margin: 0 },
+                    '& .MuiAccordionSummary-expandIconWrapper': { mr: 0 }
+                  }}
+                >
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
                     <Button
                       size="small"
@@ -162,11 +206,12 @@ export default function TaskPanel() {
                         textTransform: 'none',
                         justifyContent: 'flex-start',
                         py: 0,
+                        px: 0,
                         minHeight: 0,
                         height: 'auto',
                         lineHeight: 1.2,
                         whiteSpace: 'nowrap',
-                        '&.MuiButton-root': { minHeight: 0, paddingTop: 0, paddingBottom: 0 }
+                        '&.MuiButton-root': { minHeight: 0, paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 }
                       }}
                     >
                       {w.name}
@@ -184,7 +229,7 @@ export default function TaskPanel() {
                     )}
                   </Stack>
                 </AccordionSummary>
-                <AccordionDetails>
+                <AccordionDetails sx={{ px: 0 }}>
                   {boards.length === 0 ? (
                     <Typography variant="body2" color="text.secondary">
                       No boards yet.
@@ -197,7 +242,7 @@ export default function TaskPanel() {
                           onClick={() => selectBoard(w.id, b.id)}
                           variant={b.id === boardIdFromUrl ? 'contained' : 'text'}
                           color={b.id === boardIdFromUrl ? 'primary' : 'inherit'}
-                          sx={{ justifyContent: 'flex-start', textTransform: 'none', whiteSpace: 'nowrap' }}
+                          sx={{ justifyContent: 'flex-start', textTransform: 'none', whiteSpace: 'nowrap', px: 0 }}
                         >
                           {b.name}
                         </Button>
@@ -226,6 +271,26 @@ export default function TaskPanel() {
         <DialogActions>
           <Button onClick={() => setCreatingBoardFor('')}>Cancel</Button>
           <Button onClick={handleCreateBoard} disabled={creatingBoard || !newBoardName.trim()}>
+            Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={creatingWorkspaceOpen} onClose={() => setCreatingWorkspaceOpen(false)}>
+        <DialogTitle>Create workspace</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Workspace name"
+            fullWidth
+            value={newWorkspaceName}
+            onChange={(e) => setNewWorkspaceName(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreatingWorkspaceOpen(false)}>Cancel</Button>
+          <Button onClick={handleCreateWorkspace} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
             Create
           </Button>
         </DialogActions>

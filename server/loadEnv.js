@@ -26,3 +26,18 @@ if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = defaultGcloudCreds;
   }
 }
+
+// Helpful local debug log (safe: does not print secrets)
+if ((process.env.NODE_ENV || 'development') !== 'production') {
+  const adcPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const exists = adcPath ? existsSync(adcPath) : false;
+  // eslint-disable-next-line no-console
+  console.log('[gcloud-auth]', {
+    GOOGLE_APPLICATION_CREDENTIALS: adcPath || null,
+    adc_exists: exists,
+    GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT || null,
+    VERTEX_PROJECT_ID: process.env.VERTEX_PROJECT_ID || null,
+    GOOGLE_CLOUD_REGION: process.env.GOOGLE_CLOUD_REGION || null,
+    VERTEX_LOCATION: process.env.VERTEX_LOCATION || null
+  });
+}

@@ -291,7 +291,10 @@ export default function AdminHub() {
     return [...clients].sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
   }, [clients]);
 
-  const sortedEditors = useMemo(() => sortedClients.filter((c) => c.role === 'admin' || c.role === 'superadmin'), [sortedClients]);
+  const sortedEditors = useMemo(
+    () => sortedClients.filter((c) => c.role === 'admin' || c.role === 'superadmin' || c.role === 'team'),
+    [sortedClients]
+  );
   const sortedClientOnly = useMemo(() => sortedClients.filter((c) => c.role === 'client'), [sortedClients]);
 
   const { query: adminsQuery, setQuery: setAdminsQuery, filtered: filteredAdmins } = useTableSearch(sortedEditors, [
@@ -1057,12 +1060,12 @@ export default function AdminHub() {
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
             <Box sx={{ p: 2 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
-                <Typography variant="h5">Admins</Typography>
+                <Typography variant="h5">Staff</Typography>
                 <Stack direction="row" spacing={1} alignItems="center">
                   {loading && <CircularProgress size={20} />}
                   <TextField
                     size="small"
-                    placeholder="Search admins…"
+                    placeholder="Search staff…"
                     value={adminsQuery}
                     onChange={(e) => setAdminsQuery(e.target.value)}
                   />
@@ -1109,7 +1112,7 @@ export default function AdminHub() {
                   {!filteredAdmins.length && !loading && (
                     <TableRow>
                       <TableCell colSpan={4} align="center">
-                        No admins yet.
+                        No staff yet.
                       </TableCell>
                     </TableRow>
                   )}

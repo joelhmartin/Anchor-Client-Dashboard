@@ -14,7 +14,19 @@ function getProjectId() {
 
 function ensureVertexInstance(project, location) {
   if (!vertexInstance || cachedProject !== project || cachedLocation !== location) {
-    vertexInstance = new VertexAI({ project, location });
+    // Vertex AI client uses google-auth-library under the hood. In local dev,
+    // authorized_user ADC (application_default_credentials.json) typically
+    // requires explicit scopes to mint access tokens. Cloud Run service accounts
+    // work without this, which is why prod can succeed while local fails.
+    const googleAuthOptions = {
+      scopes: ['https://www.googleapis.com/auth/cloud-platform']
+    };
+    // If a credentials file is explicitly provided, pass it through as well.
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      googleAuthOptions.keyFilename = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    }
+
+    vertexInstance = new VertexAI({ project, location, googleAuthOptions });
     cachedProject = project;
     cachedLocation = location;
     modelCache.clear();
