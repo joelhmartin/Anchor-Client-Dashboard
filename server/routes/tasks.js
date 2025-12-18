@@ -120,19 +120,23 @@ const subitemUpdateSchema = z.object({
 });
 
 // Status label management schema
+const colorHexSchema = z.string().regex(/^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/);
+
 const statusLabelCreateSchema = z.object({
   label: z.string().min(1).max(100),
-  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  color: colorHexSchema.optional(), // supports #RRGGBB and #RRGGBBAA
   order_index: z.number().int().min(0).optional(),
   is_done_state: z.boolean().optional()
 });
 
 const statusLabelUpdateSchema = z.object({
   label: z.string().min(1).max(100).optional(),
-  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  color: colorHexSchema.optional(), // supports #RRGGBB and #RRGGBBAA
   order_index: z.number().int().min(0).optional(),
   is_done_state: z.boolean().optional()
 });
+
+const globalStatusLabelCreateSchema = statusLabelCreateSchema;
 
 function getEffectiveRole(req) {
   return req.user?.effective_role || req.user?.role;
@@ -408,6 +412,27 @@ router.post('/workspaces', async (req, res) => {
     }
     console.error('[tasks:workspaces:create]', err);
     return res.status(500).json({ message: 'Unable to create workspace' });
+  }
+});
+
+// Delete a workspace (cascades boards/groups/items)
+router.delete('/workspaces/:workspaceId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { workspaceId } = req.params;
+  if (eff !== 'superadmin' && eff !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  try {
+    const { rows: exists } = await query('SELECT id FROM task_workspaces WHERE id = $1 LIMIT 1', [workspaceId]);
+    if (!exists.length) return res.status(404).json({ message: 'Workspace not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    await query('DELETE FROM task_workspaces WHERE id = $1', [workspaceId]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[tasks:workspaces:delete]', err);
+    return res.status(500).json({ message: 'Unable to delete workspace' });
   }
 });
 
@@ -703,6 +728,27 @@ router.post('/workspaces/:workspaceId/boards', async (req, res) => {
   }
 });
 
+// Delete a board (cascades groups/items)
+router.delete('/boards/:boardId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { boardId } = req.params;
+  if (eff !== 'superadmin' && eff !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  try {
+    const workspaceId = await getWorkspaceIdForBoard(boardId);
+    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    await query('DELETE FROM task_boards WHERE id = $1', [boardId]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[tasks:boards:delete]', err);
+    return res.status(500).json({ message: 'Unable to delete board' });
+  }
+});
+
 router.patch('/boards/:boardId', async (req, res) => {
   const eff = getEffectiveRole(req);
   const userId = req.user.id;
@@ -757,12 +803,40 @@ router.get('/boards/:boardId/status-labels', async (req, res) => {
     const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
 
-    const { rows } = await query(
+    const [{ rows: boardRows }, { rows: globalRows }] = await Promise.all([
+      query(
       `SELECT * FROM task_board_status_labels
        WHERE board_id = $1
        ORDER BY order_index ASC, label ASC`,
-      [boardId]
-    );
+        [boardId]
+      ),
+      query(
+        `SELECT * FROM task_global_status_labels
+         ORDER BY order_index ASC, label ASC`,
+        []
+      )
+    ]);
+
+    // Merge global + board labels. Board labels override global ones with the same label text.
+    const merged = [];
+    const seen = new Map(); // key=labelLower -> index
+    for (const r of globalRows) {
+      const key = String(r.label || '').trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.set(key, merged.length);
+      merged.push({ ...r, is_global: true });
+    }
+    for (const r of boardRows) {
+      const key = String(r.label || '').trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) {
+        merged[seen.get(key)] = { ...r, is_global: false };
+      } else {
+        seen.set(key, merged.length);
+        merged.push({ ...r, is_global: false });
+      }
+    }
 
     // Return defaults if none exist
     const defaultLabels = [
@@ -773,10 +847,55 @@ router.get('/boards/:boardId/status-labels', async (req, res) => {
       { id: 'default-needs-attention', label: 'Needs Attention', color: '#ff642e', order_index: 4, is_done_state: false }
     ];
 
-    return res.json({ status_labels: rows.length ? rows : defaultLabels });
+    return res.json({ status_labels: merged.length ? merged : defaultLabels });
   } catch (err) {
     console.error('[tasks:status-labels:list]', err);
     return res.status(500).json({ message: 'Unable to load status labels' });
+  }
+});
+
+// List global status labels
+router.get('/status-labels/global', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  if (!['superadmin', 'admin'].includes(eff)) {
+    return res.status(403).json({ message: 'Only admins can manage status labels' });
+  }
+  try {
+    const { rows } = await query(
+      `SELECT * FROM task_global_status_labels ORDER BY order_index ASC, label ASC`,
+      []
+    );
+    return res.json({ status_labels: rows });
+  } catch (err) {
+    console.error('[tasks:status-labels:global:list]', err);
+    return res.status(500).json({ message: 'Unable to load global status labels' });
+  }
+});
+
+// Create a global status label
+router.post('/status-labels/global', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  if (!['superadmin', 'admin'].includes(eff)) {
+    return res.status(403).json({ message: 'Only admins can manage status labels' });
+  }
+  try {
+    const payload = globalStatusLabelCreateSchema.parse(req.body);
+    const { rows: maxRows } = await query(
+      `SELECT COALESCE(MAX(order_index), -1) + 1 AS next_order FROM task_global_status_labels`,
+      []
+    );
+    const orderIndex = payload.order_index ?? maxRows[0].next_order;
+    const { rows } = await query(
+      `INSERT INTO task_global_status_labels (label, color, order_index, is_done_state, created_by)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING *`,
+      [payload.label.trim(), payload.color || '#808080', orderIndex, payload.is_done_state ?? false, req.user.id]
+    );
+    return res.status(201).json({ status_label: rows[0] });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    console.error('[tasks:status-labels:global:create]', err);
+    return res.status(500).json({ message: 'Unable to create global status label' });
   }
 });
 
@@ -993,6 +1112,7 @@ router.post('/reports/boards', async (req, res) => {
        JOIN task_groups g ON g.board_id = b.id
        JOIN task_items i ON i.group_id = g.id
        WHERE b.id = ANY($1)
+         AND i.archived_at IS NULL
        GROUP BY b.id`,
       [boardIds, startDate, endDate]
     );
@@ -1006,6 +1126,7 @@ router.post('/reports/boards', async (req, res) => {
        JOIN task_items i ON i.group_id = g.id
        JOIN task_updates u ON u.item_id = i.id
        WHERE b.id = ANY($1)
+         AND i.archived_at IS NULL
          AND ($2::timestamptz IS NULL OR u.created_at >= $2)
          AND ($3::timestamptz IS NULL OR u.created_at <= $3)
        GROUP BY b.id`,
@@ -1021,6 +1142,7 @@ router.post('/reports/boards', async (req, res) => {
        JOIN task_items i ON i.group_id = g.id
        JOIN task_time_entries t ON t.item_id = i.id
        WHERE b.id = ANY($1)
+         AND i.archived_at IS NULL
          AND ($2::timestamptz IS NULL OR t.created_at >= $2)
          AND ($3::timestamptz IS NULL OR t.created_at <= $3)
        GROUP BY b.id`,
@@ -1093,6 +1215,7 @@ router.post('/reports/billing', async (req, res) => {
        JOIN task_boards b ON b.id = g.board_id
        JOIN task_workspaces w ON w.id = b.workspace_id
        WHERE b.id = ANY($1)
+         AND i.archived_at IS NULL
        ORDER BY w.name, b.name, g.name, i.name`,
       [boardIds]
     );
@@ -1186,6 +1309,7 @@ router.get('/boards/:boardId/view', async (req, res) => {
        FROM task_items i
        JOIN task_groups g ON g.id = i.group_id
        WHERE g.board_id = $1
+         AND i.archived_at IS NULL
        ORDER BY i.updated_at DESC, i.created_at DESC`,
       [boardId]
     );
@@ -1239,12 +1363,39 @@ router.get('/boards/:boardId/view', async (req, res) => {
     }
 
     // Fetch status labels for this board
-    const { rows: statusLabels } = await query(
-      `SELECT * FROM task_board_status_labels
-       WHERE board_id = $1
-       ORDER BY order_index ASC, label ASC`,
-      [boardId]
-    );
+    const [{ rows: statusLabels }, { rows: globalLabels }] = await Promise.all([
+      query(
+        `SELECT * FROM task_board_status_labels
+         WHERE board_id = $1
+         ORDER BY order_index ASC, label ASC`,
+        [boardId]
+      ),
+      query(
+        `SELECT * FROM task_global_status_labels
+         ORDER BY order_index ASC, label ASC`,
+        []
+      )
+    ]);
+
+    const mergedLabels = [];
+    const seen = new Map();
+    for (const r of globalLabels) {
+      const key = String(r.label || '').trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.set(key, mergedLabels.length);
+      mergedLabels.push({ ...r, is_global: true });
+    }
+    for (const r of statusLabels) {
+      const key = String(r.label || '').trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) {
+        mergedLabels[seen.get(key)] = { ...r, is_global: false };
+      } else {
+        seen.set(key, mergedLabels.length);
+        mergedLabels.push({ ...r, is_global: false });
+      }
+    }
 
     // If no custom labels, return default labels
     const defaultLabels = [
@@ -1262,7 +1413,7 @@ router.get('/boards/:boardId/view', async (req, res) => {
       assignees_by_item: assigneesByItem,
       time_totals_by_item: timeTotalsByItem,
       update_counts_by_item: updateCountsByItem,
-      status_labels: statusLabels.length ? statusLabels : defaultLabels
+      status_labels: mergedLabels.length ? mergedLabels : defaultLabels
     });
   } catch (err) {
     console.error('[tasks:boards:view]', err);
@@ -1293,6 +1444,27 @@ router.post('/boards/:boardId/groups', async (req, res) => {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
     console.error('[tasks:groups:create]', err);
     return res.status(500).json({ message: 'Unable to create group' });
+  }
+});
+
+// Delete a group (cascades items)
+router.delete('/groups/:groupId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { groupId } = req.params;
+  if (eff !== 'superadmin' && eff !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  try {
+    const workspaceId = await getWorkspaceIdForGroup(groupId);
+    if (!workspaceId) return res.status(404).json({ message: 'Group not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    await query('DELETE FROM task_groups WHERE id = $1', [groupId]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[tasks:groups:delete]', err);
+    return res.status(500).json({ message: 'Unable to delete group' });
   }
 });
 
@@ -1374,6 +1546,9 @@ router.patch('/items/:itemId', async (req, res) => {
 
     const beforeRes = await query('SELECT * FROM task_items WHERE id = $1', [itemId]);
     const itemBefore = beforeRes.rows[0] || null;
+    if (itemBefore?.archived_at) {
+      return res.status(400).json({ message: 'Item is archived' });
+    }
 
     const payload = itemUpdateSchema.parse(req.body);
     const fields = [];
@@ -1420,6 +1595,62 @@ router.patch('/items/:itemId', async (req, res) => {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
     console.error('[tasks:items:update]', err);
     return res.status(500).json({ message: 'Unable to update item' });
+  }
+});
+
+// Archive (soft delete) an item (retained for 30 days, then purged by cron)
+router.delete('/items/:itemId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { itemId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForItem(itemId);
+    if (!workspaceId) return res.status(404).json({ message: 'Item not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    const { rows } = await query(
+      `UPDATE task_items
+       SET archived_at = COALESCE(archived_at, NOW()),
+           archived_by = COALESCE(archived_by, $2),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, archived_at`,
+      [itemId, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Item not found' });
+    return res.json({ ok: true, archived_at: rows[0].archived_at });
+  } catch (err) {
+    console.error('[tasks:items:archive]', err);
+    return res.status(500).json({ message: 'Unable to archive item' });
+  }
+});
+
+// Restore an archived item (within retention window)
+router.post('/items/:itemId/restore', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { itemId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForItem(itemId);
+    if (!workspaceId) return res.status(404).json({ message: 'Item not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+
+    const { rows } = await query(
+      `UPDATE task_items
+       SET archived_at = NULL,
+           archived_by = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [itemId]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Item not found' });
+    return res.json({ item: rows[0] });
+  } catch (err) {
+    console.error('[tasks:items:restore]', err);
+    return res.status(500).json({ message: 'Unable to restore item' });
   }
 });
 
@@ -1536,7 +1767,8 @@ router.get('/boards/:boardId/report', async (req, res) => {
          MAX(i.updated_at) AS last_updated_at
        FROM task_items i
        JOIN task_groups g ON g.id = i.group_id
-       WHERE g.board_id = $1`,
+       WHERE g.board_id = $1
+         AND i.archived_at IS NULL`,
       [boardId]
     );
 
@@ -1579,6 +1811,7 @@ router.get('/boards/:boardId/export.csv', async (req, res) => {
        FROM task_items i
        JOIN task_groups g ON g.id = i.group_id
        WHERE g.board_id = $1
+         AND i.archived_at IS NULL
        ORDER BY g.order_index ASC, i.updated_at DESC`,
       [boardId]
     );
@@ -1635,6 +1868,7 @@ router.get('/my-work', async (req, res) => {
           JOIN task_boards b ON b.id = g.board_id
           JOIN task_workspaces w ON w.id = b.workspace_id
           WHERE a.user_id = $1
+            AND i.archived_at IS NULL
         ),
         item_assignees AS (
           SELECT
@@ -1950,6 +2184,7 @@ router.get('/items/:itemId/subitems', async (req, res) => {
       `SELECT *
        FROM task_subitems
        WHERE parent_item_id = $1
+         AND archived_at IS NULL
        ORDER BY created_at DESC`,
       [itemId]
     );
@@ -2037,12 +2272,43 @@ router.delete('/subitems/:subitemId', async (req, res) => {
     if (!workspaceId) return res.status(404).json({ message: 'Subitem not found' });
     const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
     if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
-    const { rowCount } = await query('DELETE FROM task_subitems WHERE id = $1', [subitemId]);
-    if (!rowCount) return res.status(404).json({ message: 'Subitem not found' });
-    return res.json({ ok: true });
+    const { rows } = await query(
+      `UPDATE task_subitems
+       SET archived_at = COALESCE(archived_at, NOW()),
+           archived_by = COALESCE(archived_by, $2)
+       WHERE id = $1
+       RETURNING id, archived_at`,
+      [subitemId, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Subitem not found' });
+    return res.json({ ok: true, archived_at: rows[0].archived_at });
   } catch (err) {
     console.error('[tasks:subitems:delete]', err);
     return res.status(500).json({ message: 'Unable to delete subitem' });
+  }
+});
+
+router.post('/subitems/:subitemId/restore', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { subitemId } = req.params;
+  try {
+    const workspaceId = await getWorkspaceIdForSubitem(subitemId);
+    if (!workspaceId) return res.status(404).json({ message: 'Subitem not found' });
+    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    const { rows } = await query(
+      `UPDATE task_subitems
+       SET archived_at = NULL, archived_by = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [subitemId]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Subitem not found' });
+    return res.json({ subitem: rows[0] });
+  } catch (err) {
+    console.error('[tasks:subitems:restore]', err);
+    return res.status(500).json({ message: 'Unable to restore subitem' });
   }
 });
 
@@ -2328,6 +2594,7 @@ router.get('/ai/daily-overview', async (req, res) => {
        JOIN task_boards b ON b.id = g.board_id
        JOIN task_workspaces w ON w.id = b.workspace_id
        WHERE i.status != 'done'
+         AND i.archived_at IS NULL
        ORDER BY i.due_date ASC NULLS LAST, i.created_at DESC`,
       [userId]
     );

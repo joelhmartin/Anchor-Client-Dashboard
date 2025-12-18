@@ -1072,10 +1072,24 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   if (clientUser.role !== 'client') {
     return res.status(400).json({ message: 'Onboarding emails are only for client accounts.' });
   }
+
+  // If onboarding is already completed, don't keep issuing links.
+  const { rows: profileRows } = await query(
+    'SELECT onboarding_completed_at FROM client_profiles WHERE user_id = $1 LIMIT 1',
+    [clientId]
+  );
+  if (profileRows[0]?.onboarding_completed_at) {
+    return res.status(400).json({ message: 'Client onboarding is already completed.' });
+  }
+
   const token = uuidv4();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
-  await query('DELETE FROM client_onboarding_tokens WHERE user_id = $1', [clientId]);
+  // Revoke any previously-issued (still valid) links so only the newest link works.
+  await query(
+    'UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL',
+    [clientId]
+  );
   await query(
     `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
      VALUES ($1,$2,$3,$4)`,
@@ -1373,15 +1387,27 @@ router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
   try {
     const effRole = req.user.effective_role || req.user.role;
     if (effRole !== 'superadmin' && effRole !== 'admin') {
-      return res.status(403).json({ message: 'Only admins can delete clients.' });
+      return res.status(403).json({ message: 'Only admins can delete users.' });
     }
     const clientId = req.params.id;
     const deleteBoard = req.query.delete_board === 'true';
 
-    const { rows } = await query('SELECT id, role FROM users WHERE id = $1 LIMIT 1', [clientId]);
+    if (clientId === req.user.id) {
+      return res.status(400).json({ message: 'You cannot delete your own account.' });
+    }
+
+    const { rows } = await query('SELECT id, email, role FROM users WHERE id = $1 LIMIT 1', [clientId]);
     if (!rows.length) return res.status(404).json({ message: 'Client not found' });
-    if (rows[0].role !== 'client') {
-      return res.status(400).json({ message: 'Only client accounts can be deleted.' });
+    const targetUser = rows[0];
+
+    // Admins can delete admins/team/clients. Only superadmins can delete superadmins.
+    if (targetUser.role === 'superadmin' && effRole !== 'superadmin') {
+      return res.status(403).json({ message: 'Only superadmins can delete superadmin accounts.' });
+    }
+
+    const allowedTargetRoles = new Set(['client', 'admin', 'team', 'superadmin']);
+    if (!allowedTargetRoles.has(targetUser.role)) {
+      return res.status(400).json({ message: 'This user role cannot be deleted via the admin hub.' });
     }
 
     // Check if client has an associated task board
@@ -1398,8 +1424,13 @@ router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
     }
 
     await query('DELETE FROM users WHERE id = $1', [clientId]);
-    logEvent('clients:delete', 'Client deleted', { clientId, deletedBy: req.user.id, boardDeleted: deleteBoard && !!taskBoardId });
-    res.json({ message: 'Client deleted', boardDeleted: deleteBoard && !!taskBoardId });
+    logEvent('clients:delete', 'User deleted', {
+      clientId,
+      deletedBy: req.user.id,
+      targetRole: targetUser.role,
+      boardDeleted: deleteBoard && !!taskBoardId
+    });
+    res.json({ message: 'User deleted', targetRole: targetUser.role, boardDeleted: deleteBoard && !!taskBoardId });
   } catch (err) {
     console.error('[clients:delete]', err);
     res.status(500).json({ message: 'Unable to delete client' });

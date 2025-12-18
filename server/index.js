@@ -14,6 +14,8 @@ import { query } from './db.js';
 import hubRouter from './routes/hub.js';
 import onboardingRouter from './routes/onboarding.js';
 import tasksRouter from './routes/tasks.js';
+import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
+import { purgeArchivedTasks } from './services/taskCleanup.js';
 
 const app = express();
 const PORT = process.env.API_SERVER_PORT || process.env.PORT || 4000;
@@ -121,6 +123,39 @@ cron.schedule(
   },
   {
     timezone: 'America/New_York' // Adjust to your timezone
+  }
+);
+
+cron.schedule(
+  '*/30 * * * *',
+  async () => {
+    try {
+      const baseUrl = process.env.APP_BASE_URL || process.env.CLIENT_APP_URL || process.env.LOCAL_APP_BASE_URL;
+      const result = await sendOnboardingExpiryReminders({ baseUrl });
+      if (result?.processed) {
+        console.log('[cron:onboarding-reminders] reminders sent:', result.processed);
+      }
+    } catch (err) {
+      console.error('[cron:onboarding-reminders] failed', err);
+    }
+  },
+  {
+    timezone: 'America/New_York'
+  }
+);
+
+// Purge archived task items after 30 days (daily at 2:20 AM)
+cron.schedule(
+  '20 2 * * *',
+  async () => {
+    const retentionDays = Number(process.env.TASK_ARCHIVE_RETENTION_DAYS || 30);
+    const result = await purgeArchivedTasks({ retentionDays });
+    if (result?.deleted) {
+      console.log(`[cron:purge-archived-tasks] deleted ${result.deleted} archived task item(s)`);
+    }
+  },
+  {
+    timezone: 'America/New_York'
   }
 );
 

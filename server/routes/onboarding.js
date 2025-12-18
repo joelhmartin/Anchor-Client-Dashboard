@@ -70,7 +70,7 @@ async function getTokenRecord(token) {
   const tokenHash = hashToken(token);
   const { rows } = await query(
     `SELECT * FROM client_onboarding_tokens 
-     WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()
+     WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
      LIMIT 1`,
     [tokenHash]
   );
@@ -91,9 +91,7 @@ router.get('/:token', async (req, res) => {
         [record.user_id]
       ),
       query('SELECT * FROM brand_assets WHERE user_id = $1 LIMIT 1', [record.user_id]),
-      query('SELECT id, name, description, base_price, active FROM services WHERE user_id = $1 ORDER BY name ASC', [
-        record.user_id
-      ])
+      query('SELECT id, name, description, base_price, active FROM services WHERE user_id = $1 ORDER BY name ASC', [record.user_id])
     ]);
 
     if (!userRows.length) return res.status(404).json({ message: 'Client not found for onboarding' });
@@ -123,14 +121,7 @@ router.post('/:token', async (req, res) => {
   try {
     const record = await getTokenRecord(req.params.token);
     if (!record) return res.status(404).json({ message: 'Onboarding link is invalid or expired' });
-    const {
-      display_name,
-      password,
-      monthly_revenue_goal,
-      brand = {},
-      services = [],
-      client_identifier_value
-    } = req.body || {};
+    const { display_name, password, monthly_revenue_goal, brand = {}, services = [], client_identifier_value } = req.body || {};
 
     if (!display_name) return res.status(400).json({ message: 'Display name is required' });
     if (password && password.length < 8) {
@@ -241,11 +232,22 @@ router.post('/:token', async (req, res) => {
       }
     }
 
+    // Mark this token as consumed and invalidate any other outstanding tokens for this user.
     await query('UPDATE client_onboarding_tokens SET consumed_at = NOW() WHERE id = $1', [record.id]);
+    await query(
+      'UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND id <> $2 AND consumed_at IS NULL AND revoked_at IS NULL',
+      [record.user_id, record.id]
+    );
 
-    const { rows: userInfoRows } = await query('SELECT email, first_name, last_name FROM users WHERE id = $1', [
-      record.user_id
-    ]);
+    // Mark onboarding as completed (drives "Send onboarding email" button visibility).
+    await query(
+      `INSERT INTO client_profiles (user_id, onboarding_completed_at)
+       VALUES ($1, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET onboarding_completed_at = NOW(), updated_at = NOW()`,
+      [record.user_id]
+    );
+
+    const { rows: userInfoRows } = await query('SELECT email, first_name, last_name FROM users WHERE id = $1', [record.user_id]);
     const onboardedUser = userInfoRows[0] || {};
 
     await createNotificationsForAdmins({
@@ -305,6 +307,5 @@ router.post('/:token/brand-assets', uploadBrandAsset.single('brand_asset'), asyn
     res.status(500).json({ message: 'Unable to upload brand asset' });
   }
 });
-
 
 export default router;

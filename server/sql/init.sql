@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   ctm_api_key TEXT,
   ctm_api_secret TEXT,
   ai_prompt TEXT,
+  onboarding_completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -239,11 +240,14 @@ CREATE TABLE IF NOT EXISTS client_onboarding_tokens (
   token_hash TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   consumed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  reminder_sent_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_client_onboarding_tokens_user ON client_onboarding_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_client_onboarding_tokens_token ON client_onboarding_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_client_onboarding_tokens_expires ON client_onboarding_tokens(expires_at);
 
 -- Password reset tokens
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
@@ -406,6 +410,18 @@ CREATE TABLE IF NOT EXISTS task_board_status_labels (
 );
 CREATE INDEX IF NOT EXISTS idx_task_board_status_labels_board ON task_board_status_labels(board_id);
 
+-- Global status labels (available on all boards)
+CREATE TABLE IF NOT EXISTS task_global_status_labels (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  label TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#808080',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  is_done_state BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_global_status_labels_order ON task_global_status_labels(order_index);
+
 -- Update view tracking (who saw each update)
 CREATE TABLE IF NOT EXISTS task_update_views (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -441,6 +457,7 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_account_number TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_api_key TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_api_secret TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ai_prompt TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS auto_star_enabled BOOLEAN DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS monthly_revenue_goal DECIMAL(10, 2);
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_type TEXT;
@@ -450,6 +467,29 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_board_id UUID REFERENC
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS board_prefix TEXT;
 
 ALTER TABLE task_boards ADD COLUMN IF NOT EXISTS board_prefix TEXT;
+
+-- Task item/subitem archival (soft delete)
+ALTER TABLE task_items ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE task_items ADD COLUMN IF NOT EXISTS archived_by UUID REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_task_items_archived_at ON task_items(archived_at);
+
+ALTER TABLE task_subitems ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE task_subitems ADD COLUMN IF NOT EXISTS archived_by UUID REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_task_subitems_archived_at ON task_subitems(archived_at);
+
+ALTER TABLE client_onboarding_tokens ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE client_onboarding_tokens ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS task_global_status_labels (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  label TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#808080',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  is_done_state BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_global_status_labels_order ON task_global_status_labels(order_index);
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS business_name TEXT;
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS business_description TEXT;
 ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS website_url TEXT;

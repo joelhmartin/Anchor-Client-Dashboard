@@ -19,9 +19,17 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 
 import useAuth from 'hooks/useAuth';
-import { createTaskBoard, createTaskWorkspace, fetchTaskBoards, fetchTaskWorkspaces } from 'api/tasks';
+import {
+  createTaskBoard,
+  createTaskWorkspace,
+  deleteTaskBoard,
+  deleteTaskWorkspace,
+  fetchTaskBoards,
+  fetchTaskWorkspaces
+} from 'api/tasks';
 
 function getEffectiveRole(user) {
   return user?.effective_role || user?.role;
@@ -31,6 +39,7 @@ export default function TaskPanel() {
   const { user } = useAuth();
   const effRole = useMemo(() => getEffectiveRole(user), [user]);
   const canCreateBoard = effRole === 'superadmin' || effRole === 'admin';
+  const canDelete = canCreateBoard;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const workspaceIdFromUrl = searchParams.get('workspace') || '';
@@ -48,6 +57,10 @@ export default function TaskPanel() {
   const [creatingWorkspaceOpen, setCreatingWorkspaceOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+
+  const [deleteWorkspaceId, setDeleteWorkspaceId] = useState('');
+  const [deleteBoardInfo, setDeleteBoardInfo] = useState({ workspaceId: '', boardId: '' });
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setExpanded(workspaceIdFromUrl || '');
@@ -143,6 +156,58 @@ export default function TaskPanel() {
     }
   };
 
+  const handleDeleteWorkspace = async () => {
+    if (!deleteWorkspaceId) return;
+    setDeleting(true);
+    try {
+      await deleteTaskWorkspace(deleteWorkspaceId);
+      setBoardsByWorkspace((prev) => {
+        const next = { ...(prev || {}) };
+        delete next[deleteWorkspaceId];
+        return next;
+      });
+      setWorkspaces((prev) => (prev || []).filter((w) => w.id !== deleteWorkspaceId));
+
+      if (workspaceIdFromUrl === deleteWorkspaceId) {
+        const remaining = (workspaces || []).filter((w) => w.id !== deleteWorkspaceId);
+        const nextWs = remaining[0]?.id || '';
+        const next = new URLSearchParams(searchParams);
+        if (nextWs) next.set('workspace', nextWs);
+        else next.delete('workspace');
+        next.delete('board');
+        next.delete('item');
+        next.set('pane', 'boards');
+        setSearchParams(next, { replace: true });
+      }
+      setDeleteWorkspaceId('');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteBoard = async () => {
+    if (!deleteBoardInfo?.boardId) return;
+    setDeleting(true);
+    try {
+      await deleteTaskBoard(deleteBoardInfo.boardId);
+      setBoardsByWorkspace((prev) => ({
+        ...(prev || {}),
+        [deleteBoardInfo.workspaceId]: (prev?.[deleteBoardInfo.workspaceId] || []).filter((b) => b.id !== deleteBoardInfo.boardId)
+      }));
+
+      if (boardIdFromUrl === deleteBoardInfo.boardId) {
+        const next = new URLSearchParams(searchParams);
+        next.delete('board');
+        next.delete('item');
+        next.set('pane', 'boards');
+        setSearchParams(next, { replace: true });
+      }
+      setDeleteBoardInfo({ workspaceId: '', boardId: '' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <Box
       sx={{
@@ -182,17 +247,28 @@ export default function TaskPanel() {
                   setExpanded(exp ? w.id : '');
                   if (exp) selectWorkspace(w.id);
                 }}
+                sx={{
+                  '&.Mui-expanded': {
+                    margin: 0
+                  }
+                }}
               >
                 <AccordionSummary
                   expandIcon={<ExpandMoreIcon />}
                   sx={{
                     px: 0,
                     py: 0,
+                    mb: 0,
+                    mt: 1,
                     minHeight: 'auto',
                     '&.MuiButtonBase-root': { px: 0, py: 0, minHeight: 'auto' },
                     '& .MuiAccordionSummary-content': { my: 0 },
                     '& .MuiAccordionSummary-contentGutters': { margin: 0 },
-                    '& .MuiAccordionSummary-expandIconWrapper': { mr: 0 }
+                    '& .MuiAccordionSummary-expandIconWrapper': { mr: 0 },
+                    '&.Mui-expanded': {
+                      minHeight: 'auto',
+                      my: 0
+                    }
                   }}
                 >
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
@@ -206,7 +282,8 @@ export default function TaskPanel() {
                         textTransform: 'none',
                         justifyContent: 'flex-start',
                         py: 0,
-                        px: 0,
+                        pb: 0,
+                        pt: 0,
                         minHeight: 0,
                         height: 'auto',
                         lineHeight: 1.2,
@@ -216,20 +293,35 @@ export default function TaskPanel() {
                     >
                       {w.name}
                     </Button>
-                    {canCreateBoard && (
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openCreateBoard(w.id);
-                        }}
-                      >
-                        <AddIcon fontSize="small" />
-                      </IconButton>
-                    )}
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      {canCreateBoard && (
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openCreateBoard(w.id);
+                          }}
+                          aria-label="create board"
+                        >
+                          <AddIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                      {canDelete && (
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteWorkspaceId(w.id);
+                          }}
+                          aria-label="delete workspace"
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Stack>
                   </Stack>
                 </AccordionSummary>
-                <AccordionDetails sx={{ px: 0 }}>
+                <AccordionDetails sx={{ px: 0, py: 0, my: 0, '&.Mui-expanded': { py: 0, my: 0 } }}>
                   {boards.length === 0 ? (
                     <Typography variant="body2" color="text.secondary">
                       No boards yet.
@@ -237,15 +329,28 @@ export default function TaskPanel() {
                   ) : (
                     <Stack spacing={0.5}>
                       {boards.map((b) => (
-                        <Button
-                          key={b.id}
-                          onClick={() => selectBoard(w.id, b.id)}
-                          variant={b.id === boardIdFromUrl ? 'contained' : 'text'}
-                          color={b.id === boardIdFromUrl ? 'primary' : 'inherit'}
-                          sx={{ justifyContent: 'flex-start', textTransform: 'none', whiteSpace: 'nowrap', px: 0 }}
-                        >
-                          {b.name}
-                        </Button>
+                        <Stack key={b.id} direction="row" spacing={0.5} alignItems="center" justifyContent="space-between">
+                          <Button
+                            onClick={() => selectBoard(w.id, b.id)}
+                            variant={b.id === boardIdFromUrl ? 'contained' : 'text'}
+                            color={b.id === boardIdFromUrl ? 'primary' : 'inherit'}
+                            sx={{ justifyContent: 'flex-start', textTransform: 'none', whiteSpace: 'nowrap', px: 2, flex: 1 }}
+                          >
+                            {b.name}
+                          </Button>
+                          {canDelete && (
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteBoardInfo({ workspaceId: w.id, boardId: b.id });
+                              }}
+                              aria-label="delete board"
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          )}
+                        </Stack>
                       ))}
                     </Stack>
                   )}
@@ -292,6 +397,36 @@ export default function TaskPanel() {
           <Button onClick={() => setCreatingWorkspaceOpen(false)}>Cancel</Button>
           <Button onClick={handleCreateWorkspace} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteWorkspaceId)} onClose={() => setDeleteWorkspaceId('')}>
+        <DialogTitle>Delete workspace?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will permanently delete the workspace and all boards/groups/items inside it.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteWorkspaceId('')}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDeleteWorkspace} disabled={deleting}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteBoardInfo?.boardId)} onClose={() => setDeleteBoardInfo({ workspaceId: '', boardId: '' })}>
+        <DialogTitle>Delete board?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will permanently delete the board and all groups/items inside it.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteBoardInfo({ workspaceId: '', boardId: '' })}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDeleteBoard} disabled={deleting}>
+            Delete
           </Button>
         </DialogActions>
       </Dialog>

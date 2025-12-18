@@ -4,7 +4,13 @@ import {
   Box,
   Button,
   Chip,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   MenuItem,
@@ -12,10 +18,11 @@ import {
   Popper,
   Select,
   Stack,
+  Slider,
   TextField,
   Typography
 } from '@mui/material';
-import { IconChevronDown, IconChevronRight, IconMessageCircle, IconClock } from '@tabler/icons-react';
+import { IconChevronDown, IconChevronRight, IconMessageCircle, IconClock, IconTrash } from '@tabler/icons-react';
 
 // Default status labels
 const DEFAULT_STATUS_LABELS = [
@@ -53,6 +60,7 @@ function fmtMinutes(mins) {
 }
 
 export default function BoardTable({
+  boardId,
   groups = [],
   itemsByGroup = {},
   assigneesByItem = {},
@@ -60,10 +68,14 @@ export default function BoardTable({
   updateCountsByItem = {},
   timeTotalsByItem = {},
   statusLabels = [],
+  canManageLabels = false,
+  onCreateStatusLabel,
   highlightedItemId,
   onClickItem,
   onUpdateItem,
   onToggleAssignee,
+  onArchiveItem,
+  onDeleteGroup,
   newItemNameByGroup = {},
   creatingItemByGroup = {},
   onChangeNewItemName,
@@ -75,6 +87,90 @@ export default function BoardTable({
   const [editingItemId, setEditingItemId] = useState('');
   const [draftName, setDraftName] = useState('');
   const clickTimerRef = useRef(null);
+
+  // Status label creator dialog state
+  const [addLabelOpen, setAddLabelOpen] = useState(false);
+  const [addLabelForItemId, setAddLabelForItemId] = useState('');
+  const [labelText, setLabelText] = useState('');
+  const [labelHex, setLabelHex] = useState('#808080');
+  const [labelOpacity, setLabelOpacity] = useState(100);
+  const [makeGlobal, setMakeGlobal] = useState(false);
+  const [creatingLabel, setCreatingLabel] = useState(false);
+
+  // Archive item confirm dialog state
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [archiveTargetItem, setArchiveTargetItem] = useState(null);
+
+  const [deleteGroupOpen, setDeleteGroupOpen] = useState(false);
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState(null);
+
+  const uniqueLabelColors = useMemo(() => {
+    const seen = new Set();
+    const colors = [];
+    for (const l of labels) {
+      const c = String(l.color || '').trim();
+      if (!c) continue;
+      const key = c.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      colors.push(c);
+    }
+    return colors;
+  }, [labels]);
+
+  const normalizeHex = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '#808080';
+    if (v.startsWith('#')) return v;
+    return `#${v}`;
+  };
+
+  const hexToRgbaHex = (hex, opacityPct) => {
+    const base = normalizeHex(hex).replace(/[^#0-9A-Fa-f]/g, '');
+    // base should be #RRGGBB
+    const clean = base.length === 7 ? base : '#808080';
+    const a = Math.max(0, Math.min(100, Number(opacityPct)));
+    const aa = Math.round((a / 100) * 255)
+      .toString(16)
+      .padStart(2, '0')
+      .toUpperCase();
+    // Use #RRGGBBAA for opacity support
+    return `${clean}${aa}`;
+  };
+
+  const openAddLabel = (itemId) => {
+    setAddLabelForItemId(itemId || '');
+    setLabelText('');
+    setLabelHex('#808080');
+    setLabelOpacity(100);
+    setMakeGlobal(false);
+    setAddLabelOpen(true);
+  };
+
+  const closeAddLabel = () => {
+    setAddLabelOpen(false);
+    setAddLabelForItemId('');
+    setLabelText('');
+    setMakeGlobal(false);
+  };
+
+  const handleCreateLabel = async () => {
+    if (!boardId || !canManageLabels || !onCreateStatusLabel) return;
+    const name = labelText.trim();
+    if (!name) return;
+    setCreatingLabel(true);
+    try {
+      const color = hexToRgbaHex(labelHex, labelOpacity);
+      const created = await onCreateStatusLabel({ label: name, color, makeGlobal });
+      if (created && addLabelForItemId) {
+        // Optionally set the item's status to the newly created label immediately.
+        await onUpdateItem?.(addLabelForItemId, { status: created.label || name });
+      }
+      closeAddLabel();
+    } finally {
+      setCreatingLabel(false);
+    }
+  };
 
   // People picker state
   const [peopleAnchor, setPeopleAnchor] = useState(null);
@@ -210,6 +306,19 @@ export default function BoardTable({
                       {g.name}
                     </Typography>
                     <Chip size="small" label={groupCounts[g.id] || 0} />
+                    {onDeleteGroup && (
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteGroupTarget(g);
+                          setDeleteGroupOpen(true);
+                        }}
+                        title="Delete group"
+                      >
+                        <IconTrash size={16} />
+                      </IconButton>
+                    )}
                   </Stack>
                 </Box>
 
@@ -288,14 +397,30 @@ export default function BoardTable({
                               autoFocus
                             />
                           ) : (
-                            <Typography
-                              variant="body2"
-                              sx={{ fontWeight: 600 }}
-                              onClick={() => handleNameClick(it)}
-                              onDoubleClick={() => handleNameDoubleClick(it)}
-                            >
-                              {it.name}
-                            </Typography>
+                            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{ fontWeight: 600, minWidth: 0, flex: 1 }}
+                                noWrap
+                                onClick={() => handleNameClick(it)}
+                                onDoubleClick={() => handleNameDoubleClick(it)}
+                              >
+                                {it.name}
+                              </Typography>
+                              {onArchiveItem && (
+                                <IconButton
+                                  size="small"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setArchiveTargetItem(it);
+                                    setArchiveConfirmOpen(true);
+                                  }}
+                                  title="Delete (archive)"
+                                >
+                                  <IconTrash size={16} />
+                                </IconButton>
+                              )}
+                            </Stack>
                           )}
                         </Box>
 
@@ -304,7 +429,14 @@ export default function BoardTable({
                           <Select
                             size="small"
                             value={status}
-                            onChange={(e) => onUpdateItem?.(it.id, { status: e.target.value })}
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              if (next === '__add_label__') {
+                                openAddLabel(it.id);
+                                return;
+                              }
+                              onUpdateItem?.(it.id, { status: next });
+                            }}
                             sx={{
                               width: '100%',
                               '& .MuiSelect-select': { py: 0.5, color: sc.fg },
@@ -331,6 +463,16 @@ export default function BoardTable({
                                 {sl.label}
                               </MenuItem>
                             ))}
+                            {boardId && canManageLabels && (
+                              <>
+                                <Divider />
+                                <MenuItem value="__add_label__">
+                                  <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                                    Add Label…
+                                  </Typography>
+                                </MenuItem>
+                              </>
+                            )}
                           </Select>
                         </Box>
 
@@ -501,6 +643,225 @@ export default function BoardTable({
           </Stack>
         </Paper>
       </Popper>
+
+      <Dialog open={addLabelOpen} onClose={closeAddLabel} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography variant="h5">Add Label</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Create a new status label{boardId ? ' for this board' : ''}.
+              </Typography>
+            </Box>
+            <FormControlLabel
+              control={<Checkbox checked={makeGlobal} onChange={(e) => setMakeGlobal(e.target.checked)} />}
+              label="Make Global Label"
+            />
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Label text"
+              value={labelText}
+              onChange={(e) => setLabelText(e.target.value)}
+              fullWidth
+              autoFocus
+            />
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
+              <Box sx={{ minWidth: 220 }}>
+                <TextField
+                  label="Hex"
+                  value={labelHex}
+                  onChange={(e) => setLabelHex(normalizeHex(e.target.value))}
+                  fullWidth
+                  inputProps={{ maxLength: 9 }}
+                  helperText="Use #RRGGBB (opacity applied below)"
+                />
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <input
+                  type="color"
+                  value={normalizeHex(labelHex).slice(0, 7)}
+                  onChange={(e) => setLabelHex(e.target.value)}
+                  style={{ width: 44, height: 44, border: 'none', background: 'transparent', padding: 0 }}
+                />
+                <Box
+                  sx={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: '50%',
+                    bgcolor: hexToRgbaHex(labelHex, labelOpacity),
+                    border: '1px solid',
+                    borderColor: 'divider'
+                  }}
+                  title={hexToRgbaHex(labelHex, labelOpacity)}
+                />
+              </Box>
+            </Stack>
+
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Opacity ({labelOpacity}%)
+              </Typography>
+              <Slider
+                value={labelOpacity}
+                onChange={(_e, v) => setLabelOpacity(Number(v))}
+                min={0}
+                max={100}
+                step={1}
+                valueLabelDisplay="auto"
+              />
+            </Box>
+
+            {uniqueLabelColors.length > 0 && (
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Pick an existing color
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 1 }}>
+                  {uniqueLabelColors.map((c) => (
+                    <Box
+                      key={c}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        // If existing color includes alpha (#RRGGBBAA), preserve it by setting opacity.
+                        const hex = String(c).trim();
+                        const base = hex.slice(0, 7);
+                        setLabelHex(base);
+                        if (hex.length === 9) {
+                          const aa = parseInt(hex.slice(7, 9), 16);
+                          const pct = Math.round((aa / 255) * 100);
+                          setLabelOpacity(pct);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const hex = String(c).trim();
+                          const base = hex.slice(0, 7);
+                          setLabelHex(base);
+                        }
+                      }}
+                      sx={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        bgcolor: c,
+                        border: '2px solid',
+                        borderColor: hexToRgbaHex(labelHex, labelOpacity).toLowerCase() === String(c).toLowerCase() ? 'primary.main' : 'divider',
+                        cursor: 'pointer'
+                      }}
+                      title={c}
+                    />
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeAddLabel}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleCreateLabel}
+            disabled={creatingLabel || !labelText.trim() || !boardId || !canManageLabels}
+          >
+            {creatingLabel ? 'Creating…' : 'Create label'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={archiveConfirmOpen}
+        onClose={() => {
+          setArchiveConfirmOpen(false);
+          setArchiveTargetItem(null);
+        }}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete item?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will archive the item for 30 days, then it will be permanently deleted.
+          </Typography>
+          {archiveTargetItem?.name && (
+            <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 800 }}>
+              {archiveTargetItem.name}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setArchiveConfirmOpen(false);
+              setArchiveTargetItem(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={async () => {
+              const id = archiveTargetItem?.id;
+              setArchiveConfirmOpen(false);
+              setArchiveTargetItem(null);
+              if (id) await onArchiveItem?.(id);
+            }}
+            disabled={!archiveTargetItem?.id}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={deleteGroupOpen}
+        onClose={() => {
+          setDeleteGroupOpen(false);
+          setDeleteGroupTarget(null);
+        }}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete group?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will permanently delete the group and all items inside it.
+          </Typography>
+          {deleteGroupTarget?.name && (
+            <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 800 }}>
+              {deleteGroupTarget.name}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setDeleteGroupOpen(false);
+              setDeleteGroupTarget(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={async () => {
+              const id = deleteGroupTarget?.id;
+              setDeleteGroupOpen(false);
+              setDeleteGroupTarget(null);
+              if (id) await onDeleteGroup?.(id);
+            }}
+            disabled={!deleteGroupTarget?.id}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

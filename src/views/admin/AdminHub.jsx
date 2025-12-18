@@ -58,7 +58,10 @@ const EMPTY_SERVICE_LIST = Object.freeze([]);
 const EMPTY_SUBTYPE_LIST = Object.freeze([]);
 
 const makeLocalServiceId = () => `svc-${Math.random().toString(36).slice(2, 11)}`;
-const serviceNameKey = (value = '') => String(value || '').trim().toLowerCase();
+const serviceNameKey = (value = '') =>
+  String(value || '')
+    .trim()
+    .toLowerCase();
 const formatServiceLabel = (value = '') =>
   String(value || '')
     .trim()
@@ -71,10 +74,7 @@ const mapServiceRecord = (record = {}) => ({
   localId: record.id || makeLocalServiceId(),
   name: record.name || '',
   description: record.description || '',
-  base_price:
-    record.base_price === null || record.base_price === undefined || record.base_price === ''
-      ? ''
-      : String(record.base_price),
+  base_price: record.base_price === null || record.base_price === undefined || record.base_price === '' ? '' : String(record.base_price),
   active: record.active !== false,
   isPreset: false
 });
@@ -132,6 +132,7 @@ export default function AdminHub() {
   const [onboardingLoading, setOnboardingLoading] = useState(false);
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
+  const [sendingOnboardingForId, setSendingOnboardingForId] = useState('');
   const [taskWorkspaces, setTaskWorkspaces] = useState([]);
   const [taskWorkspacesLoading, setTaskWorkspacesLoading] = useState(false);
 
@@ -297,19 +298,16 @@ export default function AdminHub() {
   );
   const sortedClientOnly = useMemo(() => sortedClients.filter((c) => c.role === 'client'), [sortedClients]);
 
-  const { query: adminsQuery, setQuery: setAdminsQuery, filtered: filteredAdmins } = useTableSearch(sortedEditors, [
-    'email',
-    'first_name',
-    'last_name',
-    'role'
-  ]);
-  const { query: clientsQuery, setQuery: setClientsQuery, filtered: filteredClients } = useTableSearch(sortedClientOnly, [
-    'email',
-    'first_name',
-    'last_name',
-    'role',
-    'monday_board_id'
-  ]);
+  const {
+    query: adminsQuery,
+    setQuery: setAdminsQuery,
+    filtered: filteredAdmins
+  } = useTableSearch(sortedEditors, ['email', 'first_name', 'last_name', 'role']);
+  const {
+    query: clientsQuery,
+    setQuery: setClientsQuery,
+    filtered: filteredClients
+  } = useTableSearch(sortedClientOnly, ['email', 'first_name', 'last_name', 'role', 'monday_board_id']);
 
   useEffect(() => {
     // Keep selection valid as the client list changes.
@@ -682,7 +680,22 @@ export default function AdminHub() {
       setSendingOnboardingEmail(false);
     }
   };
- 
+
+  const handleSendOnboardingEmailNow = async (clientId) => {
+    if (!clientId) return;
+    setSendingOnboardingForId(clientId);
+    setError('');
+    setSuccess('');
+    try {
+      await sendClientOnboardingEmail(clientId);
+      setSuccess('Client onboarding email sent');
+    } catch (err) {
+      setError(err.message || 'Unable to send onboarding email');
+    } finally {
+      setSendingOnboardingForId('');
+    }
+  };
+
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
@@ -700,7 +713,9 @@ export default function AdminHub() {
                 placeholder="Select a workspace"
                 required
                 error={!editing.task_workspace_id && editing.client_identifier_value}
-                helperText={!editing.task_workspace_id && editing.client_identifier_value ? 'Workspace is required when Client Identifier is set' : ''}
+                helperText={
+                  !editing.task_workspace_id && editing.client_identifier_value ? 'Workspace is required when Client Identifier is set' : ''
+                }
               />
             )}
             loading={taskWorkspacesLoading}
@@ -724,7 +739,13 @@ export default function AdminHub() {
         getOptionLabel={(option) => option?.name || ''}
         value={boards.find((b) => String(b.id) === String(editing.monday_board_id)) || null}
         onChange={(_e, val) => {
-          setEditing((prev) => ({ ...prev, monday_board_id: val?.id || '', monday_group_id: '', monday_active_group_id: '', monday_completed_group_id: '' }));
+          setEditing((prev) => ({
+            ...prev,
+            monday_board_id: val?.id || '',
+            monday_group_id: '',
+            monday_active_group_id: '',
+            monday_completed_group_id: ''
+          }));
           loadGroups(val?.id);
         }}
         onInputChange={(_, value) => {
@@ -761,7 +782,11 @@ export default function AdminHub() {
         disabled={!editing.monday_board_id}
       />
       <TextField label="Looker URL" value={editing.looker_url || ''} onChange={handleEditChange('looker_url')} />
-      <TextField label="Client Identifier Value" value={editing.client_identifier_value || ''} onChange={handleEditChange('client_identifier_value')} />
+      <TextField
+        label="Client Identifier Value"
+        value={editing.client_identifier_value || ''}
+        onChange={handleEditChange('client_identifier_value')}
+      />
       <Autocomplete
         options={people}
         getOptionLabel={(option) => option?.name || option?.email || ''}
@@ -869,10 +894,22 @@ export default function AdminHub() {
   const renderBrandAssetsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       <Typography variant="subtitle1">Brand Assets</Typography>
-      {docsLoading && <CircularProgress size={20} />} {brandData?.logos?.length ? (
+      {docsLoading && <CircularProgress size={20} />}{' '}
+      {brandData?.logos?.length ? (
         <Stack spacing={1}>
           {brandData.logos.map((logo) => (
-            <Box key={logo.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Box
+              key={logo.id}
+              sx={{
+                p: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
               <Typography>{logo.name}</Typography>
               <Button size="small" href={logo.url} target="_blank" rel="noreferrer">
                 View
@@ -887,13 +924,43 @@ export default function AdminHub() {
       )}
       <Divider />
       <Typography variant="subtitle2">Brand Notes and Links</Typography>
-      <TextField label="Brand Notes" value={brandData?.brand_notes || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), brand_notes: e.target.value }))} multiline rows={3} />
-      <TextField label="Website Admin Email" value={brandData?.website_admin_email || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_admin_email: e.target.value }))} />
-      <TextField label="Website URL" value={brandData?.website_url || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_url: e.target.value }))} />
-      <TextField label="GA/GTM Emails" value={brandData?.ga_emails || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), ga_emails: e.target.value }))} />
-      <TextField label="Meta Business Email" value={brandData?.meta_bm_email || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), meta_bm_email: e.target.value }))} />
-      <TextField label="Pricing List URL" value={brandData?.pricing_list_url || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), pricing_list_url: e.target.value }))} />
-      <TextField label="Promo Calendar URL" value={brandData?.promo_calendar_url || ''} onChange={(e) => setBrandData((p) => ({ ...(p || {}), promo_calendar_url: e.target.value }))} />
+      <TextField
+        label="Brand Notes"
+        value={brandData?.brand_notes || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), brand_notes: e.target.value }))}
+        multiline
+        rows={3}
+      />
+      <TextField
+        label="Website Admin Email"
+        value={brandData?.website_admin_email || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_admin_email: e.target.value }))}
+      />
+      <TextField
+        label="Website URL"
+        value={brandData?.website_url || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_url: e.target.value }))}
+      />
+      <TextField
+        label="GA/GTM Emails"
+        value={brandData?.ga_emails || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), ga_emails: e.target.value }))}
+      />
+      <TextField
+        label="Meta Business Email"
+        value={brandData?.meta_bm_email || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), meta_bm_email: e.target.value }))}
+      />
+      <TextField
+        label="Pricing List URL"
+        value={brandData?.pricing_list_url || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), pricing_list_url: e.target.value }))}
+      />
+      <TextField
+        label="Promo Calendar URL"
+        value={brandData?.promo_calendar_url || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), promo_calendar_url: e.target.value }))}
+      />
     </Stack>
   );
 
@@ -901,7 +968,11 @@ export default function AdminHub() {
     <Stack spacing={2} sx={{ mt: 2 }}>
       <Typography variant="subtitle1">Upload Documents</Typography>
       <Stack spacing={2}>
-        <TextField label="Document Label" value={docUpload.label} onChange={(e) => setDocUpload((p) => ({ ...p, label: e.target.value }))} />
+        <TextField
+          label="Document Label"
+          value={docUpload.label}
+          onChange={(e) => setDocUpload((p) => ({ ...p, label: e.target.value }))}
+        />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
           <Button variant="outlined" component="label">
             Select Files
@@ -929,21 +1000,33 @@ export default function AdminHub() {
           )}
         </Stack>
         <FormControlLabel
-          control={<Checkbox checked={docUpload.forReview} onChange={(e) => setDocUpload((p) => ({ ...p, forReview: e.target.checked }))} />}
+          control={
+            <Checkbox checked={docUpload.forReview} onChange={(e) => setDocUpload((p) => ({ ...p, forReview: e.target.checked }))} />
+          }
           label='Mark as "For Review" and notify client'
         />
         <Button variant="contained" disableElevation onClick={handleDocUpload} disabled={!docUpload.files.length || uploadingDocs}>
           {uploadingDocs ? 'Uploading…' : 'Upload Document'}
         </Button>
       </Stack>
-
       <Divider />
-
       <Typography variant="subtitle1">Documents</Typography>
-      {docsLoading && <CircularProgress size={20} />} {docs.length ? (
+      {docsLoading && <CircularProgress size={20} />}{' '}
+      {docs.length ? (
         <Stack spacing={1}>
           {docs.map((doc) => (
-            <Box key={doc.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box
+              key={doc.id}
+              sx={{
+                p: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}
+            >
               <Box sx={{ flex: 1, pr: 2 }}>
                 <Typography>{doc.label || doc.name}</Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -1027,7 +1110,12 @@ export default function AdminHub() {
               <Grid item xs={12} md={4}>
                 <FormControl fullWidth>
                   <InputLabel htmlFor="new-name">Name</InputLabel>
-                  <OutlinedInput id="new-name" value={newClient.name} onChange={(e) => setNewClient((p) => ({ ...p, name: e.target.value }))} label="Name" />
+                  <OutlinedInput
+                    id="new-name"
+                    value={newClient.name}
+                    onChange={(e) => setNewClient((p) => ({ ...p, name: e.target.value }))}
+                    label="Name"
+                  />
                 </FormControl>
               </Grid>
               <Grid item xs={12} md={2}>
@@ -1059,7 +1147,12 @@ export default function AdminHub() {
         {isAdmin && (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
             <Box sx={{ p: 2 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                alignItems={{ xs: 'stretch', sm: 'center' }}
+                justifyContent="space-between"
+              >
                 <Typography variant="h5">Staff</Typography>
                 <Stack direction="row" spacing={1} alignItems="center">
                   {loading && <CircularProgress size={20} />}
@@ -1124,7 +1217,12 @@ export default function AdminHub() {
 
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
           <Box sx={{ p: 2 }}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              alignItems={{ xs: 'stretch', sm: 'center' }}
+              justifyContent="space-between"
+            >
               <Typography variant="h5">Clients</Typography>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
                 {loading && <CircularProgress size={20} />}
@@ -1199,7 +1297,12 @@ export default function AdminHub() {
                 {filteredClients.map((c) => (
                   <TableRow key={c.id} hover>
                     <TableCell padding="checkbox">
-                      <Checkbox size="small" checked={selectedClientIds.includes(c.id)} onChange={() => toggleSelectClient(c.id)} disabled={!isAdmin} />
+                      <Checkbox
+                        size="small"
+                        checked={selectedClientIds.includes(c.id)}
+                        onChange={() => toggleSelectClient(c.id)}
+                        disabled={!isAdmin}
+                      />
                     </TableCell>
                     <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                     <TableCell>{c.email}</TableCell>
@@ -1221,6 +1324,16 @@ export default function AdminHub() {
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
                           Edit
                         </Button>
+                        {c.role === 'client' && !c.onboarding_completed_at && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => handleSendOnboardingEmailNow(c.id)}
+                            disabled={sendingOnboardingForId === c.id}
+                          >
+                            {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
+                          </Button>
+                        )}
                         {isAdmin && (
                           <Button
                             size="small"
@@ -1288,6 +1401,15 @@ export default function AdminHub() {
               {activeTab === 2 && renderDocumentsTab()}
             </Box>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
+              {editing?.role === 'client' && !editing?.onboarding_completed_at && (
+                <Button
+                  variant="outlined"
+                  onClick={() => handleSendOnboardingEmailNow(editing.id)}
+                  disabled={sendingOnboardingForId === editing.id}
+                >
+                  {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
+                </Button>
+              )}
               <Button onClick={() => setEditing(null)} color="secondary">
                 Cancel
               </Button>
@@ -1306,7 +1428,12 @@ export default function AdminHub() {
         )}
       </Drawer>
 
-      <Dialog open={deleteConfirm.open} onClose={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })} maxWidth="xs" fullWidth>
+      <Dialog
+        open={deleteConfirm.open}
+        onClose={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })}
+        maxWidth="xs"
+        fullWidth
+      >
         <DialogTitle>Delete Client</DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
@@ -1328,7 +1455,9 @@ export default function AdminHub() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })}>Cancel</Button>
+          <Button onClick={() => setDeleteConfirm({ open: false, clientId: null, label: '', hasBoard: false, deleteBoard: false })}>
+            Cancel
+          </Button>
           <Button variant="contained" color="error" onClick={handleDeleteClient} disabled={Boolean(deletingClientId)}>
             {deletingClientId ? 'Deleting…' : 'Delete'}
           </Button>
@@ -1383,9 +1512,7 @@ export default function AdminHub() {
                       Confirm the Monday board, account metadata, and any preset services before inviting the client.
                     </Typography>
                   </Stack>
-                  <Box sx={{ maxHeight: { xs: '60vh', md: '55vh' }, overflowY: 'auto', pr: 1 }}>
-                    {renderDetailsTab()}
-                  </Box>
+                  <Box sx={{ maxHeight: { xs: '60vh', md: '55vh' }, overflowY: 'auto', pr: 1 }}>{renderDetailsTab()}</Box>
                 </CardContent>
               </Card>
             )}
@@ -1395,19 +1522,16 @@ export default function AdminHub() {
                   <Stack spacing={2}>
                     <Typography variant="subtitle1">Send Client Onboarding Email?</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      We&apos;ll email <strong>{editing.email}</strong> a secure link so they can set a password,
-                      confirm services, and provide brand details.
+                      We&apos;ll email <strong>{editing.email}</strong> a secure link so they can set a password, confirm services, and
+                      provide brand details.
                     </Typography>
                     <FormControlLabel
-                      control={
-                        <Switch checked={sendOnboardingEmailFlag} onChange={(e) => setSendOnboardingEmailFlag(e.target.checked)} />
-                      }
+                      control={<Switch checked={sendOnboardingEmailFlag} onChange={(e) => setSendOnboardingEmailFlag(e.target.checked)} />}
                       label="Send onboarding email immediately"
                     />
                     {!sendOnboardingEmailFlag && (
                       <Alert severity="info" sx={{ borderRadius: 1 }}>
-                        You can send the onboarding email later from the client hub if you need to finish configuration
-                        first.
+                        You can send the onboarding email later from the client hub if you need to finish configuration first.
                       </Alert>
                     )}
                   </Stack>

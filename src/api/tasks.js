@@ -8,6 +8,10 @@ export function createTaskWorkspace(payload) {
   return client.post('/tasks/workspaces', payload).then((res) => res.data.workspace);
 }
 
+export function deleteTaskWorkspace(workspaceId) {
+  return client.delete(`/tasks/workspaces/${workspaceId}`).then((res) => res.data);
+}
+
 export function fetchTaskWorkspaceMembers(workspaceId) {
   return client.get(`/tasks/workspaces/${workspaceId}/members`).then((res) => res.data.members || []);
 }
@@ -36,6 +40,10 @@ export function createTaskBoard(workspaceId, payload) {
   return client.post(`/tasks/workspaces/${workspaceId}/boards`, payload).then((res) => res.data.board);
 }
 
+export function deleteTaskBoard(boardId) {
+  return client.delete(`/tasks/boards/${boardId}`).then((res) => res.data);
+}
+
 export function fetchTaskBoardView(boardId) {
   return client.get(`/tasks/boards/${boardId}/view`).then((res) => res.data);
 }
@@ -58,6 +66,10 @@ export function runBillingReport(payload) {
 
 export function createTaskGroup(boardId, payload) {
   return client.post(`/tasks/boards/${boardId}/groups`, payload).then((res) => res.data.group);
+}
+
+export function deleteTaskGroup(groupId) {
+  return client.delete(`/tasks/groups/${groupId}`).then((res) => res.data);
 }
 
 export function createTaskItem(groupId, payload) {
@@ -189,5 +201,25 @@ export function deleteStatusLabel(labelId) {
 
 export function initBoardStatusLabels(boardId) {
   return client.post(`/tasks/boards/${boardId}/status-labels/init`).then((res) => res.data.status_labels || []);
+}
+
+export function createGlobalStatusLabel(payload) {
+  return client.post('/tasks/status-labels/global', payload).then((res) => res.data.status_label);
+}
+
+export function archiveTaskItem(itemId) {
+  return client.delete(`/tasks/items/${itemId}`).then((res) => res.data);
+}
+
+export function restoreTaskItem(itemId) {
+  return client.post(`/tasks/items/${itemId}/restore`).then((res) => res.data.item);
+}
+
+export function archiveTaskSubitem(subitemId) {
+  return client.delete(`/tasks/subitems/${subitemId}`).then((res) => res.data);
+}
+
+export function restoreTaskSubitem(subitemId) {
+  return client.post(`/tasks/subitems/${subitemId}/restore`).then((res) => res.data.subitem);
 }
 

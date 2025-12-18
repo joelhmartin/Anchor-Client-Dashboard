@@ -43,6 +43,7 @@ import AutomationsPane from './panes/AutomationsPane';
 import BillingPane from './panes/BillingPane';
 import {
   createTaskGroup,
+  deleteTaskGroup,
   createTaskItem,
   createTaskBoardAutomation,
   fetchTaskWorkspaceMembers,
@@ -76,9 +77,11 @@ import {
   markUpdatesViewed,
   fetchUpdateViews,
   createBoardStatusLabel,
+  createGlobalStatusLabel,
   updateStatusLabel,
   deleteStatusLabel,
-  initBoardStatusLabels
+  initBoardStatusLabels,
+  archiveTaskItem
 } from 'api/tasks';
 
 function getEffectiveRole(user) {
@@ -312,6 +315,41 @@ export default function TaskManager() {
       console.error('Failed to add status label:', err);
     }
     setSavingLabel(false);
+  };
+
+  const handleCreateLabelFromBoardTable = async ({ label, color, makeGlobal }) => {
+    if (!activeBoardId || !label?.trim()) return null;
+    try {
+      const created = makeGlobal
+        ? await createGlobalStatusLabel({ label: label.trim(), color })
+        : await createBoardStatusLabel(activeBoardId, { label: label.trim(), color });
+      // Merge into current view so it shows immediately.
+      setBoardView((prev) => ({ ...prev, status_labels: [...(prev?.status_labels || []), created] }));
+      return created;
+    } catch (err) {
+      console.error('Failed to create status label:', err);
+      return null;
+    }
+  };
+
+  const archiveItem = async (itemId) => {
+    if (!itemId) return;
+    try {
+      await archiveTaskItem(itemId);
+    } catch (err) {
+      console.error('Failed to archive item:', err);
+    }
+    // Refresh whichever pane is currently active.
+    if (activeBoardId) {
+      await loadBoardView(activeBoardId);
+    }
+    if (pane === 'my-work') {
+      await refreshMyWork();
+    }
+    // If drawer is currently open for this item, close it.
+    if (selectedItem?.id === itemId) {
+      closeItemDrawer();
+    }
   };
 
   const handleUpdateLabel = async (labelId, updates) => {
@@ -793,6 +831,18 @@ export default function TaskManager() {
       setError(err.message || 'Unable to create group');
     } finally {
       setCreatingGroup(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!groupId || !activeBoardId) return;
+    try {
+      await deleteTaskGroup(groupId);
+      // If an item drawer is open, close it (it might belong to a deleted group).
+      closeItemDrawer();
+      await loadBoardView(activeBoardId);
+    } catch (err) {
+      setError(err.message || 'Unable to delete group');
     }
   };
 
@@ -1388,6 +1438,7 @@ export default function TaskManager() {
               <Divider />
 
               <BoardTable
+                boardId={activeBoardId}
                 groups={boardView?.groups || []}
                 itemsByGroup={itemsByGroup}
                 assigneesByItem={boardView?.assignees_by_item || {}}
@@ -1395,6 +1446,10 @@ export default function TaskManager() {
                 updateCountsByItem={boardView?.update_counts_by_item || {}}
                 timeTotalsByItem={boardView?.time_totals_by_item || {}}
                 statusLabels={statusLabels}
+                canManageLabels={isAdmin}
+                onCreateStatusLabel={handleCreateLabelFromBoardTable}
+                onArchiveItem={archiveItem}
+                onDeleteGroup={isAdmin ? handleDeleteGroup : undefined}
                 highlightedItemId={highlightedItemId}
                 onUpdateItem={updateItemInline}
                 onToggleAssignee={toggleAssigneeInline}
