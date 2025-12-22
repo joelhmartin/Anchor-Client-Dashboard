@@ -32,6 +32,17 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: `http://localhost:${API_PORT}`,
           changeOrigin: true
+        },
+        // Public embed endpoints are served by the API server in dev.
+        // Proxy them so `http://localhost:3000/embed/...` works for local embed testing.
+        '/embed': {
+          target: `http://localhost:${API_PORT}`,
+          changeOrigin: true
+        },
+        // Uploaded assets are served by the API server.
+        '/uploads': {
+          target: `http://localhost:${API_PORT}`,
+          changeOrigin: true
         }
       }
     },

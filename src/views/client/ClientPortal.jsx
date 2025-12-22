@@ -15,6 +15,7 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import Grid from '@mui/material/Grid';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
@@ -91,26 +92,16 @@ const fieldLabels = {
   business_name: 'Business Name',
   business_description: 'Business Description',
   brand_notes: 'Brand Notes',
-  website_admin_email: 'Website Admin Email',
   website_url: 'Website URL',
-  ga_emails: 'GA / GTM Emails',
-  meta_bm_email: 'Meta Business Manager Email',
-  social_links: 'Social Links',
-  pricing_list_url: 'Pricing List URL',
-  promo_calendar_url: 'Promo Calendar URL'
+  website_url: 'Website URL'
 };
 
 const BRAND_FIELD_ORDER = [
   'business_name',
   'business_description',
   'brand_notes',
-  'website_admin_email',
   'website_url',
-  'ga_emails',
-  'meta_bm_email',
-  'social_links',
-  'pricing_list_url',
-  'promo_calendar_url'
+  'website_url'
 ];
 
 export default function ClientPortal() {
@@ -130,6 +121,23 @@ export default function ClientPortal() {
 
   const [brand, setBrand] = useState(null);
   const [brandFields, setBrandFields] = useState({});
+  const [accessFields, setAccessFields] = useState({
+    website_access_provided: false,
+    website_access_understood: false,
+    ga4_access_provided: false,
+    ga4_access_understood: false,
+    google_ads_access_provided: false,
+    google_ads_access_understood: false,
+    meta_access_provided: false,
+    meta_access_understood: false,
+    website_forms_details_provided: false,
+    website_forms_details_understood: false,
+    website_forms_uses_third_party: false,
+    website_forms_uses_hipaa: false,
+    website_forms_connected_crm: false,
+    website_forms_custom: false,
+    website_forms_notes: ''
+  });
   const [logoUploads, setLogoUploads] = useState([]);
   const [styleUploads, setStyleUploads] = useState([]);
   const [logoDeletions, setLogoDeletions] = useState([]);
@@ -223,6 +231,24 @@ export default function ClientPortal() {
           password_confirm: '',
           monthly_revenue_goal: data.monthly_revenue_goal || ''
         });
+        setAccessFields((prev) => ({
+          ...prev,
+          website_access_provided: data.website_access_provided || false,
+          website_access_understood: data.website_access_understood || false,
+          ga4_access_provided: data.ga4_access_provided || false,
+          ga4_access_understood: data.ga4_access_understood || false,
+          google_ads_access_provided: data.google_ads_access_provided || false,
+          google_ads_access_understood: data.google_ads_access_understood || false,
+          meta_access_provided: data.meta_access_provided || false,
+          meta_access_understood: data.meta_access_understood || false,
+          website_forms_details_provided: data.website_forms_details_provided || false,
+          website_forms_details_understood: data.website_forms_details_understood || false,
+          website_forms_uses_third_party: data.website_forms_uses_third_party || false,
+          website_forms_uses_hipaa: data.website_forms_uses_hipaa || false,
+          website_forms_connected_crm: data.website_forms_connected_crm || false,
+          website_forms_custom: data.website_forms_custom || false,
+          website_forms_notes: data.website_forms_notes || ''
+        }));
       })
       .catch((err) => triggerMessage('error', err.message || 'Unable to load profile'))
       .finally(() => setProfileLoading(false));
@@ -236,13 +262,8 @@ export default function ClientPortal() {
           business_name: data.business_name || '',
           business_description: data.business_description || '',
           brand_notes: data.brand_notes || '',
-          website_admin_email: data.website_admin_email || '',
           website_url: data.website_url || '',
-          ga_emails: data.ga_emails || '',
-          meta_bm_email: data.meta_bm_email || '',
-          social_links: typeof data.social_links === 'string' ? data.social_links : JSON.stringify(data.social_links || ''),
-          pricing_list_url: data.pricing_list_url || '',
-          promo_calendar_url: data.promo_calendar_url || ''
+          website_url: data.website_url || ''
         });
       })
       .catch((err) => triggerMessage('error', err.message || 'Unable to load brand profile'));
@@ -488,6 +509,9 @@ export default function ClientPortal() {
       setStyleUploads([]);
       setLogoDeletions([]);
       setStyleDeletions([]);
+      // Persist access confirmations alongside brand info
+      await updateProfile({ ...accessFields });
+      loadProfile();
       triggerMessage('success', 'Brand profile saved');
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to save brand profile');
@@ -1253,46 +1277,175 @@ export default function ClientPortal() {
                   </Grid>
                   <Grid item xs={12} md={6}>
                     <Stack spacing={2}>
-                      <Typography variant="h6">Account Setup & Links</Typography>
-                      <TextField
-                        label={fieldLabels.website_admin_email}
-                        fullWidth
-                        value={brandFields.website_admin_email || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, website_admin_email: e.target.value }))}
+                      <Typography variant="h6">Access & Integrations</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        These confirmations help our team ensure tracking and integrations are set up correctly.
+                      </Typography>
+
+                      <Typography variant="subtitle2">Website Access</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_access_provided}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, website_access_provided: e.target.checked }))}
+                          />
+                        }
+                        label="I have provided website access"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_access_understood}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, website_access_understood: e.target.checked }))}
+                          />
+                        }
+                        label="I understand I need to provide website access to Anchor Corps as soon as possible"
+                      />
+
+                      <Divider />
+
+                      <Typography variant="subtitle2">Google Analytics (GA4)</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.ga4_access_provided}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, ga4_access_provided: e.target.checked }))}
+                          />
+                        }
+                        label="I have provided Google Analytics access"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.ga4_access_understood}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, ga4_access_understood: e.target.checked }))}
+                          />
+                        }
+                        label="I understand I need to provide Google Analytics access as soon as possible"
+                      />
+
+                      <Divider />
+
+                      <Typography variant="subtitle2">Google Ads</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.google_ads_access_provided}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, google_ads_access_provided: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="I have provided Google Ads access"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.google_ads_access_understood}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, google_ads_access_understood: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="I understand I need to provide Google Ads access as soon as possible"
+                      />
+
+                      <Divider />
+
+                      <Typography variant="subtitle2">Facebook Business Manager (Meta)</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.meta_access_provided}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, meta_access_provided: e.target.checked }))}
+                          />
+                        }
+                        label="I have provided Facebook Business Manager access"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.meta_access_understood}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, meta_access_understood: e.target.checked }))}
+                          />
+                        }
+                        label="I understand I need to provide Facebook access as soon as possible"
+                      />
+
+                      <Divider />
+
+                      <Typography variant="subtitle2">Website Forms & Integrations</Typography>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_uses_third_party}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="Uses third-party form tools"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_uses_hipaa}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="Uses HIPAA-compliant / secure forms"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_connected_crm}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="Forms connected to a CRM / practice management system"
+                      />
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_custom}
+                            onChange={(e) => setAccessFields((p) => ({ ...p, website_forms_custom: e.target.checked }))}
+                          />
+                        }
+                        label="Custom-built / developer-managed forms"
                       />
                       <TextField
-                        label={fieldLabels.ga_emails}
-                        fullWidth
-                        multiline
-                        minRows={2}
-                        value={brandFields.ga_emails || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, ga_emails: e.target.value }))}
-                      />
-                      <TextField
-                        label={fieldLabels.meta_bm_email}
-                        fullWidth
-                        value={brandFields.meta_bm_email || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, meta_bm_email: e.target.value }))}
-                      />
-                      <TextField
-                        label={fieldLabels.social_links}
+                        label="Forms & integrations notes"
                         fullWidth
                         multiline
                         minRows={3}
-                        value={brandFields.social_links || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, social_links: e.target.value }))}
+                        value={accessFields.website_forms_notes || ''}
+                        onChange={(e) => setAccessFields((p) => ({ ...p, website_forms_notes: e.target.value }))}
                       />
-                      <TextField
-                        label={fieldLabels.pricing_list_url}
-                        fullWidth
-                        value={brandFields.pricing_list_url || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, pricing_list_url: e.target.value }))}
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_details_provided}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, website_forms_details_provided: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="I have provided details about my website form setup and integrations"
                       />
-                      <TextField
-                        label={fieldLabels.promo_calendar_url}
-                        fullWidth
-                        value={brandFields.promo_calendar_url || ''}
-                        onChange={(e) => setBrandFields((prev) => ({ ...prev, promo_calendar_url: e.target.value }))}
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={accessFields.website_forms_details_understood}
+                            onChange={(e) =>
+                              setAccessFields((p) => ({ ...p, website_forms_details_understood: e.target.checked }))
+                            }
+                          />
+                        }
+                        label="I understand additional access/information may be required"
                       />
                     </Stack>
                   </Grid>

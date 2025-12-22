@@ -40,12 +40,16 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 const emptyService = () => ({ name: '', description: '', base_price: 0, active: true, isDefault: false });
 const STEP_CONFIG = [
   { key: 'profile', label: 'Profile & Credentials', description: 'Confirm account basics and set a password.' },
-  { key: 'brand', label: 'Brand Basics', description: 'Share brand notes and key contact links.' },
+  { key: 'brand', label: 'Brand Assets', description: 'Upload logos/style guides and share brand basics.' },
   { key: 'services', label: 'Services & Pricing', description: 'Review offerings before completing onboarding.' },
+  { key: 'website_access', label: 'Website Access', description: 'Confirm access to your website platform/hosting/DNS.' },
+  { key: 'ga4', label: 'Google Analytics (GA4)', description: 'Confirm Analytics access so we can configure tracking and reporting.' },
+  { key: 'google_ads', label: 'Google Ads', description: 'Confirm Google Ads access so we can manage campaigns and conversions.' },
+  { key: 'meta', label: 'Facebook Business Manager', description: 'Confirm Meta access so we can manage ads, pixels, and page connections.' },
   {
-    key: 'dns',
-    label: 'DNS Access Commitment',
-    description: 'Acknowledge that you will grant Anchor access to your DNS provider.'
+    key: 'forms',
+    label: 'Website Forms & Integrations',
+    description: 'Tell us how your website forms are set up so we can ensure tracking and compliance.'
   }
 ];
 
@@ -77,7 +81,23 @@ export default function ClientOnboardingPage() {
   const [serviceList, setServiceList] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
   const [defaultOptions, setDefaultOptions] = useState([]);
-  const [dnsAcknowledged, setDnsAcknowledged] = useState(false);
+  const [access, setAccess] = useState({
+    website_access_provided: false,
+    website_access_understood: false,
+    ga4_access_provided: false,
+    ga4_access_understood: false,
+    google_ads_access_provided: false,
+    google_ads_access_understood: false,
+    meta_access_provided: false,
+    meta_access_understood: false,
+    website_forms_details_provided: false,
+    website_forms_details_understood: false,
+    website_forms_uses_third_party: false,
+    website_forms_uses_hipaa: false,
+    website_forms_connected_crm: false,
+    website_forms_custom: false,
+    website_forms_notes: ''
+  });
   const [customServiceName, setCustomServiceName] = useState('');
 
   const isLastStep = activeStep === STEP_CONFIG.length - 1;
@@ -105,12 +125,8 @@ export default function ClientOnboardingPage() {
           business_name: payload.brand?.business_name || '',
           business_description: payload.brand?.business_description || '',
           brand_notes: payload.brand?.brand_notes || '',
-          website_admin_email: payload.brand?.website_admin_email || '',
           website_url: payload.brand?.website_url || '',
-          ga_emails: payload.brand?.ga_emails || '',
-          meta_bm_email: payload.brand?.meta_bm_email || '',
-          pricing_list_url: payload.brand?.pricing_list_url || '',
-          promo_calendar_url: payload.brand?.promo_calendar_url || ''
+          website_url: payload.brand?.website_url || ''
         };
         setForm((prev) => ({
           ...prev,
@@ -119,6 +135,24 @@ export default function ClientOnboardingPage() {
           client_identifier_value: payload.profile?.client_identifier_value || '',
           brand: presetBrand,
           avatar_url: payload.user?.avatar_url || ''
+        }));
+        setAccess((prev) => ({
+          ...prev,
+          website_access_provided: payload.profile?.website_access_provided || false,
+          website_access_understood: payload.profile?.website_access_understood || false,
+          ga4_access_provided: payload.profile?.ga4_access_provided || false,
+          ga4_access_understood: payload.profile?.ga4_access_understood || false,
+          google_ads_access_provided: payload.profile?.google_ads_access_provided || false,
+          google_ads_access_understood: payload.profile?.google_ads_access_understood || false,
+          meta_access_provided: payload.profile?.meta_access_provided || false,
+          meta_access_understood: payload.profile?.meta_access_understood || false,
+          website_forms_details_provided: payload.profile?.website_forms_details_provided || false,
+          website_forms_details_understood: payload.profile?.website_forms_details_understood || false,
+          website_forms_uses_third_party: payload.profile?.website_forms_uses_third_party || false,
+          website_forms_uses_hipaa: payload.profile?.website_forms_uses_hipaa || false,
+          website_forms_connected_crm: payload.profile?.website_forms_connected_crm || false,
+          website_forms_custom: payload.profile?.website_forms_custom || false,
+          website_forms_notes: payload.profile?.website_forms_notes || ''
         }));
         const initialServices = (payload.services && payload.services.length ? payload.services : []).map((s) => ({
           id: s.id,
@@ -248,9 +282,37 @@ export default function ClientOnboardingPage() {
         return false;
       }
     }
-    if (key === 'dns') {
-      if (!dnsAcknowledged) {
-        setError('Please confirm that you will provide DNS access.');
+    if (key === 'website_access') {
+      if (!access.website_access_provided && !access.website_access_understood) {
+        setError('Please confirm website access (provided or understood).');
+        return false;
+      }
+    }
+    if (key === 'ga4') {
+      if (!access.ga4_access_provided && !access.ga4_access_understood) {
+        setError('Please confirm Google Analytics access (provided or understood).');
+        return false;
+      }
+    }
+    if (key === 'google_ads') {
+      if (!access.google_ads_access_provided && !access.google_ads_access_understood) {
+        setError('Please confirm Google Ads access (provided or understood).');
+        return false;
+      }
+    }
+    if (key === 'meta') {
+      if (!access.meta_access_provided && !access.meta_access_understood) {
+        setError('Please confirm Facebook Business Manager access (provided or understood).');
+        return false;
+      }
+    }
+    if (key === 'forms') {
+      if (!access.website_forms_details_provided && !access.website_forms_details_understood) {
+        setError('Please confirm forms/integrations details (provided or understood).');
+        return false;
+      }
+      if (access.website_forms_details_provided && !String(access.website_forms_notes || '').trim()) {
+        setError('Please add a short note about your website forms/integrations.');
         return false;
       }
     }
@@ -291,7 +353,8 @@ export default function ClientOnboardingPage() {
         monthly_revenue_goal: form.monthly_revenue_goal,
         client_identifier_value: form.client_identifier_value,
         brand: form.brand,
-        services: sanitizedServices
+        services: sanitizedServices,
+        ...access
       });
       setSuccessMessage('Information saved! Setting up your account...');
       await login({ email: data.user.email, password: form.password });
@@ -337,139 +400,123 @@ export default function ClientOnboardingPage() {
             />
           </Button>
         </Stack>
-        <TextField
-          label="Display Name"
-          fullWidth
-          value={form.display_name}
-          onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
-        />
-        <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
-        <TextField
-          label="Client Identifier"
-          fullWidth
-          value={form.client_identifier_value}
-          onChange={(e) => setForm((prev) => ({ ...prev, client_identifier_value: e.target.value }))}
-        />
-        <TextField
-          label="Monthly Revenue Goal"
-          type="number"
-          fullWidth
-          value={form.monthly_revenue_goal}
-          onChange={(e) => setForm((prev) => ({ ...prev, monthly_revenue_goal: e.target.value }))}
-        />
-        <FormControl fullWidth variant="outlined">
-          <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
-          <OutlinedInput
-            id="client-onboarding-password"
-            type={showPassword ? 'text' : 'password'}
-            value={form.password}
-            onChange={(e) => changePassword(e.target.value)}
-            endAdornment={
-              <InputAdornment position="end">
-                <IconButton
-                  aria-label="toggle password visibility"
-                  onClick={handleTogglePassword}
-                  onMouseDown={handleMouseDownPassword}
-                  edge="end"
-                  size="large"
-                >
-                  {showPassword ? <Visibility /> : <VisibilityOff />}
-                </IconButton>
-              </InputAdornment>
-            }
-            label="Password"
+          <TextField
+            label="Display Name"
+            fullWidth
+            value={form.display_name}
+            onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
           />
-        </FormControl>
-        {strength !== 0 && (
-          <Box sx={{ mt: 1 }}>
-            <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
-              <Box sx={{ width: 90, height: 8, borderRadius: '7px', bgcolor: level?.color }} />
-              <Typography variant="caption" color="text.secondary">
-                {level?.label}
-              </Typography>
-            </Stack>
-          </Box>
-        )}
-        <FormControl fullWidth variant="outlined">
-          <InputLabel htmlFor="client-onboarding-password-confirm">Confirm Password</InputLabel>
-          <OutlinedInput
-            id="client-onboarding-password-confirm"
-            type={showConfirmPassword ? 'text' : 'password'}
-            value={form.password_confirm}
-            onChange={(e) => setForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
-            endAdornment={
-              <InputAdornment position="end">
-                <IconButton
-                  aria-label="toggle confirm password visibility"
-                  onClick={handleToggleConfirmPassword}
-                  onMouseDown={handleMouseDownPassword}
-                  edge="end"
-                  size="large"
-                >
-                  {showConfirmPassword ? <Visibility /> : <VisibilityOff />}
-                </IconButton>
-              </InputAdornment>
-            }
-            label="Confirm Password"
+          <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
+          <TextField
+            label="Client Identifier"
+            fullWidth
+            value={form.client_identifier_value}
+            onChange={(e) => setForm((prev) => ({ ...prev, client_identifier_value: e.target.value }))}
           />
-        </FormControl>
+          <TextField
+            label="Monthly Revenue Goal"
+            type="number"
+            fullWidth
+            value={form.monthly_revenue_goal}
+            onChange={(e) => setForm((prev) => ({ ...prev, monthly_revenue_goal: e.target.value }))}
+          />
+          <FormControl fullWidth variant="outlined">
+            <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
+            <OutlinedInput
+              id="client-onboarding-password"
+              type={showPassword ? 'text' : 'password'}
+              value={form.password}
+              onChange={(e) => changePassword(e.target.value)}
+              endAdornment={
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle password visibility"
+                    onClick={handleTogglePassword}
+                    onMouseDown={handleMouseDownPassword}
+                    edge="end"
+                    size="large"
+                  >
+                    {showPassword ? <Visibility /> : <VisibilityOff />}
+                  </IconButton>
+                </InputAdornment>
+              }
+              label="Password"
+            />
+          </FormControl>
+          {strength !== 0 && (
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+                <Box sx={{ width: 90, height: 8, borderRadius: '7px', bgcolor: level?.color }} />
+                <Typography variant="caption" color="text.secondary">
+                  {level?.label}
+                </Typography>
+              </Stack>
+            </Box>
+          )}
+          <FormControl fullWidth variant="outlined">
+            <InputLabel htmlFor="client-onboarding-password-confirm">Confirm Password</InputLabel>
+            <OutlinedInput
+              id="client-onboarding-password-confirm"
+              type={showConfirmPassword ? 'text' : 'password'}
+              value={form.password_confirm}
+              onChange={(e) => setForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
+              endAdornment={
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle confirm password visibility"
+                    onClick={handleToggleConfirmPassword}
+                    onMouseDown={handleMouseDownPassword}
+                    edge="end"
+                    size="large"
+                  >
+                    {showConfirmPassword ? <Visibility /> : <VisibilityOff />}
+                  </IconButton>
+                </InputAdornment>
+              }
+              label="Confirm Password"
+            />
+          </FormControl>
       </Stack>
     </Stack>
   );
 
   const renderBrandStep = () => (
     <Stack spacing={2}>
-      <Typography variant="h6">Brand Basics</Typography>
+      <Typography variant="h6">Brand Assets</Typography>
       <Typography variant="body2" color="text.secondary">
-        Share the quick-reference items our team will need for reporting and campaign execution.
+        Upload logo/style guide files and share your business basics so we can build consistent creative and tracking.
       </Typography>
       <Stack spacing={2}>
-        <TextField
-          label="Business Name"
+          <TextField
+            label="Business Name"
+            fullWidth
+            value={form.brand.business_name || ''}
+            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_name: e.target.value } }))}
+          />
+          <TextField
+          label="Business Description"
           fullWidth
-          value={form.brand.business_name || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_name: e.target.value } }))}
-        />
-        <TextField
-          label="Website"
-          fullWidth
-          value={form.brand.website_url || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
-        />
-        <TextField
-          label="Brand Notes"
           multiline
-          minRows={2}
-          fullWidth
-          value={form.brand.brand_notes || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
-        />
-        <TextField
-          label="GA/GTM Emails"
-          fullWidth
-          value={form.brand.ga_emails || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, ga_emails: e.target.value } }))}
-        />
-        <TextField
-          label="Meta Business Email"
-          fullWidth
-          value={form.brand.meta_bm_email || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, meta_bm_email: e.target.value } }))}
-        />
-        <TextField
-          label="Pricing List URL"
-          fullWidth
-          value={form.brand.pricing_list_url || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, pricing_list_url: e.target.value } }))}
-        />
-        <TextField
-          label="Promo Calendar URL"
-          fullWidth
-          value={form.brand.promo_calendar_url || ''}
+          minRows={3}
+          value={form.brand.business_description || ''}
           onChange={(e) =>
-            setForm((prev) => ({ ...prev, brand: { ...prev.brand, promo_calendar_url: e.target.value } }))
+            setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_description: e.target.value } }))
           }
         />
+        <TextField
+          label="Website URL"
+            fullWidth
+            value={form.brand.website_url || ''}
+            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
+          />
+          <TextField
+            label="Brand Notes"
+            multiline
+          minRows={3}
+            fullWidth
+            value={form.brand.brand_notes || ''}
+            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
+          />
         <Stack spacing={1}>
           <Typography variant="subtitle2">Brand Assets (logos, files)</Typography>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
@@ -481,7 +528,7 @@ export default function ClientOnboardingPage() {
               ))}
           </Stack>
           <Button variant="outlined" component="label">
-            Upload Brand Asset
+            Upload Logo / Style Guide
             <input
               type="file"
               hidden
@@ -500,6 +547,9 @@ export default function ClientOnboardingPage() {
               }}
             />
           </Button>
+      <Typography variant="caption" color="text.secondary">
+            You can upload logos and style guides here. If you need to share additional assets, upload them as well.
+      </Typography>
         </Stack>
       </Stack>
     </Stack>
@@ -607,81 +657,219 @@ export default function ClientOnboardingPage() {
     </Stack>
   );
 
-  const renderDnsStep = () => (
+  const renderWebsiteAccessStep = () => (
     <Stack spacing={2}>
-      <Typography variant="h6">DNS Access Overview</Typography>
+      <Typography variant="h6">Website Access</Typography>
       <Typography variant="body2" color="text.secondary">
-        DNS (Domain Name System) tells browsers where to find your website. If DNS isn’t configured or transferred, your
-        site and email can go offline. We need access to your DNS provider so we can point your domain to Anchor hosting.
-        If you&apos;re unsure who manages your DNS, reach out to us immediately.
+        We need administrative or developer-level access to your website platform so we can manage updates, tracking,
+        integrations, performance optimization, and ongoing support.
       </Typography>
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Typography variant="subtitle1" gutterBottom>
-          Popular DNS Providers & Access Help
-        </Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography variant="subtitle2">This may include</Typography>
         <List dense>
-          {[
-            {
-              name: 'GoDaddy',
-              url: 'https://www.godaddy.com/help/add-delegate-access-12376',
-              label: 'Granting access'
-            },
-            {
-              name: 'Namecheap',
-              url: 'https://www.namecheap.com/support/knowledgebase/article.aspx/9642/45/how-can-i-share-access-to-my-domain',
-              label: 'Share account access'
-            },
-            {
-              name: 'Cloudflare',
-              url: 'https://developers.cloudflare.com/fundamentals/account-and-billing/members/',
-              label: 'Member invitations'
-            },
-            {
-              name: 'Google Domains',
-              url: 'https://support.google.com/domains/answer/7519956',
-              label: 'Share domain management'
-            },
-            {
-              name: 'Bluehost',
-              url: 'https://www.bluehost.com/help/article/how-to-grant-access-to-your-account',
-              label: 'Grant account access'
-            },
-            {
-              name: 'HostGator',
-              url: 'https://www.hostgator.com/help/article/how-do-i-grant-account-access',
-              label: 'Grant account access'
-            },
-            {
-              name: 'DigitalOcean',
-              url: 'https://docs.digitalocean.com/products/accounts/team/',
-              label: 'Team access'
-            },
-            {
-              name: 'Amazon Route 53',
-              url: 'https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/access-control.html',
-              label: 'IAM user access'
-            }
-          ].map((provider) => (
-            <ListItem key={provider.name} sx={{ alignItems: 'flex-start', pl: 0 }}>
-              <ListItemText
-                primary={provider.name}
-                secondary={
-                  <Link href={provider.url} target="_blank" rel="noreferrer">
-                    {provider.label}
-                  </Link>
-                }
-              />
-            </ListItem>
-          ))}
+          {['WordPress admin access (preferred)', 'Hosting provider access (Kinsta, WP Engine, etc.)', 'DNS access (if required)', 'FTP or SFTP access (if applicable)'].map(
+            (t) => (
+              <ListItem key={t} sx={{ pl: 0 }}>
+                <ListItemText primary={t} />
+              </ListItem>
+            )
+          )}
         </List>
-        <Typography variant="body2" color="text.secondary">
-          If your provider isn&apos;t listed, let us know so we can walk you through granting access.
+        <Typography variant="subtitle2" sx={{ mt: 1 }}>
+          How to grant access
+        </Typography>
+        <Stack spacing={0.5}>
+          <Link href="https://wordpress.org/support/article/roles-and-capabilities/" target="_blank" rel="noreferrer">
+            WordPress roles & capabilities
+          </Link>
+          <Link href="https://kinsta.com/help/add-user/" target="_blank" rel="noreferrer">
+            Kinsta: add a new company user
+          </Link>
+        </Stack>
+      </Paper>
+      <Stack>
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.website_access_provided}
+              onChange={(e) => setAccess((p) => ({ ...p, website_access_provided: e.target.checked }))}
+            />
+          }
+          label="I have provided website access"
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.website_access_understood}
+              onChange={(e) => setAccess((p) => ({ ...p, website_access_understood: e.target.checked }))}
+            />
+          }
+          label="I understand that I need to provide website access to Anchor Corps as soon as possible to ensure a smooth onboarding"
+        />
+      </Stack>
+    </Stack>
+  );
+
+  const renderGa4Step = () => (
+    <Stack spacing={2}>
+      <Typography variant="h6">Google Analytics (GA4)</Typography>
+      <Typography variant="body2" color="text.secondary">
+        We need Admin or Editor access to your Google Analytics property so we can configure tracking, conversions, events, integrations, and reporting.
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography variant="subtitle2">How to grant access</Typography>
+        <Link href="https://support.google.com/analytics/answer/1009702" target="_blank" rel="noreferrer">
+          Google Analytics access instructions
+                  </Link>
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          Please add: jmartin@anchorcorps.com, zcundiff@anchorcorps.com, mshover@anchorcorps.com (Admin or Editor)
         </Typography>
       </Paper>
+      <Stack>
+        <FormControlLabel
+          control={<Checkbox checked={access.ga4_access_provided} onChange={(e) => setAccess((p) => ({ ...p, ga4_access_provided: e.target.checked }))} />}
+          label="I have provided Google Analytics access"
+        />
+        <FormControlLabel
+          control={<Checkbox checked={access.ga4_access_understood} onChange={(e) => setAccess((p) => ({ ...p, ga4_access_understood: e.target.checked }))} />}
+          label="I understand that I need to provide Google Analytics access to Anchor Corps as soon as possible to ensure a smooth onboarding"
+        />
+      </Stack>
+    </Stack>
+  );
+
+  const renderGoogleAdsStep = () => (
+    <Stack spacing={2}>
+      <Typography variant="h6">Google Ads</Typography>
+      <Typography variant="body2" color="text.secondary">
+        We need administrative access to your Google Ads account so we can manage campaigns, conversions, budgets, and integrations with analytics.
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography variant="subtitle2">How to grant access</Typography>
+        <Link href="https://support.google.com/google-ads/answer/9978556" target="_blank" rel="noreferrer">
+          Google Ads access instructions
+        </Link>
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          Please add: <strong>jmartin@anchorcorps.com</strong> (Administrator)
+        </Typography>
+      </Paper>
+      <Stack>
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.google_ads_access_provided}
+              onChange={(e) => setAccess((p) => ({ ...p, google_ads_access_provided: e.target.checked }))}
+            />
+          }
+          label="I have provided Google Ads access"
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.google_ads_access_understood}
+              onChange={(e) => setAccess((p) => ({ ...p, google_ads_access_understood: e.target.checked }))}
+            />
+          }
+          label="I understand that I need to provide Google Ads access to Anchor Corps as soon as possible to ensure a smooth onboarding"
+        />
+      </Stack>
+    </Stack>
+  );
+
+  const renderMetaStep = () => (
+    <Stack spacing={2}>
+      <Typography variant="h6">Facebook Business Manager (Meta)</Typography>
+        <Typography variant="body2" color="text.secondary">
+        We need access through Facebook Business Manager to manage ads, pixels, conversion events, and page connections.
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography variant="subtitle2">How to grant access</Typography>
+        <Link href="https://www.facebook.com/business/help/2169003770027706" target="_blank" rel="noreferrer">
+          Facebook Business Manager access instructions
+        </Link>
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          Please add: jmartin@anchorcorps.com, zcundiff@anchorcorps.com, mshover@anchorcorps.com
+        </Typography>
+      </Paper>
+      <Stack>
       <FormControlLabel
-        control={<Checkbox checked={dnsAcknowledged} onChange={(e) => setDnsAcknowledged(e.target.checked)} />}
-        label="I understand DNS access is required and will provide access or credentials to Anchor."
-      />
+          control={<Checkbox checked={access.meta_access_provided} onChange={(e) => setAccess((p) => ({ ...p, meta_access_provided: e.target.checked }))} />}
+          label="I have provided Facebook Business Manager access"
+        />
+        <FormControlLabel
+          control={<Checkbox checked={access.meta_access_understood} onChange={(e) => setAccess((p) => ({ ...p, meta_access_understood: e.target.checked }))} />}
+          label="I understand that I need to provide Facebook access to Anchor Corps as soon as possible to ensure a smooth onboarding"
+        />
+      </Stack>
+    </Stack>
+  );
+
+  const renderFormsStep = () => (
+    <Stack spacing={2}>
+      <Typography variant="h6">Website Forms & Integrations</Typography>
+      <Typography variant="body2" color="text.secondary">
+        Tell us how your website forms are set up so we can ensure lead tracking, compliance, and integrations work correctly.
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography variant="subtitle2">Check all that apply</Typography>
+        <Stack>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={access.website_forms_uses_third_party}
+                onChange={(e) => setAccess((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))}
+              />
+            }
+            label="Third-party form tools (Jotform, Formstack, Typeform, etc.)"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={access.website_forms_uses_hipaa} onChange={(e) => setAccess((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))} />}
+            label="HIPAA-compliant or secure intake forms"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={access.website_forms_connected_crm}
+                onChange={(e) => setAccess((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))}
+              />
+            }
+            label="Forms connected to a CRM or practice management system"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={access.website_forms_custom} onChange={(e) => setAccess((p) => ({ ...p, website_forms_custom: e.target.checked }))} />}
+            label="Custom-built or developer-managed forms"
+          />
+        </Stack>
+        <TextField
+          label="Notes"
+          fullWidth
+          multiline
+          minRows={3}
+          value={access.website_forms_notes}
+          onChange={(e) => setAccess((p) => ({ ...p, website_forms_notes: e.target.value }))}
+          sx={{ mt: 1 }}
+        />
+      </Paper>
+      <Stack>
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.website_forms_details_provided}
+              onChange={(e) => setAccess((p) => ({ ...p, website_forms_details_provided: e.target.checked }))}
+            />
+          }
+          label="I have provided details about my website form setup and integrations"
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={access.website_forms_details_understood}
+              onChange={(e) => setAccess((p) => ({ ...p, website_forms_details_understood: e.target.checked }))}
+            />
+          }
+          label="I understand that additional access or information related to website forms and integrations may be required"
+        />
+      </Stack>
     </Stack>
   );
 
@@ -693,8 +881,16 @@ export default function ClientOnboardingPage() {
         return renderBrandStep();
       case 'services':
         return renderServicesStep();
-      case 'dns':
-        return renderDnsStep();
+      case 'website_access':
+        return renderWebsiteAccessStep();
+      case 'ga4':
+        return renderGa4Step();
+      case 'google_ads':
+        return renderGoogleAdsStep();
+      case 'meta':
+        return renderMetaStep();
+      case 'forms':
+        return renderFormsStep();
       default:
         return null;
     }

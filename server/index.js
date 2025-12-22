@@ -14,8 +14,11 @@ import { query } from './db.js';
 import hubRouter from './routes/hub.js';
 import onboardingRouter from './routes/onboarding.js';
 import tasksRouter from './routes/tasks.js';
+import formsRouter from './routes/forms.js';
+import formsPublicRouter from './routes/formsPublic.js';
 import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
 import { purgeArchivedTasks } from './services/taskCleanup.js';
+import { processSubmissionJobs } from './services/formSubmissionJobs.js';
 
 const app = express();
 const PORT = process.env.API_SERVER_PORT || process.env.PORT || 4000;
@@ -64,6 +67,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/hub', hubRouter);
 app.use('/api/onboarding', onboardingRouter);
 app.use('/api/tasks', tasksRouter);
+app.use('/api/forms', formsRouter);
+app.use('/embed', formsPublicRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 if (NODE_ENV === 'production') {
@@ -94,6 +99,22 @@ async function maybeRunMigrations() {
   await query(sql);
   // eslint-disable-next-line no-console
   console.log('[migrations] ran init.sql');
+}
+
+// Run additional forms migration (idempotent, uses IF NOT EXISTS)
+async function maybeRunFormsMigration() {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const sqlPath = path.join(__dirname, 'sql', 'migrate_forms_platform.sql');
+    const sql = await readFile(sqlPath, 'utf8');
+    await query(sql);
+    // eslint-disable-next-line no-console
+    console.log('[migrations] ran migrate_forms_platform.sql');
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // file not present; skip
+    throw err;
+  }
 }
 
 // Automatic service redaction after 90 days
@@ -159,7 +180,23 @@ cron.schedule(
   }
 );
 
+// Process form submission jobs (CTM, emails) every 30 seconds
+cron.schedule(
+  '*/30 * * * * *',
+  async () => {
+    try {
+      const result = await processSubmissionJobs();
+      if (result?.processed) {
+        console.log(`[cron:form-jobs] processed ${result.processed} job(s)`);
+      }
+    } catch (err) {
+      console.error('[cron:form-jobs] failed', err.message);
+    }
+  }
+);
+
 maybeRunMigrations()
+  .then(maybeRunFormsMigration)
   .catch((err) => {
     console.error('[migrations] failed', err);
     process.exit(1);

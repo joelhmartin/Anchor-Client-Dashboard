@@ -106,7 +106,22 @@ router.get('/:token', async (req, res) => {
       profile: {
         monthly_revenue_goal: userRows[0].monthly_revenue_goal || '',
         client_identifier_value: userRows[0].client_identifier_value || '',
-        ai_prompt: userRows[0].ai_prompt || ''
+        ai_prompt: userRows[0].ai_prompt || '',
+        website_access_provided: userRows[0].website_access_provided || false,
+        website_access_understood: userRows[0].website_access_understood || false,
+        ga4_access_provided: userRows[0].ga4_access_provided || false,
+        ga4_access_understood: userRows[0].ga4_access_understood || false,
+        google_ads_access_provided: userRows[0].google_ads_access_provided || false,
+        google_ads_access_understood: userRows[0].google_ads_access_understood || false,
+        meta_access_provided: userRows[0].meta_access_provided || false,
+        meta_access_understood: userRows[0].meta_access_understood || false,
+        website_forms_details_provided: userRows[0].website_forms_details_provided || false,
+        website_forms_details_understood: userRows[0].website_forms_details_understood || false,
+        website_forms_uses_third_party: userRows[0].website_forms_uses_third_party || false,
+        website_forms_uses_hipaa: userRows[0].website_forms_uses_hipaa || false,
+        website_forms_connected_crm: userRows[0].website_forms_connected_crm || false,
+        website_forms_custom: userRows[0].website_forms_custom || false,
+        website_forms_notes: userRows[0].website_forms_notes || ''
       },
       brand: brandRows[0] || null,
       services: servicesRows
@@ -121,7 +136,29 @@ router.post('/:token', async (req, res) => {
   try {
     const record = await getTokenRecord(req.params.token);
     if (!record) return res.status(404).json({ message: 'Onboarding link is invalid or expired' });
-    const { display_name, password, monthly_revenue_goal, brand = {}, services = [], client_identifier_value } = req.body || {};
+    const {
+      display_name,
+      password,
+      monthly_revenue_goal,
+      brand = {},
+      services = [],
+      client_identifier_value,
+      website_access_provided,
+      website_access_understood,
+      ga4_access_provided,
+      ga4_access_understood,
+      google_ads_access_provided,
+      google_ads_access_understood,
+      meta_access_provided,
+      meta_access_understood,
+      website_forms_details_provided,
+      website_forms_details_understood,
+      website_forms_uses_third_party,
+      website_forms_uses_hipaa,
+      website_forms_connected_crm,
+      website_forms_custom,
+      website_forms_notes
+    } = req.body || {};
 
     if (!display_name) return res.status(400).json({ message: 'Display name is required' });
     if (password && password.length < 8) {
@@ -148,12 +185,86 @@ router.post('/:token', async (req, res) => {
       await query(`UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${params.length}`, params);
     }
 
-    if (monthly_revenue_goal !== undefined || client_identifier_value !== undefined) {
+    if (
+      monthly_revenue_goal !== undefined ||
+      client_identifier_value !== undefined ||
+      website_access_provided !== undefined ||
+      website_access_understood !== undefined ||
+      ga4_access_provided !== undefined ||
+      ga4_access_understood !== undefined ||
+      google_ads_access_provided !== undefined ||
+      google_ads_access_understood !== undefined ||
+      meta_access_provided !== undefined ||
+      meta_access_understood !== undefined ||
+      website_forms_details_provided !== undefined ||
+      website_forms_details_understood !== undefined ||
+      website_forms_uses_third_party !== undefined ||
+      website_forms_uses_hipaa !== undefined ||
+      website_forms_connected_crm !== undefined ||
+      website_forms_custom !== undefined ||
+      website_forms_notes !== undefined
+    ) {
       await query(
-        `INSERT INTO client_profiles (user_id, monthly_revenue_goal, client_identifier_value)
-         VALUES ($1,$2,$3)
-         ON CONFLICT (user_id) DO UPDATE SET monthly_revenue_goal = $2, client_identifier_value = $3, updated_at = NOW()`,
-        [record.user_id, monthly_revenue_goal || null, client_identifier_value || null]
+        `INSERT INTO client_profiles (
+           user_id,
+           monthly_revenue_goal,
+           client_identifier_value,
+           website_access_provided,
+           website_access_understood,
+           ga4_access_provided,
+           ga4_access_understood,
+           google_ads_access_provided,
+           google_ads_access_understood,
+           meta_access_provided,
+           meta_access_understood,
+           website_forms_details_provided,
+           website_forms_details_understood,
+           website_forms_uses_third_party,
+           website_forms_uses_hipaa,
+           website_forms_connected_crm,
+           website_forms_custom,
+           website_forms_notes
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         ON CONFLICT (user_id) DO UPDATE SET
+           monthly_revenue_goal = EXCLUDED.monthly_revenue_goal,
+           client_identifier_value = EXCLUDED.client_identifier_value,
+           website_access_provided = EXCLUDED.website_access_provided,
+           website_access_understood = EXCLUDED.website_access_understood,
+           ga4_access_provided = EXCLUDED.ga4_access_provided,
+           ga4_access_understood = EXCLUDED.ga4_access_understood,
+           google_ads_access_provided = EXCLUDED.google_ads_access_provided,
+           google_ads_access_understood = EXCLUDED.google_ads_access_understood,
+           meta_access_provided = EXCLUDED.meta_access_provided,
+           meta_access_understood = EXCLUDED.meta_access_understood,
+           website_forms_details_provided = EXCLUDED.website_forms_details_provided,
+           website_forms_details_understood = EXCLUDED.website_forms_details_understood,
+           website_forms_uses_third_party = EXCLUDED.website_forms_uses_third_party,
+           website_forms_uses_hipaa = EXCLUDED.website_forms_uses_hipaa,
+           website_forms_connected_crm = EXCLUDED.website_forms_connected_crm,
+           website_forms_custom = EXCLUDED.website_forms_custom,
+           website_forms_notes = EXCLUDED.website_forms_notes,
+           updated_at = NOW()`,
+        [
+          record.user_id,
+          monthly_revenue_goal || null,
+          client_identifier_value || null,
+          Boolean(website_access_provided),
+          Boolean(website_access_understood),
+          Boolean(ga4_access_provided),
+          Boolean(ga4_access_understood),
+          Boolean(google_ads_access_provided),
+          Boolean(google_ads_access_understood),
+          Boolean(meta_access_provided),
+          Boolean(meta_access_understood),
+          Boolean(website_forms_details_provided),
+          Boolean(website_forms_details_understood),
+          Boolean(website_forms_uses_third_party),
+          Boolean(website_forms_uses_hipaa),
+          Boolean(website_forms_connected_crm),
+          Boolean(website_forms_custom),
+          website_forms_notes ? String(website_forms_notes) : null
+        ]
       );
     }
 
@@ -163,53 +274,22 @@ router.post('/:token', async (req, res) => {
         business_name: brand.business_name || existing.rows[0]?.business_name || '',
         business_description: brand.business_description || existing.rows[0]?.business_description || '',
         brand_notes: brand.brand_notes || existing.rows[0]?.brand_notes || '',
-        website_admin_email: brand.website_admin_email || existing.rows[0]?.website_admin_email || '',
         website_url: brand.website_url || existing.rows[0]?.website_url || '',
-        ga_emails: brand.ga_emails || existing.rows[0]?.ga_emails || '',
-        meta_bm_email: brand.meta_bm_email || existing.rows[0]?.meta_bm_email || '',
-        social_links: brand.social_links || existing.rows[0]?.social_links || {},
-        pricing_list_url: brand.pricing_list_url || existing.rows[0]?.pricing_list_url || '',
-        promo_calendar_url: brand.promo_calendar_url || existing.rows[0]?.promo_calendar_url || ''
+        website_url: brand.website_url || existing.rows[0]?.website_url || ''
       };
 
       if (existing.rows.length) {
         await query(
           `UPDATE brand_assets
-           SET business_name=$1, business_description=$2, brand_notes=$3, website_admin_email=$4, website_url=$5,
-               ga_emails=$6, meta_bm_email=$7, social_links=$8, pricing_list_url=$9, promo_calendar_url=$10, updated_at=NOW()
-           WHERE user_id=$11`,
-          [
-            payload.business_name,
-            payload.business_description,
-            payload.brand_notes,
-            payload.website_admin_email,
-            payload.website_url,
-            payload.ga_emails,
-            payload.meta_bm_email,
-            JSON.stringify(payload.social_links || {}),
-            payload.pricing_list_url,
-            payload.promo_calendar_url,
-            record.user_id
-          ]
+           SET business_name=$1, business_description=$2, brand_notes=$3, website_url=$4, updated_at=NOW()
+           WHERE user_id=$5`,
+          [payload.business_name, payload.business_description, payload.brand_notes, payload.website_url, record.user_id]
         );
       } else {
         await query(
-          `INSERT INTO brand_assets (user_id, business_name, business_description, brand_notes, website_admin_email, website_url,
-             ga_emails, meta_bm_email, social_links, pricing_list_url, promo_calendar_url)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [
-            record.user_id,
-            payload.business_name,
-            payload.business_description,
-            payload.brand_notes,
-            payload.website_admin_email,
-            payload.website_url,
-            payload.ga_emails,
-            payload.meta_bm_email,
-            JSON.stringify(payload.social_links || {}),
-            payload.pricing_list_url,
-            payload.promo_calendar_url
-          ]
+          `INSERT INTO brand_assets (user_id, business_name, business_description, brand_notes, website_url)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [record.user_id, payload.business_name, payload.business_description, payload.brand_notes, payload.website_url]
         );
       }
     }

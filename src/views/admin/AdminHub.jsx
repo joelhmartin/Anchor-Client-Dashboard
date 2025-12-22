@@ -55,6 +55,7 @@ import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPrese
 import { fetchClientServices, saveClientServices } from 'api/services';
 
 const EMPTY_SERVICE_LIST = Object.freeze([]);
+const CLIENT_PACKAGE_OPTIONS = ['Essentials', 'Growth', 'Accelerate', 'Custom'];
 const EMPTY_SUBTYPE_LIST = Object.freeze([]);
 
 const makeLocalServiceId = () => `svc-${Math.random().toString(36).slice(2, 11)}`;
@@ -395,7 +396,7 @@ export default function AdminHub() {
       });
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
-        await startOnboardingFlow(res.client.id);
+      await startOnboardingFlow(res.client.id);
       } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
@@ -494,6 +495,22 @@ export default function AdminHub() {
         role: editing.role,
         client_type: editing.client_type,
         client_subtype: editing.client_subtype,
+        client_package: editing.client_package,
+        website_access_provided: editing.website_access_provided,
+        website_access_understood: editing.website_access_understood,
+        ga4_access_provided: editing.ga4_access_provided,
+        ga4_access_understood: editing.ga4_access_understood,
+        google_ads_access_provided: editing.google_ads_access_provided,
+        google_ads_access_understood: editing.google_ads_access_understood,
+        meta_access_provided: editing.meta_access_provided,
+        meta_access_understood: editing.meta_access_understood,
+        website_forms_details_provided: editing.website_forms_details_provided,
+        website_forms_details_understood: editing.website_forms_details_understood,
+        website_forms_uses_third_party: editing.website_forms_uses_third_party,
+        website_forms_uses_hipaa: editing.website_forms_uses_hipaa,
+        website_forms_connected_crm: editing.website_forms_connected_crm,
+        website_forms_custom: editing.website_forms_custom,
+        website_forms_notes: editing.website_forms_notes,
         looker_url: editing.looker_url,
         monday_board_id: editing.monday_board_id,
         monday_group_id: editing.monday_group_id,
@@ -695,12 +712,36 @@ export default function AdminHub() {
       setSendingOnboardingForId('');
     }
   };
-
+ 
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
         <>
           <Typography variant="subtitle1">Internal Task Board</Typography>
+          <TextField
+            label="Package"
+            value={editing.client_package || ''}
+            onChange={handleEditChange('client_package')}
+            select
+            fullWidth
+            InputLabelProps={{ shrink: true }}
+            SelectProps={{
+              displayEmpty: true,
+              renderValue: (selected) => {
+                if (!selected) return 'Not set';
+                return selected;
+              }
+            }}
+          >
+            <MenuItem value="">
+              <em>Not set</em>
+              </MenuItem>
+            {CLIENT_PACKAGE_OPTIONS.map((pkg) => (
+              <MenuItem key={pkg} value={pkg}>
+                {pkg}
+              </MenuItem>
+            ))}
+          </TextField>
           <Autocomplete
             options={taskWorkspaces}
             getOptionLabel={(option) => option?.name || ''}
@@ -731,6 +772,144 @@ export default function AdminHub() {
               Task board is provisioned for this client.
             </Alert>
           )}
+
+          <Divider />
+          <Typography variant="subtitle1">Access & Integrations</Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_access_provided)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_access_provided: e.target.checked }))}
+              />
+            }
+            label="Website access provided"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_access_understood)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_access_understood: e.target.checked }))}
+              />
+            }
+            label="Understands website access is required ASAP"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.ga4_access_provided)}
+                onChange={(e) => setEditing((p) => ({ ...p, ga4_access_provided: e.target.checked }))}
+              />
+            }
+            label="GA4 access provided"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.ga4_access_understood)}
+                onChange={(e) => setEditing((p) => ({ ...p, ga4_access_understood: e.target.checked }))}
+              />
+            }
+            label="Understands GA4 access is required ASAP"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.google_ads_access_provided)}
+                onChange={(e) => setEditing((p) => ({ ...p, google_ads_access_provided: e.target.checked }))}
+              />
+            }
+            label="Google Ads access provided"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.google_ads_access_understood)}
+                onChange={(e) => setEditing((p) => ({ ...p, google_ads_access_understood: e.target.checked }))}
+              />
+            }
+            label="Understands Google Ads access is required ASAP"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.meta_access_provided)}
+                onChange={(e) => setEditing((p) => ({ ...p, meta_access_provided: e.target.checked }))}
+              />
+            }
+            label="Meta Business Manager access provided"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.meta_access_understood)}
+                onChange={(e) => setEditing((p) => ({ ...p, meta_access_understood: e.target.checked }))}
+              />
+            }
+            label="Understands Meta access is required ASAP"
+          />
+          <Divider />
+          <Typography variant="subtitle2">Website Forms</Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_uses_third_party)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))}
+              />
+            }
+            label="Uses third-party form tools"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_uses_hipaa)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))}
+              />
+            }
+            label="Uses HIPAA-compliant / secure forms"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_connected_crm)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))}
+              />
+            }
+            label="Forms connected to CRM / practice management"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_custom)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_custom: e.target.checked }))}
+              />
+            }
+            label="Custom-built / developer-managed forms"
+          />
+          <TextField
+            label="Forms & integrations notes"
+            value={editing.website_forms_notes || ''}
+            onChange={handleEditChange('website_forms_notes')}
+            multiline
+            minRows={3}
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_details_provided)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_details_provided: e.target.checked }))}
+              />
+            }
+            label="Provided forms details"
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={Boolean(editing.website_forms_details_understood)}
+                onChange={(e) => setEditing((p) => ({ ...p, website_forms_details_understood: e.target.checked }))}
+              />
+            }
+            label="Understands more access/information may be required"
+          />
         </>
       )}
       <Typography variant="subtitle1">Monday.com & Looker</Typography>
@@ -923,7 +1102,19 @@ export default function AdminHub() {
         </Typography>
       )}
       <Divider />
-      <Typography variant="subtitle2">Brand Notes and Links</Typography>
+      <Typography variant="subtitle2">Brand Basics</Typography>
+      <TextField
+        label="Business Name"
+        value={brandData?.business_name || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), business_name: e.target.value }))}
+      />
+      <TextField
+        label="Business Description"
+        value={brandData?.business_description || ''}
+        onChange={(e) => setBrandData((p) => ({ ...(p || {}), business_description: e.target.value }))}
+        multiline
+        minRows={3}
+      />
       <TextField
         label="Brand Notes"
         value={brandData?.brand_notes || ''}
@@ -932,34 +1123,9 @@ export default function AdminHub() {
         rows={3}
       />
       <TextField
-        label="Website Admin Email"
-        value={brandData?.website_admin_email || ''}
-        onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_admin_email: e.target.value }))}
-      />
-      <TextField
         label="Website URL"
         value={brandData?.website_url || ''}
         onChange={(e) => setBrandData((p) => ({ ...(p || {}), website_url: e.target.value }))}
-      />
-      <TextField
-        label="GA/GTM Emails"
-        value={brandData?.ga_emails || ''}
-        onChange={(e) => setBrandData((p) => ({ ...(p || {}), ga_emails: e.target.value }))}
-      />
-      <TextField
-        label="Meta Business Email"
-        value={brandData?.meta_bm_email || ''}
-        onChange={(e) => setBrandData((p) => ({ ...(p || {}), meta_bm_email: e.target.value }))}
-      />
-      <TextField
-        label="Pricing List URL"
-        value={brandData?.pricing_list_url || ''}
-        onChange={(e) => setBrandData((p) => ({ ...(p || {}), pricing_list_url: e.target.value }))}
-      />
-      <TextField
-        label="Promo Calendar URL"
-        value={brandData?.promo_calendar_url || ''}
-        onChange={(e) => setBrandData((p) => ({ ...(p || {}), promo_calendar_url: e.target.value }))}
       />
     </Stack>
   );
@@ -1223,9 +1389,9 @@ export default function AdminHub() {
               alignItems={{ xs: 'stretch', sm: 'center' }}
               justifyContent="space-between"
             >
-              <Typography variant="h5">Clients</Typography>
+            <Typography variant="h5">Clients</Typography>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
-                {loading && <CircularProgress size={20} />}
+            {loading && <CircularProgress size={20} />}
                 <TextField
                   size="small"
                   placeholder="Search clients…"
@@ -1295,7 +1461,7 @@ export default function AdminHub() {
               </TableHead>
               <TableBody>
                 {filteredClients.map((c) => (
-                  <TableRow key={c.id} hover>
+                    <TableRow key={c.id} hover>
                     <TableCell padding="checkbox">
                       <Checkbox
                         size="small"
@@ -1304,21 +1470,21 @@ export default function AdminHub() {
                         disabled={!isAdmin}
                       />
                     </TableCell>
-                    <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                    <TableCell>{c.email}</TableCell>
-                    <TableCell>
-                      {c.looker_url ? (
-                        <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
-                          Open
-                        </Button>
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          Not set
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                    <TableCell>{c.monday_board_id || '-'}</TableCell>
+                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                      <TableCell>{c.email}</TableCell>
+                      <TableCell>
+                        {c.looker_url ? (
+                          <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
+                            Open
+                          </Button>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            Not set
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
+                      <TableCell>{c.monday_board_id || '-'}</TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -1507,9 +1673,9 @@ export default function AdminHub() {
               <Card variant="outlined" sx={{ boxShadow: 'none', borderRadius: 2 }}>
                 <CardContent>
                   <Stack spacing={1.5} sx={{ mb: 2 }}>
-                    <Typography variant="subtitle1">Client Profile & Workflow</Typography>
+                    <Typography variant="subtitle1">Client Details</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Confirm the Monday board, account metadata, and any preset services before inviting the client.
+                      Confirm the account metadata and workflow settings before inviting the client.
                     </Typography>
                   </Stack>
                   <Box sx={{ maxHeight: { xs: '60vh', md: '55vh' }, overflowY: 'auto', pr: 1 }}>{renderDetailsTab()}</Box>

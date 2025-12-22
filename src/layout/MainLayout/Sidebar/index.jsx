@@ -21,7 +21,9 @@ import useAuth from 'hooks/useAuth';
 import { useLocation } from 'react-router-dom';
 import portalMenu from 'menu-items/portal';
 import tasksMenu from 'menu-items/tasks';
+import formsMenu from 'menu-items/forms';
 import TaskSidebarPanel from './TaskSidebarPanel';
+import FormsSidebarPanel from './FormsSidebarPanel';
 
 // ==============================|| SIDEBAR DRAWER ||============================== //
 
@@ -36,6 +38,7 @@ function Sidebar() {
   // Use portal menu for regular clients or when admin is viewing portal
   const isPortal = user?.role === 'client' || Boolean(actingClientId) || location.pathname.startsWith('/portal');
   const isTasks = location.pathname.startsWith('/tasks');
+  const isForms = location.pathname.startsWith('/forms');
 
   const {
     state: { miniDrawer }
@@ -51,20 +54,27 @@ function Sidebar() {
   );
 
   const drawer = useMemo(() => {
-    const drawerContent = !isPortal ? (
-      <>
-        {isTasks ? (
-          <TaskSidebarPanel />
-        ) : (
+    let drawerContent = null;
+    
+    if (!isPortal) {
+      if (isForms) {
+        drawerContent = <FormsSidebarPanel />;
+      } else if (isTasks) {
+        drawerContent = <TaskSidebarPanel />;
+      } else {
+        drawerContent = (
           <>
             <MenuCard />
             <Stack direction="row" sx={{ justifyContent: 'center', mb: 2 }}>
               <Chip label={import.meta.env.VITE_APP_VERSION} size="small" color="default" />
             </Stack>
           </>
-        )}
-      </>
-    ) : null;
+        );
+      }
+    }
+
+    // Determine which menu config to use
+    const menuConfig = isPortal ? portalMenu : isForms ? formsMenu : isTasks ? tasksMenu : undefined;
 
     let drawerSX = { paddingLeft: '0px', paddingRight: '0px', marginTop: '20px' };
     if (drawerOpen) drawerSX = { paddingLeft: '16px', paddingRight: '16px', marginTop: '0px' };
@@ -73,18 +83,18 @@ function Sidebar() {
       <>
         {downMD ? (
           <Box sx={drawerSX}>
-            <MenuList menuConfig={isPortal ? portalMenu : isTasks ? tasksMenu : undefined} />
+            <MenuList menuConfig={menuConfig} />
             {drawerOpen && drawerContent}
           </Box>
         ) : (
           <SimpleBar sx={{ height: 'calc(100vh - 90px)', ...drawerSX }}>
-            <MenuList menuConfig={isPortal ? portalMenu : isTasks ? tasksMenu : undefined} />
+            <MenuList menuConfig={menuConfig} />
             {drawerOpen && drawerContent}
           </SimpleBar>
         )}
       </>
     );
-  }, [downMD, drawerOpen, isPortal, isTasks]);
+  }, [downMD, drawerOpen, isPortal, isTasks, isForms]);
 
   return (
     <Box component="nav" sx={{ flexShrink: { md: 0 }, width: { xs: 'auto', md: drawerWidth } }} aria-label="mailbox folders">

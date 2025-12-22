@@ -24,7 +24,7 @@ import MainCard from 'ui-component/cards/MainCard';
 import Transitions from 'ui-component/extended/Transitions';
 
 // assets
-import { IconLogout, IconSettings, IconUser } from '@tabler/icons-react';
+import { IconLogout, IconSettings, IconUser, IconForms } from '@tabler/icons-react';
 import User1 from 'assets/images/users/user-round.svg';
 import Favicon from '/favicon.svg';
 
@@ -164,26 +164,93 @@ export default function ProfileSection() {
                         {(() => {
                           const role = user?.effective_role || user?.role;
                           const inTasks = location.pathname.startsWith('/tasks');
+                          const inForms = location.pathname.startsWith('/forms');
                           const canSeeTasks = role === 'superadmin' || role === 'admin' || role === 'team';
                           const canSeeHub = role === 'superadmin' || role === 'admin';
-                          const show = inTasks ? canSeeHub : canSeeTasks;
-                          if (!show) return null;
-                          const target = inTasks ? '/client-hub' : '/tasks';
-                          const label = inTasks ? 'Client Hub' : 'Task Manager';
-                          return (
-                            <ListItemButton
-                              onClick={(e) => {
-                                navigate(target);
-                                handleClose(e);
-                              }}
-                              sx={{ borderRadius: `${borderRadius}px` }}
-                            >
-                              <ListItemIcon>
-                                <IconSettings stroke={1.5} size="20px" />
-                              </ListItemIcon>
-                              <ListItemText primary={<Typography variant="body2">{label}</Typography>} />
-                            </ListItemButton>
-                          );
+                          const canSeeForms = role === 'superadmin' || role === 'admin' || role === 'team';
+                          
+                          const items = [];
+                          
+                          // Task Manager / Client Hub toggle
+                          const showTaskHub = inTasks ? canSeeHub : canSeeTasks;
+                          if (showTaskHub && !inForms) {
+                            const target = inTasks ? '/client-hub' : '/tasks';
+                            const label = inTasks ? 'Client Hub' : 'Task Manager';
+                            items.push(
+                              <ListItemButton
+                                key="task-hub"
+                                onClick={(e) => {
+                                  navigate(target);
+                                  handleClose(e);
+                                }}
+                                sx={{ borderRadius: `${borderRadius}px` }}
+                              >
+                                <ListItemIcon>
+                                  <IconSettings stroke={1.5} size="20px" />
+                                </ListItemIcon>
+                                <ListItemText primary={<Typography variant="body2">{label}</Typography>} />
+                              </ListItemButton>
+                            );
+                          }
+                          
+                          // Forms link (visible when not in /forms)
+                          if (canSeeForms && !inForms) {
+                            items.push(
+                              <ListItemButton
+                                key="forms"
+                                onClick={(e) => {
+                                  navigate('/forms');
+                                  handleClose(e);
+                                }}
+                                sx={{ borderRadius: `${borderRadius}px` }}
+                              >
+                                <ListItemIcon>
+                                  <IconForms stroke={1.5} size="20px" />
+                                </ListItemIcon>
+                                <ListItemText primary={<Typography variant="body2">Forms</Typography>} />
+                              </ListItemButton>
+                            );
+                          }
+                          
+                          // Back links when in Forms
+                          if (inForms) {
+                            if (canSeeTasks) {
+                              items.push(
+                                <ListItemButton
+                                  key="tasks"
+                                  onClick={(e) => {
+                                    navigate('/tasks');
+                                    handleClose(e);
+                                  }}
+                                  sx={{ borderRadius: `${borderRadius}px` }}
+                                >
+                                  <ListItemIcon>
+                                    <IconSettings stroke={1.5} size="20px" />
+                                  </ListItemIcon>
+                                  <ListItemText primary={<Typography variant="body2">Task Manager</Typography>} />
+                                </ListItemButton>
+                              );
+                            }
+                            if (canSeeHub) {
+                              items.push(
+                                <ListItemButton
+                                  key="hub"
+                                  onClick={(e) => {
+                                    navigate('/client-hub');
+                                    handleClose(e);
+                                  }}
+                                  sx={{ borderRadius: `${borderRadius}px` }}
+                                >
+                                  <ListItemIcon>
+                                    <IconSettings stroke={1.5} size="20px" />
+                                  </ListItemIcon>
+                                  <ListItemText primary={<Typography variant="body2">Client Hub</Typography>} />
+                                </ListItemButton>
+                              );
+                            }
+                          }
+                          
+                          return items;
                         })()}
                         <ListItemButton sx={{ borderRadius: `${borderRadius}px` }}>
                           <ListItemIcon>

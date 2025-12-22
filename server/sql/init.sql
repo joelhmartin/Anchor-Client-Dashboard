@@ -21,6 +21,23 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 CREATE TABLE IF NOT EXISTS client_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   looker_url TEXT,
+  client_package TEXT,
+  -- Access & onboarding confirmations (client-provided)
+  website_access_provided BOOLEAN NOT NULL DEFAULT FALSE,
+  website_access_understood BOOLEAN NOT NULL DEFAULT FALSE,
+  ga4_access_provided BOOLEAN NOT NULL DEFAULT FALSE,
+  ga4_access_understood BOOLEAN NOT NULL DEFAULT FALSE,
+  google_ads_access_provided BOOLEAN NOT NULL DEFAULT FALSE,
+  google_ads_access_understood BOOLEAN NOT NULL DEFAULT FALSE,
+  meta_access_provided BOOLEAN NOT NULL DEFAULT FALSE,
+  meta_access_understood BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_details_provided BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_details_understood BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_uses_third_party BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_uses_hipaa BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_connected_crm BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_custom BOOLEAN NOT NULL DEFAULT FALSE,
+  website_forms_notes TEXT,
   monday_board_id TEXT,
   monday_group_id TEXT,
   monday_active_group_id TEXT,
@@ -49,13 +66,7 @@ CREATE TABLE IF NOT EXISTS brand_assets (
   logos JSONB NOT NULL DEFAULT '[]',
   style_guides JSONB NOT NULL DEFAULT '[]',
   brand_notes TEXT,
-  website_admin_email TEXT,
   website_url TEXT,
-  ga_emails TEXT,
-  meta_bm_email TEXT,
-  social_links JSONB NOT NULL DEFAULT '{}',
-  pricing_list_url TEXT,
-  promo_calendar_url TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_brand_assets_user ON brand_assets(user_id);
@@ -462,9 +473,33 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS auto_star_enabled BOOLEAN D
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS monthly_revenue_goal DECIMAL(10, 2);
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_type TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_subtype TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_package TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_provided BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_understood BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_provided BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_understood BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_provided BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_understood BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_provided BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_understood BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_provided BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_understood BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_uses_third_party BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_uses_hipaa BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_connected_crm BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_custom BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_notes TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_workspace_id UUID REFERENCES task_workspaces(id) ON DELETE SET NULL;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_board_id UUID REFERENCES task_boards(id) ON DELETE SET NULL;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS board_prefix TEXT;
+
+-- Remove deprecated brand fields (keep website_url)
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS website_admin_email;
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS ga_emails;
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS meta_bm_email;
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS social_links;
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS pricing_list_url;
+ALTER TABLE brand_assets DROP COLUMN IF EXISTS promo_calendar_url;
 
 ALTER TABLE task_boards ADD COLUMN IF NOT EXISTS board_prefix TEXT;
 
