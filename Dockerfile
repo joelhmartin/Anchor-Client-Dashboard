@@ -1,5 +1,8 @@
 FROM node:20-alpine AS build
 
+# Native build deps for canvas/pdf rendering
+RUN apk add --no-cache python3 make g++ cairo-dev pango-dev libjpeg-turbo-dev giflib-dev
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -11,6 +14,9 @@ COPY . .
 RUN npm run build
 
 FROM node:20-alpine AS production
+
+# Native runtime/build deps for node-canvas in prod install
+RUN apk add --no-cache python3 make g++ cairo-dev pango-dev libjpeg-turbo-dev giflib-dev
 
 WORKDIR /app
 
