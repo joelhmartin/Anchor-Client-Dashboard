@@ -63,11 +63,11 @@ Requirements:
 User instructions (apply these preferences if present):
 ${instructions ? instructions : '(none)'}
 
-Output format - return a JSON object with these fields:
+Output format - return a JSON object with these fields (IMPORTANT: html/css/js MUST be base64 encoded so the JSON is always valid):
 {
-  "html_code": "<!-- HTML form markup here -->",
-  "css_code": "/* Additional CSS if needed */",
-  "js_code": "// vanilla JS (optional). If present, it can use window.AnchorFormsRuntime.submit(payload)",
+  "html_b64": "base64(utf8(html))",
+  "css_b64": "base64(utf8(css))",
+  "js_b64": "base64(utf8(js))",
   "explanation": "Brief explanation of the form structure"
 }
 
@@ -83,6 +83,10 @@ Important:
     const pdfBase64 = pdfBuffer.toString('base64');
 
     const result = await model.generateContent({
+      generationConfig: {
+        // Ask the model to return actual JSON (still keep our own parsing defensive).
+        responseMimeType: 'application/json'
+      },
       contents: [
         {
           role: 'user',
@@ -102,23 +106,139 @@ Important:
     const response = result.response;
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    // Parse JSON from response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('Could not parse AI response as JSON');
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = parseAiJson(text);
+    const html = decodeB64OrFallback(parsed, 'html_b64', 'html_code') || getDefaultReactCode();
+    const css = decodeB64OrFallback(parsed, 'css_b64', 'css_code') || '';
+    const js = decodeB64OrFallback(parsed, 'js_b64', 'js_code') || '';
     return {
-      react_code: parsed.html_code || getDefaultReactCode(),
-      css_code: parsed.css_code || '',
-      schema: { runtime_mode: 'html', js_code: parsed.js_code || '' },
+      react_code: html,
+      css_code: css,
+      schema: { runtime_mode: 'html', js_code: js },
       explanation: parsed.explanation || 'Form generated from PDF'
     };
   } catch (err) {
     console.error('PDF to form conversion error:', err);
     throw new Error(`AI conversion failed: ${err.message}`);
   }
+}
+
+function parseAiJson(text) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error('AI returned empty response');
+
+  // Try direct JSON parse first.
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // continue
+  }
+
+  // Extract the first balanced JSON object from the text (handles extra commentary).
+  const extracted = extractFirstJsonObject(raw);
+  if (!extracted) throw new Error('Could not locate JSON object in AI response');
+
+  try {
+    return JSON.parse(extracted);
+  } catch (e) {
+    // As a best-effort, escape raw newlines inside strings (common failure mode).
+    const repaired = repairJsonNewlines(extracted);
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      throw new Error(`Invalid JSON from AI: ${e.message}`);
+    }
+  }
+}
+
+function extractFirstJsonObject(s) {
+  let inStr = false;
+  let esc = false;
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) {
+        esc = false;
+      } else if (ch === '\\\\') {
+        esc = true;
+      } else if (ch === '"') {
+        inStr = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        return s.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function repairJsonNewlines(s) {
+  // Replace literal newlines inside JSON strings with escaped \\n
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) {
+        esc = false;
+        out += ch;
+        continue;
+      }
+      if (ch === '\\\\') {
+        esc = true;
+        out += ch;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = false;
+        out += ch;
+        continue;
+      }
+      if (ch === '\n') {
+        out += '\\\\n';
+        continue;
+      }
+      if (ch === '\r') {
+        out += '\\\\r';
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function decodeB64OrFallback(obj, b64Key, plainKey) {
+  const b64 = obj?.[b64Key];
+  if (typeof b64 === 'string' && b64.trim()) {
+    try {
+      return Buffer.from(b64.trim(), 'base64').toString('utf8');
+    } catch {
+      // fall through
+    }
+  }
+  const plain = obj?.[plainKey];
+  return typeof plain === 'string' ? plain : '';
 }
 
 function estimatePdfPageCount(pdfBuffer) {
@@ -157,11 +277,11 @@ ${currentCss}
 
 User instruction: ${instruction}
 
-Output format - return a JSON object:
+Output format - return a JSON object (IMPORTANT: html/css/js MUST be base64 encoded so the JSON is always valid):
 {
-  "html_code": "<!-- Complete modified HTML -->",
-  "css_code": "/* Complete modified CSS */",
-  "js_code": "// Complete modified JS (optional)",
+  "html_b64": "base64(utf8(html))",
+  "css_b64": "base64(utf8(css))",
+  "js_b64": "base64(utf8(js))",
   "changes_made": ["List of changes made"],
   "explanation": "Brief explanation of what was changed"
 }
@@ -170,7 +290,9 @@ Important:
  - Do NOT output React or MUI
  - Keep a <form data-anchor-form> root element
  - Preserve/introduce name="..." attributes on inputs
- - If you output JS, keep it minimal and defensive`
+ - If you output JS, keep it minimal and defensive
+ - If you are editing a PRINT TEMPLATE, use {{field_name}} placeholders for submission values and do not remove them
+ - Return ONLY the JSON object (no markdown, no extra commentary)`
     : `You are a form code editor assistant. Modify the following React/MUI form code based on the user's instruction.
 
 Current React Code:
@@ -208,19 +330,19 @@ Important:
     const response = result.response;
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    // Parse JSON from response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('Could not parse AI response as JSON');
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = isHtml
+      ? parseAiJson(text)
+      : (() => {
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error('Could not parse AI response as JSON');
+          return JSON.parse(jsonMatch[0]);
+        })();
     return {
-      react_code: isHtml ? parsed.html_code || currentCode : parsed.react_code || currentCode,
-      css_code: parsed.css_code || currentCss,
+      react_code: isHtml ? decodeB64OrFallback(parsed, 'html_b64', 'html_code') || currentCode : parsed.react_code || currentCode,
+      css_code: isHtml ? decodeB64OrFallback(parsed, 'css_b64', 'css_code') || currentCss : parsed.css_code || currentCss,
       changes_made: parsed.changes_made || [],
       explanation: parsed.explanation || 'Code updated',
-      js_code: isHtml ? parsed.js_code || '' : ''
+      js_code: isHtml ? decodeB64OrFallback(parsed, 'js_b64', 'js_code') || '' : ''
     };
   } catch (err) {
     console.error('AI edit error:', err);

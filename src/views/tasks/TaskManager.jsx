@@ -35,6 +35,7 @@ import { IconEye, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react';
 
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
+import { useToast } from 'contexts/ToastContext';
 import BoardHeader from './components/BoardHeader';
 import BoardTable from './components/BoardTable';
 import HomePane from './panes/HomePane';
@@ -67,6 +68,8 @@ import {
   updateTaskSubitem,
   deleteTaskSubitem,
   setTaskAutomationActive,
+  updateTaskAutomation,
+  deleteTaskAutomation,
   downloadTaskBoardCsv,
   fetchTaskItemAiSummary,
   refreshTaskItemAiSummary,
@@ -81,7 +84,9 @@ import {
   updateStatusLabel,
   deleteStatusLabel,
   initBoardStatusLabels,
-  archiveTaskItem
+  archiveTaskItem,
+  fetchGlobalTaskAutomations,
+  fetchAutomationRuns
 } from 'api/tasks';
 
 function getEffectiveRole(user) {
@@ -162,6 +167,15 @@ export default function TaskManager() {
   const reportBoards = (searchParams.get('report_boards') || '').split(',').filter(Boolean);
 
   const [error, setError] = useState('');
+  const toast = useToast();
+  const lastToastErrorRef = useRef('');
+
+  useEffect(() => {
+    if (!error) return;
+    if (lastToastErrorRef.current === error) return;
+    lastToastErrorRef.current = error;
+    toast.error(error);
+  }, [error, toast]);
 
   const activeWorkspaceId = searchParams.get('workspace') || '';
   const activeBoardId = searchParams.get('board') || '';
@@ -174,11 +188,15 @@ export default function TaskManager() {
   const [automations, setAutomations] = useState([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [creatingAutomation, setCreatingAutomation] = useState(false);
-  const [automationsAnchorEl, setAutomationsAnchorEl] = useState(null);
+  const [automationsDrawerOpen, setAutomationsDrawerOpen] = useState(false);
   const [automationToStatus, setAutomationToStatus] = useState('Needs Attention');
   const [automationAction, setAutomationAction] = useState('notify_admins');
   const [automationTitle, setAutomationTitle] = useState('Task needs attention');
   const [automationBody, setAutomationBody] = useState('An item was moved to Needs Attention.');
+  const [globalAutomations, setGlobalAutomations] = useState([]);
+  const [globalAutomationsLoading, setGlobalAutomationsLoading] = useState(false);
+  const [automationRuns, setAutomationRuns] = useState([]);
+  const [automationRunsLoading, setAutomationRunsLoading] = useState(false);
 
   // Status labels editor
   const [statusLabelsDialogOpen, setStatusLabelsDialogOpen] = useState(false);
@@ -384,7 +402,7 @@ export default function TaskManager() {
 
   // Close overlays when pane changes to avoid blocking navigation (e.g., reports)
   useEffect(() => {
-    setAutomationsAnchorEl(null);
+    setAutomationsDrawerOpen(false);
   }, [pane]);
 
   // When billable is toggled, keep billable duration in sync unless user overrides it.
@@ -480,6 +498,30 @@ export default function TaskManager() {
       setAutomations([]);
     } finally {
       setAutomationsLoading(false);
+    }
+  };
+
+  const loadGlobalAutomations = async () => {
+    setGlobalAutomationsLoading(true);
+    try {
+      const rows = await fetchGlobalTaskAutomations();
+      setGlobalAutomations(rows);
+    } catch (_err) {
+      setGlobalAutomations([]);
+    } finally {
+      setGlobalAutomationsLoading(false);
+    }
+  };
+
+  const loadAutomationRuns = async ({ scope, board_id } = {}) => {
+    setAutomationRunsLoading(true);
+    try {
+      const rows = await fetchAutomationRuns({ scope, board_id, limit: 50 });
+      setAutomationRuns(rows);
+    } catch (_err) {
+      setAutomationRuns([]);
+    } finally {
+      setAutomationRunsLoading(false);
     }
   };
 
@@ -892,6 +934,16 @@ export default function TaskManager() {
     try {
       const updated = await setTaskAutomationActive(rule.id, !rule.is_active);
       setAutomations((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    } catch (err) {
+      setError(err.message || 'Unable to update automation');
+    }
+  };
+
+  const handleToggleGlobalAutomation = async (rule) => {
+    if (!rule?.id) return;
+    try {
+      const updated = await updateTaskAutomation(rule.id, { is_active: !rule.is_active });
+      setGlobalAutomations((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
     } catch (err) {
       setError(err.message || 'Unable to update automation');
     }
@@ -1364,7 +1416,21 @@ export default function TaskManager() {
   const renderContent = () => {
     if (pane === 'home') return <HomePane />;
 
-    if (pane === 'automations') return <AutomationsPane />;
+    if (pane === 'automations')
+      return (
+        <AutomationsPane
+          activeBoardId={activeBoardId}
+          activeWorkspaceId={activeWorkspaceId}
+          boardStatusLabels={statusLabels}
+          onSelectBoard={(boardId) => {
+            const next = new URLSearchParams(searchParams);
+            next.set('pane', 'boards');
+            if (activeWorkspaceId) next.set('workspace', activeWorkspaceId);
+            next.set('board', boardId);
+            setSearchParams(next);
+          }}
+        />
+      );
 
     if (pane === 'billing') return <BillingPane />;
 
@@ -1390,86 +1456,61 @@ export default function TaskManager() {
     // Boards pane
     return (
       <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5, minHeight: 420 }}>
-        <Stack spacing={1.5}>
-          {!activeBoardId && (
-            <Stack spacing={1}>
-              <Typography variant="h6">Boards</Typography>
-              {workspaceBoardsLoading && <CircularProgress size={18} />}
-              {!workspaceBoardsLoading && workspaceBoards.length === 0 && (
-                <Typography variant="body2" color="text.secondary">
-                  Select a workspace to see its boards.
-                </Typography>
-              )}
-              <Stack spacing={0.5}>
-                {workspaceBoards.map((b) => (
-                  <Button
-                    key={b.id}
-                    onClick={() => {
-                      const next = new URLSearchParams(searchParams);
-                      next.set('workspace', b.workspace_id);
-                      next.set('board', b.id);
-                      setSearchParams(next, { replace: true });
-                    }}
-                    variant="outlined"
-                    sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
-                  >
-                    {b.name}
-                  </Button>
-                ))}
-              </Stack>
-            </Stack>
-          )}
+        {!activeBoardId && (
+          <Typography variant="body2" color="text.secondary">
+            Select a board from the sidebar to begin.
+          </Typography>
+        )}
 
-          {activeBoardId && (
-            <Stack spacing={1}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="New group"
-                  value={newGroupName}
-                  onChange={(e) => setNewGroupName(e.target.value)}
-                />
-                <Button variant="contained" onClick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()}>
-                  Create group
-                </Button>
-              </Stack>
-
-              <Divider />
-
-              <BoardTable
-                boardId={activeBoardId}
-                groups={boardView?.groups || []}
-                itemsByGroup={itemsByGroup}
-                assigneesByItem={boardView?.assignees_by_item || {}}
-                workspaceMembers={workspaceMembers}
-                updateCountsByItem={boardView?.update_counts_by_item || {}}
-                timeTotalsByItem={boardView?.time_totals_by_item || {}}
-                statusLabels={statusLabels}
-                canManageLabels={isAdmin}
-                onCreateStatusLabel={handleCreateLabelFromBoardTable}
-                onArchiveItem={archiveItem}
-                onDeleteGroup={isAdmin ? handleDeleteGroup : undefined}
-                highlightedItemId={highlightedItemId}
-                onUpdateItem={updateItemInline}
-                onToggleAssignee={toggleAssigneeInline}
-                newItemNameByGroup={newItemNameByGroup}
-                creatingItemByGroup={creatingItemByGroup}
-                onChangeNewItemName={(groupId, val) =>
-                  setNewItemNameByGroup((prev) => ({
-                    ...prev,
-                    [groupId]: val
-                  }))
-                }
-                onCreateItem={handleCreateItem}
-                onClickItem={(it, tab) => {
-                  if (tab) setDrawerTab(tab);
-                  openItemDrawer(it);
-                }}
+        {activeBoardId && (
+          <Stack spacing={1}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="New group"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
               />
+              <Button variant="contained" onClick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()}>
+                Create group
+              </Button>
             </Stack>
-          )}
-        </Stack>
+
+            <Divider />
+
+            <BoardTable
+              boardId={activeBoardId}
+              groups={boardView?.groups || []}
+              itemsByGroup={itemsByGroup}
+              assigneesByItem={boardView?.assignees_by_item || {}}
+              workspaceMembers={workspaceMembers}
+              updateCountsByItem={boardView?.update_counts_by_item || {}}
+              timeTotalsByItem={boardView?.time_totals_by_item || {}}
+              statusLabels={statusLabels}
+              canManageLabels={isAdmin}
+              onCreateStatusLabel={handleCreateLabelFromBoardTable}
+              onArchiveItem={archiveItem}
+              onDeleteGroup={isAdmin ? handleDeleteGroup : undefined}
+              highlightedItemId={highlightedItemId}
+              onUpdateItem={updateItemInline}
+              onToggleAssignee={toggleAssigneeInline}
+              newItemNameByGroup={newItemNameByGroup}
+              creatingItemByGroup={creatingItemByGroup}
+              onChangeNewItemName={(groupId, val) =>
+                setNewItemNameByGroup((prev) => ({
+                  ...prev,
+                  [groupId]: val
+                }))
+              }
+              onCreateItem={handleCreateItem}
+              onClickItem={(it, tab) => {
+                if (tab) setDrawerTab(tab);
+                openItemDrawer(it);
+              }}
+            />
+          </Stack>
+        )}
       </Box>
     );
   };
@@ -1477,7 +1518,7 @@ export default function TaskManager() {
   return (
     <MainCard title="Task Manager">
       <Stack spacing={2}>
-        {error && <Alert severity="error">{error}</Alert>}
+        {/* Errors are toast-only */}
         {pane === 'boards' && activeBoardId && (
           <BoardHeader
             board={boardView?.board}
@@ -1487,7 +1528,10 @@ export default function TaskManager() {
             onChangeSearch={setBoardSearch}
             onOpenAutomations={(e) => {
               if (!activeBoardId) return;
-              setAutomationsAnchorEl(e?.currentTarget || null);
+              setAutomationsDrawerOpen(true);
+              loadAutomations(activeBoardId);
+              loadGlobalAutomations();
+              loadAutomationRuns({ scope: 'board', board_id: activeBoardId });
             }}
             onOpenBoardMenu={() => {}}
             onUpdateBoard={async (patch) => {
@@ -1502,27 +1546,38 @@ export default function TaskManager() {
           />
         )}
         {renderContent()}
-
-        <Popper open={Boolean(automationsAnchorEl)} anchorEl={automationsAnchorEl} placement="bottom-end" sx={{ zIndex: 2000 }}>
-          <Paper sx={{ p: 1.5, width: 420 }}>
+        <Drawer
+          anchor="right"
+          open={automationsDrawerOpen}
+          onClose={() => setAutomationsDrawerOpen(false)}
+          PaperProps={{ sx: { width: { xs: '100%', sm: 460 } } }}
+        >
+          <Box sx={{ p: 2 }}>
             <Stack spacing={1.25}>
-              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                <Typography variant="subtitle1">Automations</Typography>
-                <Button size="small" variant="text" onClick={() => setAutomationsAnchorEl(null)}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Typography variant="h5">Automations</Typography>
+                <Button size="small" variant="text" onClick={() => setAutomationsDrawerOpen(false)}>
                   Close
                 </Button>
               </Stack>
 
+              <Typography variant="body2" color="text.secondary">
+                Quick edit for this board. For full rule builder + global automations, use Tasks → Automations.
+              </Typography>
+
+              <Divider />
+
+              <Typography variant="subtitle2">Board automations</Typography>
               {automationsLoading ? (
                 <CircularProgress size={18} />
               ) : (
                 <Stack spacing={0.75}>
                   {!automations.length && (
                     <Typography variant="body2" color="text.secondary">
-                      No automations yet.
+                      No board automations yet.
                     </Typography>
                   )}
-                  {automations.slice(0, 8).map((r) => (
+                  {automations.slice(0, 12).map((r) => (
                     <Box
                       key={r.id}
                       sx={{
@@ -1535,56 +1590,148 @@ export default function TaskManager() {
                         alignItems: 'center'
                       }}
                     >
-                      <Stack>
-                        <Typography variant="body2">{r.name}</Typography>
+                      <Stack sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {r.name}
+                        </Typography>
                         <Typography variant="caption" color="text.secondary">
                           {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
                         </Typography>
                       </Stack>
-                      <Button size="small" variant="outlined" onClick={() => handleToggleAutomation(r)}>
-                        {r.is_active ? 'Disable' : 'Enable'}
-                      </Button>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button size="small" variant="outlined" onClick={() => handleToggleAutomation(r)}>
+                          {r.is_active ? 'Disable' : 'Enable'}
+                        </Button>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          onClick={async () => {
+                            if (!window.confirm('Delete this automation?')) return;
+                            try {
+                              await deleteTaskAutomation(r.id);
+                              setAutomations((prev) => prev.filter((x) => x.id !== r.id));
+                            } catch (err) {
+                              setError(err.message || 'Unable to delete automation');
+                            }
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </Stack>
                     </Box>
                   ))}
                 </Stack>
               )}
 
               <Button variant="outlined" onClick={handleAddNeedsAttentionAutomation} disabled={creatingAutomation || !activeBoardId}>
-                {creatingAutomation ? 'Adding…' : 'Add “Needs Attention” automation'}
+                {creatingAutomation ? 'Adding…' : 'Add “Needs Attention” template'}
               </Button>
 
               <Divider />
 
-              <Typography variant="subtitle2">Create automation</Typography>
-              <Select size="small" value={automationToStatus} onChange={(e) => setAutomationToStatus(e.target.value)}>
-                {statusLabels.map((sl) => (
-                  <MenuItem key={sl.id} value={sl.label}>
-                    {sl.label}
-                  </MenuItem>
-                ))}
-              </Select>
-              <Select size="small" value={automationAction} onChange={(e) => setAutomationAction(e.target.value)}>
-                <MenuItem value="notify_admins">Notify admins</MenuItem>
-                <MenuItem value="notify_assignees">Notify assignees</MenuItem>
-              </Select>
-              <TextField
-                size="small"
-                label="Notification title"
-                value={automationTitle}
-                onChange={(e) => setAutomationTitle(e.target.value)}
-              />
-              <TextField
-                size="small"
-                label="Notification body"
-                value={automationBody}
-                onChange={(e) => setAutomationBody(e.target.value)}
-              />
-              <Button variant="contained" onClick={handleCreateAutomation} disabled={creatingAutomation || !activeBoardId}>
-                {creatingAutomation ? 'Creating…' : 'Create automation'}
+              <Typography variant="subtitle2">Global automations (overview)</Typography>
+              {globalAutomationsLoading ? (
+                <CircularProgress size={18} />
+              ) : (
+                <Stack spacing={0.75}>
+                  {!globalAutomations.length && (
+                    <Typography variant="body2" color="text.secondary">
+                      No global automations.
+                    </Typography>
+                  )}
+                  {globalAutomations.slice(0, 6).map((r) => (
+                    <Box
+                      key={r.id}
+                      sx={{
+                        p: 1,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        borderRadius: 2,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <Stack sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {r.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
+                        </Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button size="small" variant="outlined" onClick={() => handleToggleGlobalAutomation(r)}>
+                          {r.is_active ? 'Disable' : 'Enable'}
+                        </Button>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          onClick={async () => {
+                            if (!window.confirm('Delete this automation?')) return;
+                            try {
+                              await deleteTaskAutomation(r.id);
+                              setGlobalAutomations((prev) => prev.filter((x) => x.id !== r.id));
+                            } catch (err) {
+                              setError(err.message || 'Unable to delete automation');
+                            }
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </Stack>
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+
+              <Divider />
+
+              <Typography variant="subtitle2">Recent runs</Typography>
+              {automationRunsLoading ? (
+                <CircularProgress size={18} />
+              ) : (
+                <Stack spacing={0.75}>
+                  {!automationRuns.length && (
+                    <Typography variant="body2" color="text.secondary">
+                      No runs yet.
+                    </Typography>
+                  )}
+                  {automationRuns.slice(0, 8).map((r) => (
+                    <Box key={r.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {r.trigger_type} • {r.status} • {r.ran_at ? new Date(r.ran_at).toLocaleString() : ''}
+                      </Typography>
+                      {r.error ? (
+                        <Typography variant="body2" color="error" sx={{ mt: 0.25 }}>
+                          {r.error}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+
+              <Divider />
+
+              <Button
+                variant="contained"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set('pane', 'automations');
+                  if (activeBoardId) next.set('board', activeBoardId);
+                  if (activeWorkspaceId) next.set('workspace', activeWorkspaceId);
+                  setSearchParams(next);
+                  setAutomationsDrawerOpen(false);
+                }}
+              >
+                Open Automations Board
               </Button>
             </Stack>
-          </Paper>
-        </Popper>
+          </Box>
+        </Drawer>
       </Stack>
 
       <Drawer anchor="right" open={itemDrawerOpen} onClose={closeItemDrawer} PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}>

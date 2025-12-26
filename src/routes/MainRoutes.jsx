@@ -18,6 +18,7 @@ const ClientPortal = Loadable(lazy(() => import('views/client/ClientPortal')));
 const BlogEditor = Loadable(lazy(() => import('views/client/BlogEditor')));
 const TaskManager = Loadable(lazy(() => import('views/tasks/TaskManager')));
 const FormsManager = Loadable(lazy(() => import('views/forms/FormsManager')));
+const ClientOnboarding = Loadable(lazy(() => import('views/pages/onboarding/ClientOnboarding')));
 
 function AdminRoute({ children }) {
   const { user, initializing } = useAuth();
@@ -33,6 +34,10 @@ function PortalRoute({ children }) {
   const isAdmin = role === 'superadmin' || role === 'admin';
   if (isAdmin && !actingClientId) {
     return <Navigate to="/client-hub" replace />;
+  }
+  // If a client hasn't completed onboarding, always direct them back into it.
+  if (role === 'client' && !user?.onboarding_completed_at) {
+    return <Navigate to="/onboarding" replace />;
   }
   return children;
 }
@@ -68,6 +73,9 @@ function DefaultLanding() {
   const role = user?.effective_role || user?.role;
   if (role === 'superadmin' || role === 'admin') {
     return <Navigate to="/client-hub" replace />;
+  }
+  if (role === 'client' && !user?.onboarding_completed_at) {
+    return <Navigate to="/onboarding" replace />;
   }
   return <Navigate to="/portal" replace />;
 }
@@ -125,6 +133,10 @@ const MainRoutes = {
           <ClientPortal />
         </PortalRoute>
       )
+    },
+    {
+      path: 'onboarding',
+      element: <ClientOnboarding />
     },
     {
       path: 'blogs',

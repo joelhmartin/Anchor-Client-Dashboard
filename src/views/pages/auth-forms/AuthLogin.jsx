@@ -12,12 +12,13 @@ import InputLabel from '@mui/material/InputLabel';
 import OutlinedInput from '@mui/material/OutlinedInput';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
-import Alert from '@mui/material/Alert';
 
 // project imports
 import AnimateButton from 'ui-component/extended/AnimateButton';
 import CustomFormControl from 'ui-component/extended/Form/CustomFormControl';
 import useAuth from 'hooks/useAuth';
+import { useToast } from 'contexts/ToastContext';
+import { getErrorMessage } from 'utils/errors';
 
 // assets
 import Visibility from '@mui/icons-material/Visibility';
@@ -29,13 +30,13 @@ export default function AuthLogin() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
+  const toast = useToast();
 
   const [checked, setChecked] = useState(true);
   const [form, setForm] = useState({
     email: location.state?.email || '',
     password: ''
   });
-  const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState(location.state?.resetMessage || '');
   const [submitting, setSubmitting] = useState(false);
 
@@ -54,15 +55,16 @@ export default function AuthLogin() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setError('');
     setInfoMessage('');
     setSubmitting(true);
     try {
-      await login(form);
-      const target = location.state?.from?.pathname || '/';
+      const user = await login(form);
+      const role = user?.effective_role || user?.role;
+      const onboardingPending = role === 'client' && !user?.onboarding_completed_at;
+      const target = onboardingPending ? '/onboarding' : location.state?.from?.pathname || '/';
       navigate(target, { replace: true });
     } catch (err) {
-      setError(err.message || 'Unable to sign in');
+      toast.error(getErrorMessage(err, 'Unable to sign in'));
     } finally {
       setSubmitting(false);
     }
@@ -70,8 +72,11 @@ export default function AuthLogin() {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ display: 'grid', gap: 2 }}>
-      {infoMessage && <Alert severity="success">{infoMessage}</Alert>}
-      {error && <Alert severity="error">{error}</Alert>}
+      {infoMessage ? (
+        <Typography variant="caption" color="text.secondary">
+          {infoMessage}
+        </Typography>
+      ) : null}
 
       <CustomFormControl fullWidth>
         <InputLabel htmlFor="outlined-adornment-email-login">Email Address / Username</InputLabel>

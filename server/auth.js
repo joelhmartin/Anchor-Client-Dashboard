@@ -20,6 +20,7 @@ const userSchema = z.object({
   last_name: z.string().min(1),
   role: z.string().default('client'),
   avatar_url: z.string().optional().nullable(),
+  onboarding_completed_at: z.string().optional().nullable(),
   created_at: z.preprocess((val) => (val instanceof Date ? val.toISOString() : val), z.string())
 });
 
@@ -192,12 +193,26 @@ If you did not request this, you can safely ignore this email.`,
 }
 
 async function findUserByEmail(email) {
-  const { rows } = await query('SELECT * FROM users WHERE email = $1 LIMIT 1', [email.toLowerCase()]);
+  const { rows } = await query(
+    `SELECT u.*, cp.onboarding_completed_at
+     FROM users u
+     LEFT JOIN client_profiles cp ON cp.user_id = u.id
+     WHERE u.email = $1
+     LIMIT 1`,
+    [email.toLowerCase()]
+  );
   return rows[0] ? userSchema.parse(rows[0]) : null;
 }
 
 async function findUserById(id) {
-  const { rows } = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
+  const { rows } = await query(
+    `SELECT u.*, cp.onboarding_completed_at
+     FROM users u
+     LEFT JOIN client_profiles cp ON cp.user_id = u.id
+     WHERE u.id = $1
+     LIMIT 1`,
+    [id]
+  );
   return rows[0] ? userSchema.parse(rows[0]) : null;
 }
 

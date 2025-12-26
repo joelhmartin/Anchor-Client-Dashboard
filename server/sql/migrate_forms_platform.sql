@@ -133,6 +133,10 @@ CREATE TABLE IF NOT EXISTS form_draft_sessions (
   user_agent TEXT
 );
 
+-- Client onboarding draft (save & continue later)
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_json JSONB;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_saved_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_form_draft_sessions_form ON form_draft_sessions(form_id);
 CREATE INDEX IF NOT EXISTS idx_form_draft_sessions_token ON form_draft_sessions(resume_token_hash);
 CREATE INDEX IF NOT EXISTS idx_form_draft_sessions_expires ON form_draft_sessions(expires_at);

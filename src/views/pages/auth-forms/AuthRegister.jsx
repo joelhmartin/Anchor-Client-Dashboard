@@ -14,13 +14,14 @@ import OutlinedInput from '@mui/material/OutlinedInput';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
-import Alert from '@mui/material/Alert';
 
 // project imports
 import AnimateButton from 'ui-component/extended/AnimateButton';
 import CustomFormControl from 'ui-component/extended/Form/CustomFormControl';
 import { strengthColor, strengthIndicator } from 'utils/password-strength';
 import useAuth from 'hooks/useAuth';
+import { useToast } from 'contexts/ToastContext';
+import { getErrorMessage } from 'utils/errors';
 
 // assets
 import Visibility from '@mui/icons-material/Visibility';
@@ -31,6 +32,7 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 export default function AuthRegister() {
   const { register } = useAuth();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [showPassword, setShowPassword] = useState(false);
   const [checked, setChecked] = useState(true);
@@ -40,7 +42,6 @@ export default function AuthRegister() {
     email: '',
     password: ''
   });
-  const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const [strength, setStrength] = useState(0);
@@ -71,13 +72,12 @@ export default function AuthRegister() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setError('');
     setSubmitting(true);
     try {
       await register(form);
       navigate('/', { replace: true });
     } catch (err) {
-      setError(err.message || 'Unable to sign up');
+      toast.error(getErrorMessage(err, 'Unable to sign up'));
     } finally {
       setSubmitting(false);
     }
@@ -85,8 +85,6 @@ export default function AuthRegister() {
 
   return (
     <Box component="form" onSubmit={handleSubmit} sx={{ display: 'grid', gap: 2 }}>
-      {error && <Alert severity="error">{error}</Alert>}
-
       <Stack sx={{ mb: 2, alignItems: 'center' }}>
         <Typography variant="subtitle1">Sign up with Email address </Typography>
       </Stack>

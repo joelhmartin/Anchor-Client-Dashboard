@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
@@ -53,6 +53,9 @@ import { fetchTaskWorkspaces } from 'api/tasks';
 import client from 'api/client';
 import { CLIENT_TYPE_PRESETS, getAiPromptForClient } from 'constants/clientPresets';
 import { fetchClientServices, saveClientServices } from 'api/services';
+import { useToast } from 'contexts/ToastContext';
+import { getErrorMessage } from 'utils/errors';
+import AnchorStepIcon from 'ui-component/extended/AnchorStepIcon';
 
 const EMPTY_SERVICE_LIST = Object.freeze([]);
 const CLIENT_PACKAGE_OPTIONS = ['Essentials', 'Growth', 'Accelerate', 'Custom'];
@@ -92,6 +95,7 @@ const buildNewServiceDraft = (name, options = {}) => ({
 export default function AdminHub() {
   const { user, initializing, setActingClient } = useAuth();
   const navigate = useNavigate();
+  const toast = useToast();
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -130,6 +134,7 @@ export default function AdminHub() {
   const [bulkAction, setBulkAction] = useState('');
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
+  const ONBOARDING_WIZARD_LAST_STEP = 2;
   const [onboardingLoading, setOnboardingLoading] = useState(false);
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
@@ -142,6 +147,15 @@ export default function AdminHub() {
   const isAdmin = effectiveRole === 'superadmin' || effectiveRole === 'admin';
   const canAccessHub = isAdmin;
 
+  const reportError = useCallback(
+    (err, fallback) => {
+      const msg = getErrorMessage(err, fallback);
+      setError(msg);
+      toast.error(msg);
+    },
+    [toast]
+  );
+
   useEffect(() => {
     if (!canAccessHub) return;
     let active = true;
@@ -151,7 +165,7 @@ export default function AdminHub() {
         if (active) setClients(data);
       })
       .catch((err) => {
-        if (active) setError(err.message || 'Unable to load clients');
+        if (active) reportError(err, 'Unable to load clients');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -172,7 +186,7 @@ export default function AdminHub() {
     setLoadingPeople(true);
     fetchPeople()
       .then((p) => setPeople(p))
-      .catch((err) => setError(err.message || 'Unable to load Monday users'))
+      .catch((err) => reportError(err, 'Unable to load Monday users'))
       .finally(() => setLoadingPeople(false));
   }, [canAccessHub]);
 
@@ -257,17 +271,10 @@ export default function AdminHub() {
     if (!clientServicesReady) return;
     if (!editing?.client_subtype || availablePresetServices.length === 0) return;
     if (presetSubtypeAppliedRef.current === editing.client_subtype) return;
-    setClientServices((prev) => {
-      const existingNames = new Set(prev.map((service) => serviceNameKey(service.name)));
-      const additions = availablePresetServices
-        .filter((name) => name)
-        .filter((name) => !existingNames.has(serviceNameKey(name)))
-        .map((name) => buildNewServiceDraft(formatServiceLabel(name), { isPreset: true }));
-      if (!additions.length) {
-        return prev;
-      }
-      return [...prev, ...additions];
-    });
+    // Hard replace: switching subtype should replace the service preset list (prevents accidental appends).
+    setClientServices(
+      availablePresetServices.filter((name) => name).map((name) => buildNewServiceDraft(formatServiceLabel(name), { isPreset: true }))
+    );
     presetSubtypeAppliedRef.current = editing.client_subtype;
   }, [clientServicesReady, editing?.client_subtype, availablePresetServices]);
 
@@ -342,7 +349,7 @@ export default function AdminHub() {
       await Promise.all(selectedClientIds.map((id) => sendClientOnboardingEmail(id)));
       setSuccess(`Onboarding email sent to ${selectedClientIds.length} client(s).`);
     } catch (err) {
-      setError(err.message || 'Unable to send onboarding emails');
+      reportError(err, 'Unable to send onboarding emails');
     } finally {
       setBulkSendingOnboarding(false);
     }
@@ -373,7 +380,7 @@ export default function AdminHub() {
       setSelectedClientIds([]);
       setSuccess(`Deleted ${selectedClientIds.length} client(s).`);
     } catch (err) {
-      setError(err.message || 'Unable to delete selected clients');
+      reportError(err, 'Unable to delete selected clients');
     } finally {
       setBulkDeleting(false);
       setBulkDeleteConfirmOpen(false);
@@ -396,17 +403,17 @@ export default function AdminHub() {
       });
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
-      await startOnboardingFlow(res.client.id);
+        await startOnboardingFlow(res.client.id);
       } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
           setSuccess(`${res.client.role === 'team' ? 'Team user' : 'Admin'} created. Password reset email sent.`);
         } catch (resetErr) {
-          setError(resetErr.message || 'User created, but failed to send reset email.');
+          reportError(resetErr, 'User created, but failed to send reset email.');
         }
       }
     } catch (err) {
-      setError(err.message || 'Unable to save client');
+      reportError(err, 'Unable to save client');
     } finally {
       setSavingNew(false);
     }
@@ -434,7 +441,7 @@ export default function AdminHub() {
       const b = await fetchBoards(search);
       setBoards(b);
     } catch (err) {
-      setError(err.message || 'Unable to load Monday boards');
+      reportError(err, 'Unable to load Monday boards');
     } finally {
       setLoadingBoards(false);
     }
@@ -449,7 +456,7 @@ export default function AdminHub() {
       const g = await fetchGroups(boardId);
       setGroups(addGroupKeys(g));
     } catch (err) {
-      setError(err.message || 'Unable to load Monday groups');
+      reportError(err, 'Unable to load Monday groups');
     }
   };
 
@@ -460,7 +467,7 @@ export default function AdminHub() {
       const docsResp = await client.get(`/hub/docs/admin/${userId}`).then((res) => res.data.docs || []);
       setDocs(docsResp);
     } catch (err) {
-      setError(err.message || 'Unable to load documents');
+      reportError(err, 'Unable to load documents');
     } finally {
       setDocsLoading(false);
     }
@@ -468,7 +475,14 @@ export default function AdminHub() {
 
   const startEdit = (clientData) => {
     const displayName = [clientData.first_name, clientData.last_name].filter(Boolean).join(' ').trim();
-    setEditing({ ...clientData, display_name: clientData.display_name || displayName });
+    const accessRequirements = {
+      requires_website_access: clientData.requires_website_access !== false,
+      requires_ga4_access: clientData.requires_ga4_access !== false,
+      requires_google_ads_access: clientData.requires_google_ads_access !== false,
+      requires_meta_access: clientData.requires_meta_access !== false,
+      requires_forms_step: clientData.requires_forms_step !== false
+    };
+    setEditing({ ...clientData, ...accessRequirements, display_name: clientData.display_name || displayName });
     loadBoards();
     if (clientData.monday_board_id) {
       loadGroups(clientData.monday_board_id);
@@ -496,6 +510,11 @@ export default function AdminHub() {
         client_type: editing.client_type,
         client_subtype: editing.client_subtype,
         client_package: editing.client_package,
+        requires_website_access: editing.requires_website_access !== false,
+        requires_ga4_access: editing.requires_ga4_access !== false,
+        requires_google_ads_access: editing.requires_google_ads_access !== false,
+        requires_meta_access: editing.requires_meta_access !== false,
+        requires_forms_step: editing.requires_forms_step !== false,
         website_access_provided: editing.website_access_provided,
         website_access_understood: editing.website_access_understood,
         ga4_access_provided: editing.ga4_access_provided,
@@ -671,8 +690,12 @@ export default function AdminHub() {
   const handleWizardNext = async () => {
     const saved = await handleSaveEdit({ exitAfterSave: false, silent: true });
     if (saved) {
-      setOnboardingStep(1);
+      setOnboardingStep((prev) => Math.min(prev + 1, ONBOARDING_WIZARD_LAST_STEP));
     }
+  };
+
+  const handleWizardBack = () => {
+    setOnboardingStep((prev) => Math.max(prev - 1, 0));
   };
 
   const handleWizardFinish = async () => {
@@ -698,6 +721,19 @@ export default function AdminHub() {
     }
   };
 
+  const ACCESS_STEP_OPTIONS = [
+    { key: 'requires_website_access', label: 'Website / hosting / DNS access' },
+    { key: 'requires_ga4_access', label: 'Google Analytics (GA4)' },
+    { key: 'requires_google_ads_access', label: 'Google Ads' },
+    { key: 'requires_meta_access', label: 'Facebook / Instagram (Meta)' },
+    { key: 'requires_forms_step', label: 'Website forms & integrations' }
+  ];
+
+  const toggleAccessRequirement = (key) => (event) => {
+    const checked = Boolean(event.target.checked);
+    setEditing((prev) => ({ ...prev, [key]: checked }));
+  };
+
   const handleSendOnboardingEmailNow = async (clientId) => {
     if (!clientId) return;
     setSendingOnboardingForId(clientId);
@@ -712,7 +748,7 @@ export default function AdminHub() {
       setSendingOnboardingForId('');
     }
   };
- 
+
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
@@ -735,7 +771,7 @@ export default function AdminHub() {
           >
             <MenuItem value="">
               <em>Not set</em>
-              </MenuItem>
+            </MenuItem>
             {CLIENT_PACKAGE_OPTIONS.map((pkg) => (
               <MenuItem key={pkg} value={pkg}>
                 {pkg}
@@ -772,144 +808,6 @@ export default function AdminHub() {
               Task board is provisioned for this client.
             </Alert>
           )}
-
-          <Divider />
-          <Typography variant="subtitle1">Access & Integrations</Typography>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_access_provided)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_access_provided: e.target.checked }))}
-              />
-            }
-            label="Website access provided"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_access_understood)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_access_understood: e.target.checked }))}
-              />
-            }
-            label="Understands website access is required ASAP"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.ga4_access_provided)}
-                onChange={(e) => setEditing((p) => ({ ...p, ga4_access_provided: e.target.checked }))}
-              />
-            }
-            label="GA4 access provided"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.ga4_access_understood)}
-                onChange={(e) => setEditing((p) => ({ ...p, ga4_access_understood: e.target.checked }))}
-              />
-            }
-            label="Understands GA4 access is required ASAP"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.google_ads_access_provided)}
-                onChange={(e) => setEditing((p) => ({ ...p, google_ads_access_provided: e.target.checked }))}
-              />
-            }
-            label="Google Ads access provided"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.google_ads_access_understood)}
-                onChange={(e) => setEditing((p) => ({ ...p, google_ads_access_understood: e.target.checked }))}
-              />
-            }
-            label="Understands Google Ads access is required ASAP"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.meta_access_provided)}
-                onChange={(e) => setEditing((p) => ({ ...p, meta_access_provided: e.target.checked }))}
-              />
-            }
-            label="Meta Business Manager access provided"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.meta_access_understood)}
-                onChange={(e) => setEditing((p) => ({ ...p, meta_access_understood: e.target.checked }))}
-              />
-            }
-            label="Understands Meta access is required ASAP"
-          />
-          <Divider />
-          <Typography variant="subtitle2">Website Forms</Typography>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_uses_third_party)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))}
-              />
-            }
-            label="Uses third-party form tools"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_uses_hipaa)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))}
-              />
-            }
-            label="Uses HIPAA-compliant / secure forms"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_connected_crm)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))}
-              />
-            }
-            label="Forms connected to CRM / practice management"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_custom)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_custom: e.target.checked }))}
-              />
-            }
-            label="Custom-built / developer-managed forms"
-          />
-          <TextField
-            label="Forms & integrations notes"
-            value={editing.website_forms_notes || ''}
-            onChange={handleEditChange('website_forms_notes')}
-            multiline
-            minRows={3}
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_details_provided)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_details_provided: e.target.checked }))}
-              />
-            }
-            label="Provided forms details"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={Boolean(editing.website_forms_details_understood)}
-                onChange={(e) => setEditing((p) => ({ ...p, website_forms_details_understood: e.target.checked }))}
-              />
-            }
-            label="Understands more access/information may be required"
-          />
         </>
       )}
       <Typography variant="subtitle1">Monday.com & Looker</Typography>
@@ -962,7 +860,7 @@ export default function AdminHub() {
       />
       <TextField label="Looker URL" value={editing.looker_url || ''} onChange={handleEditChange('looker_url')} />
       <TextField
-        label="Client Identifier Value"
+        label="Informal Business Name"
         value={editing.client_identifier_value || ''}
         onChange={handleEditChange('client_identifier_value')}
       />
@@ -1235,7 +1133,7 @@ export default function AdminHub() {
       await client.post('/hub/docs/admin/review', { user_id: editing.id, doc_id: docId, review_action: action });
       await refreshDocs(editing.id);
     } catch (err) {
-      setError(err.message || 'Unable to update review status');
+      reportError(err, 'Unable to update review status');
     }
   };
 
@@ -1245,14 +1143,14 @@ export default function AdminHub() {
       await client.put(`/hub/brand/admin/${editing.id}`, brandData);
       setSuccess('Brand saved');
     } catch (err) {
-      setError(err.message || 'Unable to save brand');
+      reportError(err, 'Unable to save brand');
     }
   };
 
   return (
     <MainCard title="Client Hub">
       <Stack spacing={3}>
-        {error && <Alert severity="error">{error}</Alert>}
+        {/* Errors are toast-only */}
         {success && <Alert severity="success">{success}</Alert>}
 
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
@@ -1389,9 +1287,9 @@ export default function AdminHub() {
               alignItems={{ xs: 'stretch', sm: 'center' }}
               justifyContent="space-between"
             >
-            <Typography variant="h5">Clients</Typography>
+              <Typography variant="h5">Clients</Typography>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
-            {loading && <CircularProgress size={20} />}
+                {loading && <CircularProgress size={20} />}
                 <TextField
                   size="small"
                   placeholder="Search clients…"
@@ -1455,13 +1353,14 @@ export default function AdminHub() {
                   <TableCell>Email</TableCell>
                   <TableCell>Analytics</TableCell>
                   <TableCell>Role</TableCell>
+                  <TableCell>Onboarding</TableCell>
                   <TableCell>Board</TableCell>
                   <TableCell align="right">Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {filteredClients.map((c) => (
-                    <TableRow key={c.id} hover>
+                  <TableRow key={c.id} hover>
                     <TableCell padding="checkbox">
                       <Checkbox
                         size="small"
@@ -1470,21 +1369,42 @@ export default function AdminHub() {
                         disabled={!isAdmin}
                       />
                     </TableCell>
-                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                      <TableCell>{c.email}</TableCell>
-                      <TableCell>
-                        {c.looker_url ? (
-                          <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
-                            Open
-                          </Button>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">
-                            Not set
+                    <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                    <TableCell>{c.email}</TableCell>
+                    <TableCell>
+                      {c.looker_url ? (
+                        <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
+                          Open
+                        </Button>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          Not set
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
+                    <TableCell>
+                      {c.role === 'client' ? (
+                        c.onboarding_completed_at ? (
+                          <Typography
+                            variant="caption"
+                            sx={{ fontWeight: 600, color: 'success.main' }}
+                            title={`Completed: ${new Date(c.onboarding_completed_at).toLocaleString()}`}
+                          >
+                            Complete
                           </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                      <TableCell>{c.monday_board_id || '-'}</TableCell>
+                        ) : (
+                          <Typography variant="caption" sx={{ fontWeight: 600, color: 'warning.main' }}>
+                            Pending
+                          </Typography>
+                        )
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          —
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>{c.monday_board_id || '-'}</TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -1511,24 +1431,27 @@ export default function AdminHub() {
                             {deletingClientId === c.id ? 'Deleting…' : 'Delete'}
                           </Button>
                         )}
-                        <Button
-                          size="small"
-                          variant="contained"
-                          disableElevation
-                          onClick={() => {
-                            setActingClient(c.id);
-                            navigate('/portal');
-                          }}
-                        >
-                          Jump to View
-                        </Button>
+                        {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            disableElevation
+                            onClick={() => {
+                              if (c.role === 'client' && !c.onboarding_completed_at) return;
+                              setActingClient(c.id);
+                              navigate('/portal');
+                            }}
+                          >
+                            Jump to View
+                          </Button>
+                        )}
                       </Stack>
                     </TableCell>
                   </TableRow>
                 ))}
                 {!filteredClients.length && !loading && (
                   <TableRow>
-                    <TableCell colSpan={7} align="center">
+                    <TableCell colSpan={8} align="center">
                       No clients yet.
                     </TableCell>
                   </TableRow>
@@ -1661,12 +1584,22 @@ export default function AdminHub() {
         </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={3}>
-            <Stepper activeStep={onboardingStep} alternativeLabel>
+            <Stepper
+              activeStep={onboardingStep}
+              alternativeLabel
+              sx={{
+                '& .MuiStepLabel-label.Mui-active': { fontWeight: 700, transform: 'scale(1.03)' },
+                '& .MuiStepLabel-labelContainer': { transformOrigin: 'center' }
+              }}
+            >
               <Step>
-                <StepLabel>Client Details</StepLabel>
+                <StepLabel StepIconComponent={AnchorStepIcon}>Client Details</StepLabel>
               </Step>
               <Step>
-                <StepLabel>Onboarding Email</StepLabel>
+                <StepLabel StepIconComponent={AnchorStepIcon}>Access Scope</StepLabel>
+              </Step>
+              <Step>
+                <StepLabel StepIconComponent={AnchorStepIcon}>Onboarding Email</StepLabel>
               </Step>
             </Stepper>
             {onboardingStep === 0 && editing && (
@@ -1683,6 +1616,38 @@ export default function AdminHub() {
               </Card>
             )}
             {onboardingStep === 1 && editing && (
+              <Card variant="outlined" sx={{ boxShadow: 'none', borderRadius: 2 }}>
+                <CardContent>
+                  <Stack spacing={2}>
+                    <Typography variant="subtitle1">Access Steps</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Pick which access steps this client should see in their onboarding. Unchecked items won&apos;t appear in the
+                      client-facing flow.
+                    </Typography>
+                    <Grid container spacing={1}>
+                      {ACCESS_STEP_OPTIONS.map((option) => (
+                        <Grid item xs={12} sm={6} key={option.key}>
+                          <FormControlLabel
+                            control={
+                              <Checkbox
+                                checked={editing?.[option.key] !== false}
+                                onChange={toggleAccessRequirement(option.key)}
+                                color="primary"
+                              />
+                            }
+                            label={option.label}
+                          />
+                        </Grid>
+                      ))}
+                    </Grid>
+                    <Alert severity="info" sx={{ borderRadius: 1 }}>
+                      These settings only affect the client onboarding form. You can update them anytime.
+                    </Alert>
+                  </Stack>
+                </CardContent>
+              </Card>
+            )}
+            {onboardingStep === 2 && editing && (
               <Card variant="outlined" sx={{ boxShadow: 'none', borderRadius: 2 }}>
                 <CardContent>
                   <Stack spacing={2}>
@@ -1716,11 +1681,21 @@ export default function AdminHub() {
             </>
           ) : (
             <>
-              <Button onClick={() => setOnboardingStep(0)} disabled={sendingOnboardingEmail}>
+              <Button onClick={handleWizardBack} disabled={savingEdit || onboardingLoading || sendingOnboardingEmail}>
                 Back
               </Button>
-              <Button variant="contained" onClick={handleWizardFinish} disabled={sendingOnboardingEmail}>
-                {sendingOnboardingEmail ? 'Sending…' : 'Finish'}
+              <Button
+                variant="contained"
+                onClick={onboardingStep === ONBOARDING_WIZARD_LAST_STEP ? handleWizardFinish : handleWizardNext}
+                disabled={sendingOnboardingEmail || onboardingLoading}
+              >
+                {onboardingStep === ONBOARDING_WIZARD_LAST_STEP
+                  ? sendingOnboardingEmail
+                    ? 'Sending…'
+                    : 'Finish'
+                  : savingEdit || onboardingLoading
+                    ? 'Saving…'
+                    : 'Continue'}
               </Button>
             </>
           )}

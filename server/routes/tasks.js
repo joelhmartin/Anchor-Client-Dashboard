@@ -10,6 +10,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { isStaff } from '../middleware/roles.js';
 import { createNotification } from '../services/notifications.js';
 import { generateAiResponse } from '../services/ai.js';
+import { runDueDateAutomations, runEventAutomationsForAssigneeAdded, runEventAutomationsForItemChange } from '../services/taskAutomations.js';
 
 const router = express.Router();
 
@@ -27,7 +28,8 @@ const boardCreateSchema = z.object({
 
 const boardUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
-  description: z.string().max(2000).optional().nullable()
+  description: z.string().max(2000).optional().nullable(),
+  workspace_id: z.string().uuid().optional()
 });
 
 const bulkBoardReportSchema = z.object({
@@ -71,22 +73,62 @@ const timeEntryCreateSchema = z.object({
 
 const automationCreateSchema = z.object({
   name: z.string().min(1).max(200),
-  trigger_type: z.enum(['status_change']),
-  trigger_config: z
-    .object({
-      to_status: z.string().max(100).optional() // Now accepts any string status label
-    })
-    .optional(),
-  action_type: z.enum(['notify_admins', 'notify_assignees']),
-  action_config: z
-    .object({
-      title: z.string().min(1).max(200).optional(),
-      body: z.string().max(2000).optional(),
-      link_url: z.string().max(500).optional()
-    })
-    .optional(),
+  trigger_type: z.enum(['status_change', 'assignee_added', 'due_date_relative']),
+  trigger_config: z.record(z.any()).optional(),
+  action_type: z.enum(['notify_admins', 'notify_assignees', 'set_status', 'set_needs_attention', 'add_update']),
+  action_config: z.record(z.any()).optional(),
   is_active: z.boolean().optional()
 });
+
+const automationUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  trigger_type: z.enum(['status_change', 'assignee_added', 'due_date_relative']).optional(),
+  trigger_config: z.record(z.any()).optional(),
+  action_type: z.enum(['notify_admins', 'notify_assignees', 'set_status', 'set_needs_attention', 'add_update']).optional(),
+  action_config: z.record(z.any()).optional(),
+  is_active: z.boolean().optional()
+});
+
+function validateAutomationPayload(payload) {
+  const triggerType = String(payload.trigger_type || '');
+  const actionType = String(payload.action_type || '');
+  const trigger = payload.trigger_config || {};
+  const action = payload.action_config || {};
+
+  if (triggerType === 'status_change') {
+    if (trigger.to_status !== undefined && typeof trigger.to_status !== 'string') {
+      throw new Error('trigger_config.to_status must be a string');
+    }
+  }
+
+  if (triggerType === 'due_date_relative') {
+    const n = Number(trigger.days_from_due);
+    if (!Number.isFinite(n) || !Number.isInteger(n)) {
+      throw new Error('trigger_config.days_from_due must be an integer');
+    }
+    if (n < -365 || n > 365) {
+      throw new Error('trigger_config.days_from_due must be between -365 and 365');
+    }
+  }
+
+  if (actionType === 'set_status') {
+    if (!String(action.status || '').trim()) {
+      throw new Error('action_config.status is required for set_status');
+    }
+  }
+
+  if (actionType === 'set_needs_attention') {
+    if (action.value === undefined) {
+      throw new Error('action_config.value is required for set_needs_attention');
+    }
+  }
+
+  if (actionType === 'add_update') {
+    if (!String(action.content || '').trim()) {
+      throw new Error('action_config.content is required for add_update');
+    }
+  }
+}
 
 const workspaceMemberAddSchema = z
   .object({
@@ -291,75 +333,7 @@ async function getWorkspaceIdForSubitem(subitemId) {
   return rows[0]?.workspace_id || null;
 }
 
-async function runBoardAutomationsForItemChange({ itemBefore, itemAfter, actorUserId }) {
-  if (!itemBefore || !itemAfter) return;
-  const boardId = await getBoardIdForItem(itemAfter.id);
-  if (!boardId) return;
-
-  const { rows: automations } = await query(
-    `SELECT *
-     FROM task_board_automations
-     WHERE board_id = $1 AND is_active = TRUE
-     ORDER BY created_at ASC`,
-    [boardId]
-  );
-  if (!automations.length) return;
-
-  for (const rule of automations) {
-    if (rule.trigger_type === 'status_change') {
-      const trigger = rule.trigger_config || {};
-      const toStatus = trigger?.to_status;
-      const didChange = itemBefore.status !== itemAfter.status;
-      const matches = !toStatus || itemAfter.status === toStatus;
-      if (!didChange || !matches) continue;
-
-      const action = rule.action_config || {};
-      const title = action?.title || `Task status updated: ${itemAfter.status}`;
-      const body = action?.body || `${itemAfter.name}`;
-      const defaultDeepLink = `/tasks?board=${encodeURIComponent(boardId)}&item=${encodeURIComponent(itemAfter.id)}`;
-      const linkUrl = action?.link_url || defaultDeepLink;
-      const meta = {
-        source: 'tasks_automation',
-        board_id: boardId,
-        item_id: itemAfter.id,
-        automation_id: rule.id,
-        actor_user_id: actorUserId,
-        to_status: itemAfter.status,
-        from_status: itemBefore.status
-      };
-
-      if (rule.action_type === 'notify_admins') {
-        const { rows: admins } = await query("SELECT id FROM users WHERE role IN ('superadmin','admin')");
-        await Promise.all(
-          admins.map((u) =>
-            createNotification({
-              userId: u.id,
-              title,
-              body,
-              linkUrl,
-              meta
-            })
-          )
-        );
-      }
-
-      if (rule.action_type === 'notify_assignees') {
-        const { rows: assignees } = await query(`SELECT user_id FROM task_item_assignees WHERE item_id = $1`, [itemAfter.id]);
-        await Promise.all(
-          assignees.map((a) =>
-            createNotification({
-              userId: a.user_id,
-              title,
-              body,
-              linkUrl,
-              meta
-            })
-          )
-        );
-      }
-    }
-  }
-}
+// Automations are implemented in server/services/taskAutomations.js
 
 router.get('/workspaces', async (req, res) => {
   const eff = getEffectiveRole(req);
@@ -770,6 +744,13 @@ router.patch('/boards/:boardId', async (req, res) => {
     if (payload.description !== undefined) {
       fields.push(`description = $${i++}`);
       values.push(payload.description ?? null);
+    }
+    if (payload.workspace_id !== undefined && payload.workspace_id !== workspaceId) {
+      // Ensure user has access to destination workspace too.
+      const okDest = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId: payload.workspace_id });
+      if (!okDest) return res.status(403).json({ message: 'Insufficient permissions for destination workspace' });
+      fields.push(`workspace_id = $${i++}`);
+      values.push(payload.workspace_id);
     }
     if (!fields.length) return res.status(400).json({ message: 'No changes provided' });
     values.push(boardId);
@@ -1587,8 +1568,8 @@ router.patch('/items/:itemId', async (req, res) => {
     );
     const itemAfter = rows[0];
     // Run automations asynchronously; don't block client response
-    runBoardAutomationsForItemChange({ itemBefore, itemAfter, actorUserId: req.user.id }).catch((err) =>
-      console.error('[tasks:automations:run]', err)
+    runEventAutomationsForItemChange({ itemBefore, itemAfter, actorUserId: req.user.id }).catch((err) =>
+      console.error('[tasks:automations:run:item-change]', err)
     );
     return res.json({ item: itemAfter });
   } catch (err) {
@@ -1688,6 +1669,7 @@ router.post('/boards/:boardId/automations', async (req, res) => {
     if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
 
     const payload = automationCreateSchema.parse(req.body);
+    validateAutomationPayload(payload);
     const { rows } = await query(
       `INSERT INTO task_board_automations (board_id, name, trigger_type, trigger_config, action_type, action_config, is_active, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -1706,6 +1688,9 @@ router.post('/boards/:boardId/automations', async (req, res) => {
     return res.status(201).json({ automation: rows[0] });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    if (String(err?.message || '').includes('trigger_config') || String(err?.message || '').includes('action_config')) {
+      return res.status(400).json({ message: err.message });
+    }
     console.error('[tasks:automations:create]', err);
     return res.status(500).json({ message: 'Unable to create automation' });
   }
@@ -1717,29 +1702,198 @@ router.patch('/automations/:automationId', async (req, res) => {
   const { automationId } = req.params;
   if (eff !== 'superadmin' && eff !== 'admin') return res.status(403).json({ message: 'Insufficient permissions' });
   try {
-    const { rows: existingRows } = await query('SELECT * FROM task_board_automations WHERE id = $1', [automationId]);
-    const existing = existingRows[0];
-    if (!existing) return res.status(404).json({ message: 'Automation not found' });
+    // Look up in board automations first, then global.
+    const { rows: boardRows } = await query('SELECT * FROM task_board_automations WHERE id = $1', [automationId]);
+    const boardRow = boardRows[0] || null;
 
-    const workspaceId = await getWorkspaceIdForBoard(existing.board_id);
-    if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
-    const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
-    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    const { rows: globalRows } = boardRow ? { rows: [] } : await query('SELECT * FROM task_global_automations WHERE id = $1', [automationId]);
+    const globalRow = globalRows[0] || null;
 
-    const schema = z.object({ is_active: z.boolean() });
-    const payload = schema.parse(req.body);
+    const scope = boardRow ? 'board' : globalRow ? 'global' : null;
+    const existing = boardRow || globalRow;
+    if (!scope || !existing) return res.status(404).json({ message: 'Automation not found' });
+
+    if (scope === 'board') {
+      const workspaceId = await getWorkspaceIdForBoard(existing.board_id);
+      if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+      const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+      if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
+
+    const payload = automationUpdateSchema.parse(req.body);
+    const merged = {
+      ...existing,
+      ...payload,
+      trigger_config: payload.trigger_config !== undefined ? payload.trigger_config : existing.trigger_config,
+      action_config: payload.action_config !== undefined ? payload.action_config : existing.action_config
+    };
+    validateAutomationPayload(merged);
+
+    const fields = [];
+    const values = [];
+    let i = 1;
+    if (payload.name !== undefined) {
+      fields.push(`name = $${i++}`);
+      values.push(payload.name.trim());
+    }
+    if (payload.trigger_type !== undefined) {
+      fields.push(`trigger_type = $${i++}`);
+      values.push(payload.trigger_type);
+    }
+    if (payload.trigger_config !== undefined) {
+      fields.push(`trigger_config = $${i++}`);
+      values.push(JSON.stringify(payload.trigger_config || {}));
+    }
+    if (payload.action_type !== undefined) {
+      fields.push(`action_type = $${i++}`);
+      values.push(payload.action_type);
+    }
+    if (payload.action_config !== undefined) {
+      fields.push(`action_config = $${i++}`);
+      values.push(JSON.stringify(payload.action_config || {}));
+    }
+    if (payload.is_active !== undefined) {
+      fields.push(`is_active = $${i++}`);
+      values.push(payload.is_active);
+    }
+    if (!fields.length) return res.status(400).json({ message: 'No changes provided' });
+
+    values.push(automationId);
+    const table = scope === 'board' ? 'task_board_automations' : 'task_global_automations';
     const { rows } = await query(
-      `UPDATE task_board_automations
-       SET is_active = $1
-       WHERE id = $2
+      `UPDATE ${table}
+       SET ${fields.join(', ')}
+       WHERE id = $${i}
        RETURNING *`,
-      [payload.is_active, automationId]
+      values
     );
-    return res.json({ automation: rows[0] });
+    return res.json({ automation: rows[0], scope });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    if (String(err?.message || '').includes('trigger_config') || String(err?.message || '').includes('action_config')) {
+      return res.status(400).json({ message: err.message });
+    }
     console.error('[tasks:automations:update]', err);
     return res.status(500).json({ message: 'Unable to update automation' });
+  }
+});
+
+router.delete('/automations/:automationId', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const { automationId } = req.params;
+  if (eff !== 'superadmin' && eff !== 'admin') return res.status(403).json({ message: 'Insufficient permissions' });
+  try {
+    const { rows: boardRows } = await query('SELECT * FROM task_board_automations WHERE id = $1', [automationId]);
+    const boardRow = boardRows[0] || null;
+
+    const { rows: globalRows } = boardRow ? { rows: [] } : await query('SELECT * FROM task_global_automations WHERE id = $1', [automationId]);
+    const globalRow = globalRows[0] || null;
+
+    const scope = boardRow ? 'board' : globalRow ? 'global' : null;
+    const existing = boardRow || globalRow;
+    if (!scope || !existing) return res.status(404).json({ message: 'Automation not found' });
+
+    if (scope === 'board') {
+      const workspaceId = await getWorkspaceIdForBoard(existing.board_id);
+      if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+      const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+      if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
+
+    const table = scope === 'board' ? 'task_board_automations' : 'task_global_automations';
+    await query(`DELETE FROM ${table} WHERE id = $1`, [automationId]);
+    return res.json({ ok: true, scope });
+  } catch (err) {
+    console.error('[tasks:automations:delete]', err);
+    return res.status(500).json({ message: 'Unable to delete automation' });
+  }
+});
+
+// Global automations
+router.get('/automations/global', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  if (eff !== 'superadmin' && eff !== 'admin') return res.status(403).json({ message: 'Insufficient permissions' });
+  try {
+    const { rows } = await query(`SELECT * FROM task_global_automations ORDER BY created_at DESC`);
+    return res.json({ automations: rows });
+  } catch (err) {
+    console.error('[tasks:automations:global:list]', err);
+    return res.status(500).json({ message: 'Unable to load automations' });
+  }
+});
+
+router.post('/automations/global', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  if (eff !== 'superadmin' && eff !== 'admin') return res.status(403).json({ message: 'Insufficient permissions' });
+  try {
+    const payload = automationCreateSchema.parse(req.body);
+    validateAutomationPayload(payload);
+    const { rows } = await query(
+      `INSERT INTO task_global_automations (name, trigger_type, trigger_config, action_type, action_config, is_active, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [
+        payload.name.trim(),
+        payload.trigger_type,
+        JSON.stringify(payload.trigger_config || {}),
+        payload.action_type,
+        JSON.stringify(payload.action_config || {}),
+        payload.is_active !== undefined ? payload.is_active : true,
+        req.user.id
+      ]
+    );
+    return res.status(201).json({ automation: rows[0], scope: 'global' });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+    if (String(err?.message || '').includes('trigger_config') || String(err?.message || '').includes('action_config')) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error('[tasks:automations:global:create]', err);
+    return res.status(500).json({ message: 'Unable to create automation' });
+  }
+});
+
+// Execution log (recent)
+router.get('/automations/runs', async (req, res) => {
+  const eff = getEffectiveRole(req);
+  const userId = req.user.id;
+  const limit = Math.min(200, Math.max(1, Number(req.query?.limit || 50)));
+  const scope = String(req.query?.scope || '').trim(); // 'board'|'global'|''
+  const boardId = String(req.query?.board_id || '').trim();
+  try {
+    if (scope === 'board' && boardId) {
+      const workspaceId = await getWorkspaceIdForBoard(boardId);
+      if (!workspaceId) return res.status(404).json({ message: 'Board not found' });
+      const ok = await assertWorkspaceAccess({ effRole: eff, userId, workspaceId });
+      if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
+    // Global runs: staff-only route already; no extra check needed.
+    const clauses = [];
+    const params = [];
+    let i = 1;
+    if (scope === 'board' || scope === 'global') {
+      clauses.push(`scope = $${i++}`);
+      params.push(scope);
+    }
+    if (boardId) {
+      clauses.push(`board_id = $${i++}`);
+      params.push(boardId);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await query(
+      `SELECT *
+       FROM task_automation_runs
+       ${where}
+       ORDER BY ran_at DESC
+       LIMIT $${i}`,
+      params
+    );
+    return res.json({ runs: rows });
+  } catch (err) {
+    console.error('[tasks:automations:runs]', err);
+    return res.status(500).json({ message: 'Unable to load automation runs' });
   }
 });
 
@@ -2396,6 +2550,13 @@ router.post('/items/:itemId/assignees', async (req, res) => {
           actor_user_id: req.user.id
         }
       });
+    }
+
+    // Fire automations for assignee_added asynchronously (global + board).
+    if (insertedRes.rowCount) {
+      runEventAutomationsForAssigneeAdded({ itemId, assigneeUserId: targetUserId, actorUserId: req.user.id }).catch((err) =>
+        console.error('[tasks:automations:run:assignee-added]', err)
+      );
     }
 
     const { rows } = await query(

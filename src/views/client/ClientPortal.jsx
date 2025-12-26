@@ -92,7 +92,6 @@ const fieldLabels = {
   business_name: 'Business Name',
   business_description: 'Business Description',
   brand_notes: 'Brand Notes',
-  website_url: 'Website URL',
   website_url: 'Website URL'
 };
 
@@ -100,7 +99,6 @@ const BRAND_FIELD_ORDER = [
   'business_name',
   'business_description',
   'brand_notes',
-  'website_url',
   'website_url'
 ];
 
@@ -258,13 +256,12 @@ export default function ClientPortal() {
     fetchBrand()
       .then((data) => {
         setBrand(data);
-        setBrandFields({
-          business_name: data.business_name || '',
-          business_description: data.business_description || '',
-          brand_notes: data.brand_notes || '',
-          website_url: data.website_url || '',
-          website_url: data.website_url || ''
-        });
+          setBrandFields({
+            business_name: data.business_name || '',
+            business_description: data.business_description || '',
+            brand_notes: data.brand_notes || '',
+            website_url: data.website_url || ''
+          });
       })
       .catch((err) => triggerMessage('error', err.message || 'Unable to load brand profile'));
   }, []);
@@ -1167,7 +1164,7 @@ export default function ClientPortal() {
             ) : (
               <Stack spacing={3}>
                 <Grid container spacing={3}>
-                  <Grid item xs={12} md={6}>
+                  <Grid item xs={12} md={12}>
                     <Stack spacing={2}>
                       <Typography variant="h6">Brand Basics</Typography>
                       <Stack spacing={1}>
@@ -1272,180 +1269,6 @@ export default function ClientPortal() {
                         fullWidth
                         value={brandFields.website_url || ''}
                         onChange={(e) => setBrandFields((prev) => ({ ...prev, website_url: e.target.value }))}
-                      />
-                    </Stack>
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <Stack spacing={2}>
-                      <Typography variant="h6">Access & Integrations</Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        These confirmations help our team ensure tracking and integrations are set up correctly.
-                      </Typography>
-
-                      <Typography variant="subtitle2">Website Access</Typography>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_access_provided}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, website_access_provided: e.target.checked }))}
-                          />
-                        }
-                        label="I have provided website access"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_access_understood}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, website_access_understood: e.target.checked }))}
-                          />
-                        }
-                        label="I understand I need to provide website access to Anchor Corps as soon as possible"
-                      />
-
-                      <Divider />
-
-                      <Typography variant="subtitle2">Google Analytics (GA4)</Typography>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.ga4_access_provided}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, ga4_access_provided: e.target.checked }))}
-                          />
-                        }
-                        label="I have provided Google Analytics access"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.ga4_access_understood}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, ga4_access_understood: e.target.checked }))}
-                          />
-                        }
-                        label="I understand I need to provide Google Analytics access as soon as possible"
-                      />
-
-                      <Divider />
-
-                      <Typography variant="subtitle2">Google Ads</Typography>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.google_ads_access_provided}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, google_ads_access_provided: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="I have provided Google Ads access"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.google_ads_access_understood}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, google_ads_access_understood: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="I understand I need to provide Google Ads access as soon as possible"
-                      />
-
-                      <Divider />
-
-                      <Typography variant="subtitle2">Facebook Business Manager (Meta)</Typography>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.meta_access_provided}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, meta_access_provided: e.target.checked }))}
-                          />
-                        }
-                        label="I have provided Facebook Business Manager access"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.meta_access_understood}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, meta_access_understood: e.target.checked }))}
-                          />
-                        }
-                        label="I understand I need to provide Facebook access as soon as possible"
-                      />
-
-                      <Divider />
-
-                      <Typography variant="subtitle2">Website Forms & Integrations</Typography>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_uses_third_party}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="Uses third-party form tools"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_uses_hipaa}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="Uses HIPAA-compliant / secure forms"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_connected_crm}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="Forms connected to a CRM / practice management system"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_custom}
-                            onChange={(e) => setAccessFields((p) => ({ ...p, website_forms_custom: e.target.checked }))}
-                          />
-                        }
-                        label="Custom-built / developer-managed forms"
-                      />
-                      <TextField
-                        label="Forms & integrations notes"
-                        fullWidth
-                        multiline
-                        minRows={3}
-                        value={accessFields.website_forms_notes || ''}
-                        onChange={(e) => setAccessFields((p) => ({ ...p, website_forms_notes: e.target.value }))}
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_details_provided}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, website_forms_details_provided: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="I have provided details about my website form setup and integrations"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={accessFields.website_forms_details_understood}
-                            onChange={(e) =>
-                              setAccessFields((p) => ({ ...p, website_forms_details_understood: e.target.checked }))
-                            }
-                          />
-                        }
-                        label="I understand additional access/information may be required"
                       />
                     </Stack>
                   </Grid>

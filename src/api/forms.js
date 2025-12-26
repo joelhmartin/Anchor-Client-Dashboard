@@ -73,6 +73,15 @@ export function uploadPDFForConversion(formId, file, instructions = '') {
   }).then((res) => res.data);
 }
 
+export function uploadPDFForDocAI(formId, file, instructions = '') {
+  const formData = new FormData();
+  formData.append('pdf', file);
+  if (instructions) formData.append('instructions', instructions);
+  return client.post(`/forms/${formId}/ai/docai/upload-pdf`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((res) => res.data);
+}
+
 export function aiEditForm(formId, { instruction, current_code, current_css, current_js }) {
   return client.post(`/forms/${formId}/ai/edit`, {
     instruction,

@@ -1,5 +1,6 @@
 import Mailgun from 'mailgun.js';
 import formData from 'form-data';
+import { ensureEmailHtml } from './emailTemplate.js';
 
 // Prefer prod keys/domains; in non-production allow sandbox if prod not set.
 const isProd = process.env.NODE_ENV === 'production';
@@ -22,7 +23,7 @@ export function isMailgunConfigured() {
   return Boolean(client && resolvedDomain);
 }
 
-export async function sendMailgunMessage({ to, subject, text, html, from }) {
+export async function sendMailgunMessage({ to, cc, bcc, subject, text, html, from, attachments }) {
   if (!isMailgunConfigured()) {
     throw new Error('Mailgun is not configured');
   }
@@ -37,12 +38,28 @@ export async function sendMailgunMessage({ to, subject, text, html, from }) {
   }
 
   const recipients = Array.isArray(to) ? to : [to];
+  const htmlLooksComplete = typeof html === 'string' && /<html[\s>]|<!doctype/i.test(html);
+  // Always prefer the base template unless the caller provided a full HTML document.
+  const finalHtml = htmlLooksComplete ? html : ensureEmailHtml({ subject, text, html, preheader: subject });
   const payload = {
     from: from || defaultFrom || `webforms@${resolvedDomain}`,
     to: recipients,
+    cc: cc && Array.isArray(cc) && cc.length ? cc : undefined,
+    bcc: bcc && Array.isArray(bcc) && bcc.length ? bcc : undefined,
     subject,
     text,
-    html
+    html: finalHtml
   };
+  // Attachments (optional)
+  // mailgun.js supports `attachment` as:
+  // - a single object { data, filename, contentType }
+  // - or an array of those objects
+  if (attachments && Array.isArray(attachments) && attachments.length) {
+    payload.attachment = attachments.map((a) => ({
+      data: a.data,
+      filename: a.filename,
+      contentType: a.contentType || 'application/octet-stream'
+    }));
+  }
   return client.messages.create(resolvedDomain, payload);
 }

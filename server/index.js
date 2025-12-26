@@ -19,6 +19,7 @@ import formsPublicRouter from './routes/formsPublic.js';
 import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
 import { purgeArchivedTasks } from './services/taskCleanup.js';
 import { processSubmissionJobs } from './services/formSubmissionJobs.js';
+import { runDueDateAutomations } from './services/taskAutomations.js';
 
 const app = express();
 const PORT = process.env.API_SERVER_PORT || process.env.PORT || 4000;
@@ -26,22 +27,51 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const RUN_MIGRATIONS = process.env.RUN_MIGRATIONS_ON_START ?? (NODE_ENV === 'production' ? 'true' : 'false');
 const UPLOAD_DIR = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads');
 const CLIENT_BUILD_DIR = path.resolve(process.cwd(), 'dist');
+const EMAIL_ASSETS_DIR = path.resolve(process.cwd(), 'server', 'assets', 'email');
+
+const CSP_ALLOW_UNSAFE_EVAL = String(process.env.CSP_ALLOW_UNSAFE_EVAL || '').toLowerCase() === 'true';
+const CSP_FRAME_SRC = (process.env.CSP_FRAME_SRC || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const baseCspDirectives = {
   'default-src': ["'self'"],
-  'script-src': ["'self'"],
+  // Monaco often requires `unsafe-eval` depending on bundling/loader. Keep this behind an env flag.
+  'script-src': ["'self'", ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])],
   'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
   'img-src': ["'self'", 'data:'],
-  'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com']
+  'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'],
+  // Monaco uses web workers (often via blob: URLs). Without this, the editor can fail to load in production.
+  'worker-src': ["'self'", 'blob:'],
+  // Some browsers still consult child-src for workers if worker-src isn't applied consistently.
+  'child-src': ["'self'", 'blob:'],
+  // Allow embedding trusted third-party dashboards (ex: Looker Studio) via env.
+  'frame-src': ["'self'", ...CSP_FRAME_SRC]
 };
 
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:4173').split(',').map((o) => o.trim());
+function normalizeOrigin(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  return s.replace(/\/$/, '');
+}
+
+const allowedOrigins = (() => {
+  const defaults = ['http://localhost:3000', 'http://localhost:4173'];
+  const fromEnv = (process.env.CORS_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean);
+  const appBase = [process.env.APP_BASE_URL, process.env.CLIENT_APP_URL].filter(Boolean);
+  const all = [...defaults, ...fromEnv, ...appBase].map(normalizeOrigin).filter(Boolean);
+  return new Set(all);
+})();
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // allow non-browser clients (no Origin header)
+    if (!origin) return callback(null, true);
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.has(normalized)) {
       return callback(null, true);
     }
     return callback(new Error('Not allowed by CORS'));
@@ -70,6 +100,7 @@ app.use('/api/tasks', tasksRouter);
 app.use('/api/forms', formsRouter);
 app.use('/embed', formsPublicRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
+app.use('/email-assets', express.static(EMAIL_ASSETS_DIR));
 
 if (NODE_ENV === 'production') {
   app.use(express.static(CLIENT_BUILD_DIR));
@@ -173,6 +204,24 @@ cron.schedule(
     const result = await purgeArchivedTasks({ retentionDays });
     if (result?.deleted) {
       console.log(`[cron:purge-archived-tasks] deleted ${result.deleted} archived task item(s)`);
+    }
+  },
+  {
+    timezone: 'America/New_York'
+  }
+);
+
+// Evaluate due-date automations every hour
+cron.schedule(
+  '0 * * * *',
+  async () => {
+    try {
+      const result = await runDueDateAutomations();
+      if (result?.processed) {
+        console.log(`[cron:task-automations] processed ${result.processed} due-date automation run(s)`);
+      }
+    } catch (err) {
+      console.error('[cron:task-automations] failed', err?.message || err);
     }
   },
   {

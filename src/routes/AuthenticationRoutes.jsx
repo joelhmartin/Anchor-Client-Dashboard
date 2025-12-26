@@ -9,6 +9,7 @@ const LoginPage = Loadable(lazy(() => import('views/pages/authentication/Login')
 const RegisterPage = Loadable(lazy(() => import('views/pages/authentication/Register')));
 const ForgotPasswordPage = Loadable(lazy(() => import('views/pages/authentication/ForgotPassword')));
 const ClientOnboardingPage = Loadable(lazy(() => import('views/pages/onboarding/ClientOnboarding')));
+const OnboardingThankYouPage = Loadable(lazy(() => import('views/pages/onboarding/OnboardingThankYou')));
 
 // ==============================|| AUTHENTICATION ROUTING ||============================== //
 
@@ -31,6 +32,10 @@ const AuthenticationRoutes = {
     {
       path: '/onboarding/:token',
       element: <ClientOnboardingPage />
+    },
+    {
+      path: '/onboarding/thank-you',
+      element: <OnboardingThankYouPage />
     }
   ]
 };

@@ -51,6 +51,15 @@ function sanitizePreviewCode(src) {
 function PreviewRenderer({ reactCode, cssCode }) {
   const [error, setError] = useState('');
   const [Component, setComponent] = useState(null);
+  const toast = useToast();
+  const lastToastRef = useRef('');
+
+  useEffect(() => {
+    if (!error) return;
+    if (lastToastRef.current === error) return;
+    lastToastRef.current = error;
+    toast.error(error);
+  }, [error, toast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,11 +150,7 @@ function PreviewRenderer({ reactCode, cssCode }) {
       <Alert severity="warning" sx={{ mb: 2 }}>
         Preview executes the current form code in your browser. This is admin-only tooling; don’t paste secrets here.
       </Alert>
-      {error ? (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      ) : null}
+      {/* Errors are toast-only */}
       {Component ? (
         <Component
           onSubmit={async (data) => {
@@ -199,6 +204,7 @@ import {
   updateForm,
   fetchSubmissions,
   uploadPDFForConversion,
+  uploadPDFForDocAI,
   aiEditForm,
   generateSchema,
   fetchSubmission,
@@ -986,7 +992,11 @@ function BuilderPane({ formId, forms }) {
   const [schemaJson, setSchemaJson] = useState(null);
   const [schemaDirty, setSchemaDirty] = useState(false);
   const [codeTab, setCodeTab] = useState(0);
+  const [printTab, setPrintTab] = useState(0);
   const [hasChanges, setHasChanges] = useState(false);
+  const [printHtml, setPrintHtml] = useState('');
+  const [printCss, setPrintCss] = useState('');
+  const [printJs, setPrintJs] = useState('');
 
   const runtimeMode = useMemo(() => {
     const fromSchema = schemaJson?.runtime_mode;
@@ -1004,10 +1014,18 @@ function BuilderPane({ formId, forms }) {
   // AI state
   const [pdfUploadOpen, setPdfUploadOpen] = useState(false);
   const [pdfInstructions, setPdfInstructions] = useState('');
+  const [pdfUseDocAI, setPdfUseDocAI] = useState(true);
   const [aiEditOpen, setAiEditOpen] = useState(false);
+  const [aiEditTarget, setAiEditTarget] = useState('form'); // 'form' | 'print'
   const [aiInstruction, setAiInstruction] = useState('');
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiDiff, setAiDiff] = useState(null);
+
+  // Printable template full editor pane
+  const [printEditorOpen, setPrintEditorOpen] = useState(false);
+  const [printEditorSplitPct, setPrintEditorSplitPct] = useState(55);
+  const printDragRef = useRef(null);
+  const [printPreviewNonce, setPrintPreviewNonce] = useState(0);
 
   const loadForm = useCallback(async () => {
     if (!formId) {
@@ -1029,6 +1047,10 @@ function BuilderPane({ formId, forms }) {
       setCssCode(data.form.active_css_code || data.form.css_code || DEFAULT_CSS_CODE);
       setSchemaJson(data.form.active_schema || null);
       setJsCode(data.form.active_schema?.js_code || DEFAULT_JS_CODE);
+      const printable = data.form.active_schema?.printable || null;
+      setPrintHtml(printable?.html || '');
+      setPrintCss(printable?.css || '');
+      setPrintJs(printable?.js || '');
       setSchemaDirty(false);
       setHasChanges(false);
     } catch (err) {
@@ -1039,6 +1061,9 @@ function BuilderPane({ formId, forms }) {
       setCssCode(DEFAULT_CSS_CODE);
       setSchemaJson(null);
       setJsCode(DEFAULT_JS_CODE);
+      setPrintHtml('');
+      setPrintCss('');
+      setPrintJs('');
       setSchemaDirty(false);
     } finally {
       setLoading(false);
@@ -1060,7 +1085,12 @@ function BuilderPane({ formId, forms }) {
         schema_json: {
           ...(schemaJson || {}),
           runtime_mode: runtimeMode,
-          js_code: runtimeMode === 'html' ? jsCode : schemaJson?.js_code || ''
+          js_code: runtimeMode === 'html' ? jsCode : schemaJson?.js_code || '',
+          printable: {
+            html: printHtml || '',
+            css: printCss || '',
+            js: printJs || ''
+          }
         }
       });
       toast.success('Draft saved');
@@ -1105,7 +1135,12 @@ function BuilderPane({ formId, forms }) {
           schema_json: {
             ...(schemaJson || {}),
             runtime_mode: 'html',
-            js_code: jsCode
+            js_code: jsCode,
+            printable: {
+              html: printHtml || '',
+              css: printCss || '',
+              js: printJs || ''
+            }
           }
         });
         setHasChanges(false);
@@ -1159,11 +1194,23 @@ function BuilderPane({ formId, forms }) {
 
     try {
       setAiProcessing(true);
-      const result = await uploadPDFForConversion(form.id, file, pdfInstructions);
+      const result = pdfUseDocAI
+        ? await uploadPDFForDocAI(form.id, file, pdfInstructions)
+        : await uploadPDFForConversion(form.id, file, pdfInstructions);
+
       setReactCode(result.react_code);
       setCssCode(result.css_code || '');
+
+      // If DocAI returned a canonical schema, store it under schema_json.docai_schema
       if (result.schema) {
-        setSchemaJson(result.schema);
+        const nextSchema = pdfUseDocAI
+          ? {
+              ...(schemaJson || {}),
+              runtime_mode: 'html',
+              docai_schema: result.schema
+            }
+          : result.schema;
+        setSchemaJson(nextSchema);
         setSchemaDirty(true);
         if (result.schema?.js_code) setJsCode(result.schema.js_code);
       }
@@ -1185,11 +1232,34 @@ function BuilderPane({ formId, forms }) {
 
     try {
       setAiProcessing(true);
+      const getFieldNames = () => {
+        const names = new Set();
+        const docai = schemaJson?.docai_schema;
+        const docaiFields = Array.isArray(docai?.fields) ? docai.fields : [];
+        docaiFields.forEach((f) => f?.name && names.add(String(f.name)));
+        const schemaFields = Array.isArray(schemaJson?.fields) ? schemaJson.fields : [];
+        schemaFields.forEach((f) => f?.name && names.add(String(f.name)));
+        const html = String(reactCode || '');
+        const matches = html.matchAll(/\bname\s*=\s*["']([^"']+)["']/g);
+        for (const m of matches) {
+          if (m?.[1]) names.add(m[1]);
+        }
+        return Array.from(names).slice(0, 200);
+      };
+
+      const fieldNames = getFieldNames();
+      const instructionWithContext =
+        aiEditTarget === 'print'
+          ? `PRINT TEMPLATE EDIT.\nAvailable submission fields (use as {{field_name}} placeholders):\n${fieldNames.join(
+              ', '
+            )}\n\nInstruction:\n${aiInstruction}`
+          : aiInstruction;
+
       const result = await aiEditForm(form.id, {
-        instruction: aiInstruction,
-        current_code: reactCode,
-        current_css: cssCode,
-        current_js: jsCode
+        instruction: instructionWithContext,
+        current_code: aiEditTarget === 'print' ? printHtml : reactCode,
+        current_css: aiEditTarget === 'print' ? printCss : cssCode,
+        current_js: aiEditTarget === 'print' ? printJs : jsCode
       });
       setAiDiff({
         newCode: result.react_code,
@@ -1208,13 +1278,20 @@ function BuilderPane({ formId, forms }) {
 
   const applyAiChanges = () => {
     if (!aiDiff) return;
-    setReactCode(aiDiff.newCode);
-    setCssCode(aiDiff.newCss || '');
-    if (typeof aiDiff.newJs === 'string') setJsCode(aiDiff.newJs);
+    if (aiEditTarget === 'print') {
+      setPrintHtml(aiDiff.newCode);
+      setPrintCss(aiDiff.newCss || '');
+      if (typeof aiDiff.newJs === 'string') setPrintJs(aiDiff.newJs);
+    } else {
+      setReactCode(aiDiff.newCode);
+      setCssCode(aiDiff.newCss || '');
+      if (typeof aiDiff.newJs === 'string') setJsCode(aiDiff.newJs);
+    }
     setHasChanges(true);
     setAiDiff(null);
     setAiEditOpen(false);
     setAiInstruction('');
+    setAiEditTarget('form');
     toast.success('AI changes applied');
   };
 
@@ -1226,6 +1303,94 @@ function BuilderPane({ formId, forms }) {
   const refreshPreview = () => {
     setPreviewNonce((k) => k + 1);
   };
+
+  const refreshPrintPreview = () => {
+    setPrintPreviewNonce((k) => k + 1);
+  };
+
+  const onPrintDragStart = (e) => {
+    e.preventDefault();
+    printDragRef.current = { startX: e.clientX, startPct: printEditorSplitPct };
+    window.addEventListener('mousemove', onPrintDragMove);
+    window.addEventListener('mouseup', onPrintDragEnd);
+  };
+
+  const onPrintDragMove = (e) => {
+    if (!printDragRef.current) return;
+    const deltaX = e.clientX - printDragRef.current.startX;
+    const deltaPct = (deltaX / window.innerWidth) * 100;
+    const nextPct = Math.min(75, Math.max(25, printDragRef.current.startPct + deltaPct));
+    setPrintEditorSplitPct(nextPct);
+  };
+
+  const onPrintDragEnd = () => {
+    printDragRef.current = null;
+    window.removeEventListener('mousemove', onPrintDragMove);
+    window.removeEventListener('mouseup', onPrintDragEnd);
+  };
+
+  const getFieldNamesForPrint = useCallback(() => {
+    const names = new Set();
+    const docai = schemaJson?.docai_schema;
+    const docaiFields = Array.isArray(docai?.fields) ? docai.fields : [];
+    docaiFields.forEach((f) => f?.name && names.add(String(f.name)));
+    const schemaFields = Array.isArray(schemaJson?.fields) ? schemaJson.fields : [];
+    schemaFields.forEach((f) => f?.name && names.add(String(f.name)));
+    const html = String(reactCode || '');
+    const matches = html.matchAll(/\bname\s*=\s*["']([^"']+)["']/g);
+    for (const m of matches) {
+      if (m?.[1]) names.add(m[1]);
+    }
+    return Array.from(names).slice(0, 200);
+  }, [schemaJson, reactCode]);
+
+  const buildPrintablePreviewSrcDoc = useCallback(() => {
+    const sample = {};
+    for (const name of getFieldNamesForPrint()) {
+      sample[name] = name.replace(/_/g, ' ').toUpperCase();
+    }
+    const html = String(printHtml || '').trim() || `<div style="font-family: system-ui; padding: 16px;">No printable template yet.</div>`;
+    const css = String(printCss || '');
+    const js = String(printJs || '');
+
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>${css}</style>
+    <style>@media print { .no-print { display:none !important; } }</style>
+  </head>
+  <body>
+    <div class="no-print" style="padding:8px 12px; font-family: system-ui; font-size: 12px; color: #666;">
+      <button onclick="window.print()">Print</button>
+    </div>
+    ${html}
+    <script>
+      window.__ANCHOR_SUBMISSION__ = ${JSON.stringify(sample)};
+      (function(){
+        try {
+          var data = window.__ANCHOR_SUBMISSION__ || {};
+          function apply(str){
+            return String(str).replace(/\\{\\{\\s*([a-zA-Z0-9_\\-\\.]+)\\s*\\}\\}/g, function(_, key){
+              var v = data[key];
+              if (v === undefined || v === null) return '';
+              if (typeof v === 'object') return JSON.stringify(v);
+              return String(v);
+            });
+          }
+          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          var node;
+          while((node = walker.nextNode())){
+            if (node.nodeValue && node.nodeValue.indexOf('{{') !== -1) node.nodeValue = apply(node.nodeValue);
+          }
+        } catch(e){}
+      })();
+    </script>
+    <script>${js}</script>
+  </body>
+</html>`;
+  }, [printHtml, printCss, printJs, getFieldNamesForPrint]);
 
   // Resizable splitter handlers
   const onDragStart = (e) => {
@@ -1299,8 +1464,35 @@ function BuilderPane({ formId, forms }) {
           <Button variant="outlined" startIcon={<IconUpload size={16} />} onClick={() => setPdfUploadOpen(true)}>
             PDF to Form
           </Button>
-          <Button variant="outlined" startIcon={<IconSparkles size={16} />} onClick={() => setAiEditOpen(true)}>
+          <Button
+            variant="outlined"
+            startIcon={<IconPrinter size={16} />}
+            onClick={() => {
+              setPrintEditorOpen(true);
+              refreshPrintPreview();
+            }}
+          >
+            Edit Printable Template
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<IconSparkles size={16} />}
+            onClick={() => {
+              setAiEditTarget('form');
+              setAiEditOpen(true);
+            }}
+          >
             AI Assist
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<IconSparkles size={16} />}
+            onClick={() => {
+              setAiEditTarget('print');
+              setAiEditOpen(true);
+            }}
+          >
+            AI Assist (Print)
           </Button>
           {runtimeMode !== 'html' ? (
             <Button
@@ -1492,6 +1684,134 @@ function BuilderPane({ formId, forms }) {
         </Card>
       </Box>
 
+      {/* Printable Template Editor Pane */}
+      <Dialog open={printEditorOpen} onClose={() => setPrintEditorOpen(false)} fullScreen>
+        <DialogTitle sx={{ pr: 1 }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <IconPrinter size={20} />
+              <Typography variant="h6">Printable Template</Typography>
+              {hasChanges && <Chip label="Unsaved" size="small" color="error" variant="outlined" />}
+            </Stack>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button
+                variant="outlined"
+                startIcon={<IconSparkles size={16} />}
+                onClick={() => {
+                  setAiEditTarget('print');
+                  setAiEditOpen(true);
+                }}
+              >
+                AI Assist
+              </Button>
+              <Button variant="outlined" startIcon={<IconDeviceFloppy size={16} />} onClick={handleSave} disabled={saving}>
+                Save Draft
+              </Button>
+              <Button variant="contained" startIcon={<IconRocket size={16} />} onClick={handlePublish} disabled={publishing}>
+                Publish
+              </Button>
+              <IconButton onClick={() => setPrintEditorOpen(false)} title="Close">
+                <IconX size={20} />
+              </IconButton>
+            </Stack>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ display: 'flex', height: '100%', width: '100%' }}>
+            <Card
+              sx={{
+                flexBasis: `${printEditorSplitPct}%`,
+                minWidth: '25%',
+                maxWidth: '75%',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                borderRadius: 0
+              }}
+            >
+              <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+                <Tabs value={printTab} onChange={(_e, v) => setPrintTab(v)}>
+                  <Tab label="HTML" />
+                  <Tab label="CSS" />
+                  <Tab label="JS" />
+                </Tabs>
+              </Box>
+              <Box sx={{ flex: 1, overflow: 'hidden' }}>
+                {printTab === 0 ? (
+                  <Editor
+                    height="100%"
+                    language="html"
+                    value={printHtml}
+                    onChange={(value) => {
+                      setPrintHtml(value || '');
+                      setHasChanges(true);
+                    }}
+                    theme="vs-dark"
+                    options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
+                  />
+                ) : printTab === 1 ? (
+                  <Editor
+                    height="100%"
+                    language="css"
+                    value={printCss}
+                    onChange={(value) => {
+                      setPrintCss(value || '');
+                      setHasChanges(true);
+                    }}
+                    theme="vs-dark"
+                    options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
+                  />
+                ) : (
+                  <Editor
+                    height="100%"
+                    language="javascript"
+                    value={printJs}
+                    onChange={(value) => {
+                      setPrintJs(value || '');
+                      setHasChanges(true);
+                    }}
+                    theme="vs-dark"
+                    options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
+                  />
+                )}
+              </Box>
+            </Card>
+
+            <Box
+              sx={{ width: '6px', cursor: 'col-resize', bgcolor: 'divider', borderRadius: 1, flexShrink: 0 }}
+              onMouseDown={onPrintDragStart}
+              title="Drag to resize"
+            />
+
+            <Card sx={{ flex: 1, borderRadius: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ p: 1.5, borderBottom: 1, borderColor: 'divider' }}
+              >
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <IconEye size={18} />
+                  <Typography variant="subtitle2">Print Preview (sample data)</Typography>
+                </Stack>
+                <Button variant="outlined" size="small" onClick={refreshPrintPreview}>
+                  Refresh
+                </Button>
+              </Stack>
+              <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'grey.50' }}>
+                <iframe
+                  key={`print-preview-${printPreviewNonce}`}
+                  title="Printable template preview"
+                  sandbox="allow-scripts allow-same-origin"
+                  style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+                  srcDoc={buildPrintablePreviewSrcDoc()}
+                />
+              </Box>
+            </Card>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
       {/* Embed Code Section */}
       {form.status === 'published' && (
         <Card sx={{ p: 2 }}>
@@ -1560,9 +1880,11 @@ function BuilderPane({ formId, forms }) {
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <Alert severity="info">
-              Upload a PDF document (like an existing paper form) and AI will convert it into an editable form.
-            </Alert>
+            <Alert severity="info">Upload a PDF document and it will be converted into an editable digital form.</Alert>
+            <FormControlLabel
+              control={<Checkbox checked={pdfUseDocAI} onChange={(e) => setPdfUseDocAI(e.target.checked)} />}
+              label="Use Document AI (recommended)"
+            />
             <TextField
               label="Instructions (optional)"
               value={pdfInstructions}
@@ -1619,7 +1941,7 @@ function BuilderPane({ formId, forms }) {
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
             <IconSparkles size={20} />
-            <Typography>AI-Assisted Editing</Typography>
+            <Typography>AI-Assisted Editing{aiEditTarget === 'print' ? ' (Print Template)' : ''}</Typography>
           </Stack>
         </DialogTitle>
         <DialogContent>
@@ -1773,7 +2095,9 @@ function SubmissionsPane({ formId, forms }) {
   };
 
   const handlePrint = () => {
-    window.print();
+    if (!selectedSubmissionId) return;
+    const url = `/api/forms/${selectedFormId}/submissions/${selectedSubmissionId}/print?autoprint=1`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleBack = () => {

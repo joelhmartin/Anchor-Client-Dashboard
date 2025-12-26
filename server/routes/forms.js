@@ -9,6 +9,13 @@ import { query, getClient } from '../db.js';
 import { requireAuth, requireAnyRole } from '../middleware/auth.js';
 import { convertPDFToForm, editFormWithAI, generateSchemaFromCode, generateCodeDiff, getDefaultReactCode, getDefaultCssCode, getDefaultJsCode } from '../services/formAI.js';
 import { generateSubmissionPDF, getPDFArtifact } from '../services/formPDF.js';
+import {
+  renderPdfToPngBuffers,
+  processWithDocAIImage,
+  mergeDocAiPages,
+  normalizeDocAiToSchema,
+  renderDocAiSchemaToHtml
+} from '../services/docai.js';
 
 const router = Router();
 
@@ -455,6 +462,101 @@ router.get('/:id/submissions/:submissionId', requireAuth, requireFormsAccess, as
   }
 });
 
+// GET /api/forms/:id/submissions/:submissionId/print - Render printable HTML for a submission (admin-only)
+router.get('/:id/submissions/:submissionId/print', requireAuth, requireFormsAccess, async (req, res) => {
+  const { id, submissionId } = req.params;
+
+  try {
+    const { rows } = await query(
+      `
+      SELECT s.*, fv.schema_json
+      FROM form_submissions s
+      JOIN form_versions fv ON s.form_version_id = fv.id
+      WHERE s.id = $1 AND s.form_id = $2
+    `,
+      [submissionId, id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).send('Submission not found');
+    }
+
+    const sub = rows[0];
+    const schema = sub.schema_json || {};
+    const printable = schema.printable || {};
+
+    const payload = sub.non_phi_payload || {};
+    // intake forms store encrypted payload; decryption TBD (KMS). For now, show placeholder.
+    const printablePayload = sub.encrypted_payload ? { _note: 'PHI payload requires decryption (KMS)' } : payload;
+
+    const html = String(printable.html || '').trim();
+    const css = String(printable.css || '').trim();
+    const js = String(printable.js || '').trim();
+
+    if (!html) {
+      return res.status(400).send('Printable template not configured for this form version.');
+    }
+
+    const doc = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Print Submission</title>
+    <style>
+      ${css}
+      @media print { .no-print { display: none !important; } }
+    </style>
+  </head>
+  <body>
+    <div class="no-print" style="padding:8px 12px; font-family: system-ui; font-size: 12px; color: #666;">
+      <button onclick="window.print()">Print</button>
+    </div>
+    ${html}
+    <script>
+      window.__ANCHOR_SUBMISSION__ = ${JSON.stringify(printablePayload)};
+      // Minimal helper: replace {{field}} placeholders in text nodes/attributes.
+      (function(){
+        try {
+          var data = window.__ANCHOR_SUBMISSION__ || {};
+          function apply(str){
+            return String(str).replace(/\\{\\{\\s*([a-zA-Z0-9_\\-\\.]+)\\s*\\}\\}/g, function(_, key){
+              var v = data[key];
+              if (v === undefined || v === null) return '';
+              if (typeof v === 'object') return JSON.stringify(v);
+              return String(v);
+            });
+          }
+          document.querySelectorAll('[data-print-text]').forEach(function(el){
+            el.textContent = apply(el.textContent);
+          });
+          // generic: walk text nodes
+          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          var node;
+          while((node = walker.nextNode())){
+            if (node.nodeValue && node.nodeValue.indexOf('{{') !== -1) node.nodeValue = apply(node.nodeValue);
+          }
+        } catch(e){}
+      })();
+    </script>
+    <script>${js}</script>
+    <script>
+      // Auto-print if requested
+      if (new URLSearchParams(window.location.search).get('autoprint') === '1') {
+        setTimeout(function(){ window.print(); }, 250);
+      }
+    </script>
+  </body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(doc);
+  } catch (err) {
+    console.error('Error rendering printable submission:', err);
+    res.status(500).send('Failed to render printable submission');
+  }
+});
+
 // =====================
 // AUDIT LOGS
 // =====================
@@ -514,6 +616,87 @@ router.post('/:id/ai/upload-pdf', requireAuth, requireFormsAccess, upload.single
   } catch (err) {
     console.error('Error processing PDF:', err);
     res.status(500).json({ error: err?.message || 'Failed to process PDF' });
+  }
+});
+
+// POST /api/forms/:id/ai/docai/upload-pdf - Upload PDF for DocAI Extract→Schema→HTML
+router.post('/:id/ai/docai/upload-pdf', requireAuth, requireFormsAccess, upload.single('pdf'), async (req, res) => {
+  const { id } = req.params;
+  const instructions = String(req.body?.instructions || '').trim();
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded' });
+  }
+
+  // Intentionally rely on PROJECT_ID only (for consistent local + cloud behavior)
+  const projectId = process.env.PROJECT_ID;
+  const location = process.env.DOCUMENTAI_LOCATION || 'us';
+  const layoutProcessorId = process.env.DOCUMENTAI_LAYOUT_PROCESSOR_ID || 'ba0d8a19615c2dd6';
+  const formProcessorId = process.env.DOCUMENTAI_FORM_PROCESSOR_ID || 'acce8166c1b5d237';
+
+  try {
+    const pdfBuffer = await fs.readFile(req.file.path);
+
+    // Rasterize PDF pages to PNG buffers (high DPI for better OCR/field detection)
+    const pageImages = await renderPdfToPngBuffers(pdfBuffer, 220);
+    if (!pageImages.length) {
+      throw new Error('Failed to rasterize PDF pages for DocAI');
+    }
+
+    // Process each page image with the layout and form processors
+    const layoutPageResults = [];
+    const formPageResults = [];
+
+    for (const page of pageImages) {
+      const [layoutRes, formRes] = await Promise.all([
+        processWithDocAIImage({
+          imageBuffer: page.buffer,
+          projectId,
+          location,
+          processorId: layoutProcessorId,
+          mimeType: 'image/png'
+        }),
+        processWithDocAIImage({
+          imageBuffer: page.buffer,
+          projectId,
+          location,
+          processorId: formProcessorId,
+          mimeType: 'image/png'
+        })
+      ]);
+      layoutPageResults.push(layoutRes);
+      formPageResults.push(formRes);
+    }
+
+    const layoutResult = mergeDocAiPages(layoutPageResults);
+    const formResult = mergeDocAiPages(formPageResults);
+
+    // Persist raw outputs for debugging/reprocessing
+    const docaiDir = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads', 'forms', 'docai', id);
+    await fs.mkdir(docaiDir, { recursive: true });
+    const stamp = Date.now();
+    await Promise.all([
+      fs.writeFile(path.join(docaiDir, `${stamp}_layout.json`), JSON.stringify(layoutResult, null, 2)),
+      fs.writeFile(path.join(docaiDir, `${stamp}_form.json`), JSON.stringify(formResult, null, 2))
+    ]);
+
+    const schema = normalizeDocAiToSchema({ layoutResult, formResult, templateId: id, instructions });
+    const rendered = renderDocAiSchemaToHtml({ schema });
+
+    // Clean up temp file
+    await fs.unlink(req.file.path).catch(() => {});
+
+    res.json({
+      success: true,
+      schema,
+      react_code: rendered.html,
+      css_code: rendered.css,
+      js_code: rendered.js,
+      explanation: `Generated canonical docai schema (${Array.isArray(schema?.fields) ? schema.fields.length : 0} fields) + initial HTML render`
+    });
+  } catch (err) {
+    console.error('Error processing DocAI PDF:', err);
+    res.status(500).json({ error: err?.message || 'Failed to process PDF with DocAI' });
   }
 });
 

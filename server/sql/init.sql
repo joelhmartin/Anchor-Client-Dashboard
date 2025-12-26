@@ -22,6 +22,25 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   looker_url TEXT,
   client_package TEXT,
+  -- Client contact + routing info (client-provided)
+  call_tracking_main_number TEXT,
+  front_desk_emails TEXT,
+  office_admin_name TEXT,
+  office_admin_email TEXT,
+  office_admin_phone TEXT,
+  form_email_recipients TEXT,
+  -- Single-answer onboarding statuses (one per step)
+  website_access_status TEXT,
+  ga4_access_status TEXT,
+  google_ads_access_status TEXT,
+  meta_access_status TEXT,
+  website_forms_details_status TEXT,
+  -- Access steps enabled/disabled (admin-configured)
+  requires_website_access BOOLEAN NOT NULL DEFAULT TRUE,
+  requires_ga4_access BOOLEAN NOT NULL DEFAULT TRUE,
+  requires_google_ads_access BOOLEAN NOT NULL DEFAULT TRUE,
+  requires_meta_access BOOLEAN NOT NULL DEFAULT TRUE,
+  requires_forms_step BOOLEAN NOT NULL DEFAULT TRUE,
   -- Access & onboarding confirmations (client-provided)
   website_access_provided BOOLEAN NOT NULL DEFAULT FALSE,
   website_access_understood BOOLEAN NOT NULL DEFAULT FALSE,
@@ -397,6 +416,41 @@ CREATE TABLE IF NOT EXISTS task_board_automations (
 CREATE INDEX IF NOT EXISTS idx_task_board_automations_board ON task_board_automations(board_id);
 CREATE INDEX IF NOT EXISTS idx_task_board_automations_active ON task_board_automations(is_active);
 
+-- Global automations (apply across all boards)
+CREATE TABLE IF NOT EXISTS task_global_automations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  trigger_type TEXT NOT NULL,
+  trigger_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  action_type TEXT NOT NULL,
+  action_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_global_automations_active ON task_global_automations(is_active);
+
+-- Automation execution log (audit + dedupe for scheduled triggers)
+CREATE TABLE IF NOT EXISTS task_automation_runs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  scope TEXT NOT NULL, -- 'board' | 'global'
+  automation_id UUID NOT NULL,
+  board_id UUID REFERENCES task_boards(id) ON DELETE CASCADE,
+  item_id UUID REFERENCES task_items(id) ON DELETE CASCADE,
+  trigger_type TEXT NOT NULL,
+  trigger_fingerprint TEXT,
+  status TEXT NOT NULL DEFAULT 'success', -- success | error | skipped
+  error TEXT,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_automation_runs_automation ON task_automation_runs(scope, automation_id);
+CREATE INDEX IF NOT EXISTS idx_task_automation_runs_item ON task_automation_runs(item_id);
+CREATE INDEX IF NOT EXISTS idx_task_automation_runs_ran_at ON task_automation_runs(ran_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_automation_runs_dedupe
+  ON task_automation_runs(scope, automation_id, item_id, trigger_fingerprint)
+  WHERE trigger_fingerprint IS NOT NULL;
+
 -- AI summaries (cached)
 CREATE TABLE IF NOT EXISTS task_item_ai_summaries (
   item_id UUID PRIMARY KEY REFERENCES task_items(id) ON DELETE CASCADE,
@@ -471,6 +525,17 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ai_prompt TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS auto_star_enabled BOOLEAN DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS monthly_revenue_goal DECIMAL(10, 2);
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_tracking_main_number TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS front_desk_emails TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS office_admin_name TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS office_admin_email TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS office_admin_phone TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS form_email_recipients TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_status TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_status TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_status TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_status TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_type TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_subtype TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS client_package TEXT;
@@ -489,6 +554,9 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_uses_hipaa BO
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_connected_crm BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_custom BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_notes TEXT;
+-- Client onboarding draft (save & continue later)
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_json JSONB;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_saved_at TIMESTAMPTZ;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_workspace_id UUID REFERENCES task_workspaces(id) ON DELETE SET NULL;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS task_board_id UUID REFERENCES task_boards(id) ON DELETE SET NULL;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS board_prefix TEXT;

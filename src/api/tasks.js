@@ -148,6 +148,26 @@ export function setTaskAutomationActive(automationId, is_active) {
   return client.patch(`/tasks/automations/${automationId}`, { is_active }).then((res) => res.data.automation);
 }
 
+export function updateTaskAutomation(automationId, payload) {
+  return client.patch(`/tasks/automations/${automationId}`, payload).then((res) => res.data.automation);
+}
+
+export function fetchGlobalTaskAutomations() {
+  return client.get('/tasks/automations/global').then((res) => res.data.automations || []);
+}
+
+export function createGlobalTaskAutomation(payload) {
+  return client.post('/tasks/automations/global', payload).then((res) => res.data.automation);
+}
+
+export function fetchAutomationRuns(params = {}) {
+  return client.get('/tasks/automations/runs', { params }).then((res) => res.data.runs || []);
+}
+
+export function deleteTaskAutomation(automationId) {
+  return client.delete(`/tasks/automations/${automationId}`).then((res) => res.data);
+}
+
 export function fetchTaskBoardReport(boardId) {
   return client.get(`/tasks/boards/${boardId}/report`).then((res) => res.data.report);
 }

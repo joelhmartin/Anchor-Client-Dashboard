@@ -24,6 +24,10 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/.env.public ./.env.public
 
+# Email assets (used by outbound Mailgun template)
+RUN mkdir -p server/assets/email
+COPY --from=build /app/src/assets/images/ANCHOR__CORPS.png ./server/assets/email/ANCHOR__CORPS.png
+
 RUN mkdir -p uploads
 
 EXPOSE 4001

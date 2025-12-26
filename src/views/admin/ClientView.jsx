@@ -13,13 +13,15 @@ import Typography from '@mui/material/Typography';
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import { fetchClients } from 'api/clients';
+import { useToast } from 'contexts/ToastContext';
+import { getErrorMessage } from 'utils/errors';
 
 export default function ClientView() {
   const { user, initializing, setActingClient, clearActingClient, actingClientId } = useAuth();
   const [clients, setClients] = useState([]);
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const toast = useToast();
 
   const effectiveRole = user?.effective_role || user?.role;
   const isAllowed = effectiveRole === 'superadmin' || effectiveRole === 'admin';
@@ -29,7 +31,7 @@ export default function ClientView() {
     setLoading(true);
     fetchClients()
       .then(setClients)
-      .catch((err) => setError(err.message || 'Unable to load clients'))
+      .catch((err) => toast.error(getErrorMessage(err, 'Unable to load clients')))
       .finally(() => setLoading(false));
   }, [isAllowed]);
 
@@ -39,7 +41,6 @@ export default function ClientView() {
   return (
     <MainCard title="Jump to Client View">
       <Stack spacing={2}>
-        {error && <Alert severity="error">{error}</Alert>}
         <Stack spacing={1}>
           <Typography variant="body2" color="text.secondary">
             Select a client to switch into their view without changing your login session.
@@ -53,23 +54,40 @@ export default function ClientView() {
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
           <List disablePadding>
             {clients.map((c) => (
+              (() => {
+                const isClient = (c.role || 'client') === 'client';
+                const onboardingComplete = Boolean(c.onboarding_completed_at);
+                const canJump = !isClient || onboardingComplete;
+                const secondary = `${c.email || ''}${
+                  isClient ? (onboardingComplete ? ' • Onboarding: Complete' : ' • Onboarding: Pending') : ''
+                }`;
+                return (
               <ListItem
                 key={c.id}
                 secondaryAction={
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => {
-                      setActingClient(c.id);
-                      navigate('/portal');
-                    }}
-                  >
-                    Jump to View
-                  </Button>
+                  canJump ? (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => {
+                        if (isClient && !onboardingComplete) return;
+                        setActingClient(c.id);
+                        navigate('/portal');
+                      }}
+                    >
+                      Jump to View
+                    </Button>
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      Onboarding pending
+                    </Typography>
+                  )
                 }
               >
-                <ListItemText primary={`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email} secondary={c.email} />
+                <ListItemText primary={`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email} secondary={secondary} />
               </ListItem>
+                );
+              })()
             ))}
             {!clients.length && (
               <ListItem>

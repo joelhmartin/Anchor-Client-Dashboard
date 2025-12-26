@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Avatar,
   Box,
   Button,
@@ -32,6 +31,8 @@ import {
   IconUserQuestion
 } from '@tabler/icons-react';
 import { fetchAiDailyOverview } from 'api/tasks';
+import { useToast } from 'contexts/ToastContext';
+import { getErrorMessage } from 'utils/errors';
 
 function getGreetingIcon() {
   const hour = new Date().getHours();
@@ -57,6 +58,8 @@ export default function HomePane() {
   const [error, setError] = useState('');
   const [overview, setOverview] = useState(null);
   const [parsedSummary, setParsedSummary] = useState(null);
+  const toast = useToast();
+  const lastToastRef = useRef('');
 
   const loadOverview = async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -77,7 +80,12 @@ export default function HomePane() {
         }
       }
     } catch (err) {
-      setError(err.message || 'Unable to load daily overview');
+      const msg = getErrorMessage(err, 'Unable to load daily overview');
+      setError(msg);
+      if (lastToastRef.current !== msg) {
+        lastToastRef.current = msg;
+        toast.error(msg);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -110,9 +118,9 @@ export default function HomePane() {
   if (error && !overview) {
     return (
       <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 3, minHeight: 420 }}>
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
+        <Typography variant="caption" color="error" sx={{ display: 'block', mb: 2 }}>
+          Unable to load daily overview.
+        </Typography>
         <Button variant="outlined" onClick={() => loadOverview()} startIcon={<IconRefresh size={18} />}>
           Try Again
         </Button>
