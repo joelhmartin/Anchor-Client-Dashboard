@@ -17,7 +17,13 @@ import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
 export default function ProfileSettings() {
   const { user, refreshUser } = useAuth();
   const [profile, setProfile] = useState(null);
-  const [profileForm, setProfileForm] = useState({ display_name: '', email: '', password: '', password_confirm: '', monthly_revenue_goal: '' });
+  const [profileForm, setProfileForm] = useState({
+    display_name: '',
+    email: '',
+    current_password: '',
+    new_password: '',
+    new_password_confirm: ''
+  });
   const [profileLoading, setProfileLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -29,9 +35,9 @@ export default function ProfileSettings() {
         setProfileForm({
           display_name: [data.first_name, data.last_name].filter(Boolean).join(' ') || data.email,
           email: data.email,
-          password: '',
-          password_confirm: '',
-          monthly_revenue_goal: data.monthly_revenue_goal || ''
+          current_password: '',
+          new_password: '',
+          new_password_confirm: ''
         });
       })
       .catch((err) => setMessage({ type: 'error', text: err.message || 'Unable to load profile' }))
@@ -47,21 +53,31 @@ export default function ProfileSettings() {
       setMessage({ type: 'error', text: 'Display name and email are required' });
       return;
     }
-    if (profileForm.password !== profileForm.password_confirm) {
-      setMessage({ type: 'error', text: 'Passwords do not match' });
-      return;
+    const wantsPasswordChange = Boolean(profileForm.new_password || profileForm.new_password_confirm || profileForm.current_password);
+    if (wantsPasswordChange) {
+      if (!profileForm.current_password) {
+        setMessage({ type: 'error', text: 'Current password is required to set a new password' });
+        return;
+      }
+      if (!profileForm.new_password) {
+        setMessage({ type: 'error', text: 'New password is required' });
+        return;
+      }
+      if (profileForm.new_password !== profileForm.new_password_confirm) {
+        setMessage({ type: 'error', text: 'New passwords do not match' });
+        return;
+      }
     }
     setProfileLoading(true);
     try {
       const payload = {
         first_name: profileForm.display_name.split(' ')[0] || profileForm.display_name,
         last_name: profileForm.display_name.split(' ').slice(1).join(' '),
-        email: profileForm.email,
-        monthly_revenue_goal: profileForm.monthly_revenue_goal ? parseFloat(profileForm.monthly_revenue_goal) : null
+        email: profileForm.email
       };
-      if (profileForm.password) {
-        payload.password = profileForm.password;
-        payload.new_password = profileForm.password;
+      if (wantsPasswordChange) {
+        payload.password = profileForm.current_password;
+        payload.new_password = profileForm.new_password;
       }
       const updated = await updateProfile(payload);
       setProfile(updated);
@@ -70,7 +86,7 @@ export default function ProfileSettings() {
       setMessage({ type: 'error', text: err.message || 'Unable to save profile' });
     } finally {
       setProfileLoading(false);
-      setProfileForm((prev) => ({ ...prev, password: '', password_confirm: '' }));
+      setProfileForm((prev) => ({ ...prev, current_password: '', new_password: '', new_password_confirm: '' }));
     }
   };
 
@@ -117,21 +133,28 @@ export default function ProfileSettings() {
                 onChange={(e) => setProfileForm((prev) => ({ ...prev, email: e.target.value }))}
               />
               <TextField
-                label="New Password"
+                label="Current Password"
                 type="password"
                 fullWidth
-                value={profileForm.password}
-                onChange={(e) => setProfileForm((prev) => ({ ...prev, password: e.target.value }))}
+                value={profileForm.current_password}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, current_password: e.target.value }))}
                 InputProps={{
-                  endAdornment: <InputAdornment position="end">Optional</InputAdornment>
+                  endAdornment: <InputAdornment position="end">Required to change password</InputAdornment>
                 }}
               />
               <TextField
-                label="Confirm Password"
+                label="New Password"
                 type="password"
                 fullWidth
-                value={profileForm.password_confirm}
-                onChange={(e) => setProfileForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
+                value={profileForm.new_password}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, new_password: e.target.value }))}
+              />
+              <TextField
+                label="Confirm New Password"
+                type="password"
+                fullWidth
+                value={profileForm.new_password_confirm}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, new_password_confirm: e.target.value }))}
               />
             </Stack>
 

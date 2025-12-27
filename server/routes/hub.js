@@ -586,6 +586,47 @@ You can review it inside the Anchor admin hub.
   }
 }
 
+function serializeHubProfileUser(row, { includeClientProfile }) {
+  if (!row) return null;
+
+  const user = {
+    id: row.id,
+    first_name: row.first_name ?? null,
+    last_name: row.last_name ?? null,
+    email: row.email ?? null,
+    role: row.role ?? null,
+    avatar_url: row.avatar_url ?? null,
+    created_at: row.created_at ?? null,
+    updated_at: row.updated_at ?? null
+  };
+
+  // Only expose client/onboarding-specific fields for client accounts.
+  if (includeClientProfile) {
+    user.monthly_revenue_goal = row.monthly_revenue_goal ?? null;
+    user.client_type = row.client_type ?? null;
+    user.client_subtype = row.client_subtype ?? null;
+    user.client_package = row.client_package ?? null;
+
+    user.website_access_provided = row.website_access_provided ?? false;
+    user.website_access_understood = row.website_access_understood ?? false;
+    user.ga4_access_provided = row.ga4_access_provided ?? false;
+    user.ga4_access_understood = row.ga4_access_understood ?? false;
+    user.google_ads_access_provided = row.google_ads_access_provided ?? false;
+    user.google_ads_access_understood = row.google_ads_access_understood ?? false;
+    user.meta_access_provided = row.meta_access_provided ?? false;
+    user.meta_access_understood = row.meta_access_understood ?? false;
+    user.website_forms_details_provided = row.website_forms_details_provided ?? false;
+    user.website_forms_details_understood = row.website_forms_details_understood ?? false;
+    user.website_forms_uses_third_party = row.website_forms_uses_third_party ?? false;
+    user.website_forms_uses_hipaa = row.website_forms_uses_hipaa ?? false;
+    user.website_forms_connected_crm = row.website_forms_connected_crm ?? false;
+    user.website_forms_custom = row.website_forms_custom ?? false;
+    user.website_forms_notes = row.website_forms_notes ?? '';
+  }
+
+  return user;
+}
+
 router.get('/profile', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { rows } = await query(
@@ -602,7 +643,12 @@ router.get('/profile', async (req, res) => {
      WHERE u.id = $1`,
     [userId]
   );
-  res.json({ user: rows[0] || req.user });
+  const row = rows[0] || null;
+  const fallback = req.user || null;
+  const portalRole = row?.role || (fallback && (req.portalUserId === req.user.id ? req.user.role : null)) || null;
+  const includeClientProfile = portalRole === 'client';
+
+  res.json({ user: serializeHubProfileUser(row || fallback, { includeClientProfile }) });
 });
 
 router.put('/profile', async (req, res) => {
@@ -663,6 +709,13 @@ router.put('/profile', async (req, res) => {
     website_forms_connected_crm !== undefined ||
     website_forms_custom !== undefined ||
     website_forms_notes !== undefined;
+
+  // Never allow staff accounts (superadmin/admin/team) to view/update client-only profile fields on themselves.
+  // Client profile fields are only valid for actual client accounts (or when acting as a client).
+  const isPortalClient = Boolean(req.actingClient) || req.user.role === 'client';
+  if (hasClientProfileUpdate && !isPortalClient) {
+    return res.status(403).json({ message: 'Client profile fields can only be updated for client accounts.' });
+  }
 
   if (!updates.length && !new_password && !hasClientProfileUpdate) {
     return res.status(400).json({ message: 'No changes provided' });
@@ -761,7 +814,9 @@ router.put('/profile', async (req, res) => {
        WHERE u.id = $1`,
       [userId]
     );
-    res.json({ user: refreshed.rows[0] });
+    const row = refreshed.rows[0] || null;
+    const includeClientProfile = (row?.role || (isPortalClient ? 'client' : null)) === 'client';
+    res.json({ user: serializeHubProfileUser(row, { includeClientProfile }) });
   } catch (err) {
     console.error('[profile]', err);
     res.status(500).json({ message: 'Unable to update profile' });
@@ -1269,7 +1324,10 @@ router.post('/clients', isAdminOrEditor, async (req, res) => {
     const [first, ...rest] = (name || '').trim().split(' ').filter(Boolean);
     const last = rest.join(' ');
     if (existing.rows.length) {
-      return res.status(409).json({ message: 'Email already in use' });
+      return res.status(409).json({
+        message: 'Email already in use',
+        existing_user_id: existing.rows[0].id
+      });
     } else {
       const password = uuidv4();
       const hash = await bcrypt.hash(password, 12);

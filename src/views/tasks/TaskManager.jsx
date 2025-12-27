@@ -193,10 +193,10 @@ export default function TaskManager() {
   const [automationAction, setAutomationAction] = useState('notify_admins');
   const [automationTitle, setAutomationTitle] = useState('Task needs attention');
   const [automationBody, setAutomationBody] = useState('An item was moved to Needs Attention.');
-  const [globalAutomations, setGlobalAutomations] = useState([]);
-  const [globalAutomationsLoading, setGlobalAutomationsLoading] = useState(false);
   const [automationRuns, setAutomationRuns] = useState([]);
   const [automationRunsLoading, setAutomationRunsLoading] = useState(false);
+  const [editingAutomation, setEditingAutomation] = useState(null);
+  const [editDraft, setEditDraft] = useState({ name: '', trigger_config: {}, action_config: {} });
 
   // Status labels editor
   const [statusLabelsDialogOpen, setStatusLabelsDialogOpen] = useState(false);
@@ -498,18 +498,6 @@ export default function TaskManager() {
       setAutomations([]);
     } finally {
       setAutomationsLoading(false);
-    }
-  };
-
-  const loadGlobalAutomations = async () => {
-    setGlobalAutomationsLoading(true);
-    try {
-      const rows = await fetchGlobalTaskAutomations();
-      setGlobalAutomations(rows);
-    } catch (_err) {
-      setGlobalAutomations([]);
-    } finally {
-      setGlobalAutomationsLoading(false);
     }
   };
 
@@ -1530,7 +1518,6 @@ export default function TaskManager() {
               if (!activeBoardId) return;
               setAutomationsDrawerOpen(true);
               loadAutomations(activeBoardId);
-              loadGlobalAutomations();
               loadAutomationRuns({ scope: 'board', board_id: activeBoardId });
             }}
             onOpenBoardMenu={() => {}}
@@ -1602,6 +1589,22 @@ export default function TaskManager() {
                         <Button size="small" variant="outlined" onClick={() => handleToggleAutomation(r)}>
                           {r.is_active ? 'Disable' : 'Enable'}
                         </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        setEditingAutomation(r);
+                        setEditDraft({
+                          name: r.name || '',
+                          trigger_type: r.trigger_type,
+                          action_type: r.action_type,
+                          trigger_config: r.trigger_config || {},
+                          action_config: r.action_config || {}
+                        });
+                      }}
+                    >
+                      Edit
+                    </Button>
                         <Button
                           size="small"
                           color="error"
@@ -1627,65 +1630,6 @@ export default function TaskManager() {
               <Button variant="outlined" onClick={handleAddNeedsAttentionAutomation} disabled={creatingAutomation || !activeBoardId}>
                 {creatingAutomation ? 'Adding…' : 'Add “Needs Attention” template'}
               </Button>
-
-              <Divider />
-
-              <Typography variant="subtitle2">Global automations (overview)</Typography>
-              {globalAutomationsLoading ? (
-                <CircularProgress size={18} />
-              ) : (
-                <Stack spacing={0.75}>
-                  {!globalAutomations.length && (
-                    <Typography variant="body2" color="text.secondary">
-                      No global automations.
-                    </Typography>
-                  )}
-                  {globalAutomations.slice(0, 6).map((r) => (
-                    <Box
-                      key={r.id}
-                      sx={{
-                        p: 1,
-                        border: '1px solid',
-                        borderColor: 'divider',
-                        borderRadius: 2,
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center'
-                      }}
-                    >
-                      <Stack sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.name}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
-                        </Typography>
-                      </Stack>
-                      <Stack direction="row" spacing={0.5} alignItems="center">
-                        <Button size="small" variant="outlined" onClick={() => handleToggleGlobalAutomation(r)}>
-                          {r.is_active ? 'Disable' : 'Enable'}
-                        </Button>
-                        <Button
-                          size="small"
-                          color="error"
-                          variant="outlined"
-                          onClick={async () => {
-                            if (!window.confirm('Delete this automation?')) return;
-                            try {
-                              await deleteTaskAutomation(r.id);
-                              setGlobalAutomations((prev) => prev.filter((x) => x.id !== r.id));
-                            } catch (err) {
-                              setError(err.message || 'Unable to delete automation');
-                            }
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </Stack>
-                    </Box>
-                  ))}
-                </Stack>
-              )}
 
               <Divider />
 
@@ -1733,6 +1677,129 @@ export default function TaskManager() {
           </Box>
         </Drawer>
       </Stack>
+
+      <Dialog open={Boolean(editingAutomation)} onClose={() => setEditingAutomation(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Edit automation</DialogTitle>
+        <DialogContent sx={{ pt: 1.5 }}>
+          <Stack spacing={1}>
+            <TextField
+              size="small"
+              label="Name"
+              value={editDraft.name}
+              onChange={(e) => setEditDraft((p) => ({ ...p, name: e.target.value }))}
+            />
+            <TextField size="small" label="Trigger" value={editingAutomation?.trigger_type || ''} InputProps={{ readOnly: true }} />
+            <TextField size="small" label="Action" value={editingAutomation?.action_type || ''} InputProps={{ readOnly: true }} />
+
+            {editingAutomation?.trigger_type === 'status_change' && (
+              <Select
+                size="small"
+                value={editDraft.trigger_config?.to_status || ''}
+                onChange={(e) =>
+                  setEditDraft((p) => ({ ...p, trigger_config: { ...(p.trigger_config || {}), to_status: e.target.value } }))
+                }
+              >
+                <MenuItem value="">Any status</MenuItem>
+                {statusLabels.map((sl) => (
+                  <MenuItem key={sl.id} value={sl.label}>
+                    {sl.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            )}
+
+            {editingAutomation?.trigger_type === 'due_date_relative' && (
+              <TextField
+                size="small"
+                type="number"
+                label="days_from_due"
+                helperText="Example: -10 = 10 days before due, 0 = on due date, 1 = after"
+                value={editDraft.trigger_config?.days_from_due ?? 0}
+                onChange={(e) =>
+                  setEditDraft((p) => ({ ...p, trigger_config: { ...(p.trigger_config || {}), days_from_due: Number(e.target.value) } }))
+                }
+              />
+            )}
+
+            {editingAutomation?.action_type === 'set_status' && (
+              <Select
+                size="small"
+                value={editDraft.action_config?.status || statusLabels[0]?.label || 'To Do'}
+                onChange={(e) => setEditDraft((p) => ({ ...p, action_config: { ...(p.action_config || {}), status: e.target.value } }))}
+              >
+                {statusLabels.map((sl) => (
+                  <MenuItem key={sl.id} value={sl.label}>
+                    {sl.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            )}
+
+            {editingAutomation?.action_type === 'set_needs_attention' && (
+              <Select
+                size="small"
+                value={String(Boolean(editDraft.action_config?.value))}
+                onChange={(e) =>
+                  setEditDraft((p) => ({ ...p, action_config: { ...(p.action_config || {}), value: e.target.value === 'true' } }))
+                }
+              >
+                <MenuItem value="true">Set true</MenuItem>
+                <MenuItem value="false">Set false</MenuItem>
+              </Select>
+            )}
+
+            {editingAutomation?.action_type === 'add_update' && (
+              <TextField
+                size="small"
+                label="Update content"
+                value={editDraft.action_config?.content || ''}
+                onChange={(e) => setEditDraft((p) => ({ ...p, action_config: { ...(p.action_config || {}), content: e.target.value } }))}
+              />
+            )}
+
+            {(editingAutomation?.action_type === 'notify_admins' || editingAutomation?.action_type === 'notify_assignees') && (
+              <>
+                <TextField
+                  size="small"
+                  label="Title"
+                  value={editDraft.action_config?.title || ''}
+                  onChange={(e) => setEditDraft((p) => ({ ...p, action_config: { ...(p.action_config || {}), title: e.target.value } }))}
+                />
+                <TextField
+                  size="small"
+                  label="Body"
+                  value={editDraft.action_config?.body || ''}
+                  onChange={(e) => setEditDraft((p) => ({ ...p, action_config: { ...(p.action_config || {}), body: e.target.value } }))}
+                />
+              </>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditingAutomation(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={async () => {
+              if (!editingAutomation?.id) return;
+              setError('');
+              try {
+                const payload = {
+                  name: editDraft.name || editingAutomation.name,
+                  trigger_config: editDraft.trigger_config,
+                  action_config: editDraft.action_config
+                };
+                const updated = await updateTaskAutomation(editingAutomation.id, payload);
+                setAutomations((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+                setEditingAutomation(null);
+              } catch (err) {
+                setError(err.message || 'Unable to save automation');
+              }
+            }}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Drawer anchor="right" open={itemDrawerOpen} onClose={closeItemDrawer} PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}>
         <Box sx={{ p: 2 }}>

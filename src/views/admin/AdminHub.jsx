@@ -413,6 +413,25 @@ export default function AdminHub() {
         }
       }
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 409) {
+        const normalizedEmail = String(newClient?.email || '')
+          .trim()
+          .toLowerCase();
+        const existingIdFromApi = err?.response?.data?.existing_user_id || null;
+        const existingClient =
+          clients.find((c) => c.id === existingIdFromApi) ||
+          clients.find((c) => String(c.email || '').trim().toLowerCase() === normalizedEmail) ||
+          null;
+
+        if (existingClient?.id) {
+          setSuccess('Client already exists — opening onboarding wizard');
+          setNewClient({ email: '', name: '', role: 'client' });
+          await startOnboardingFlow(existingClient.id);
+          return;
+        }
+      }
+
       reportError(err, 'Unable to save client');
     } finally {
       setSavingNew(false);
@@ -578,7 +597,8 @@ export default function AdminHub() {
       }
       saved = true;
     } catch (err) {
-      setError(err.message || 'Unable to update client');
+      // In the wizard we often save with `silent: true`; still show an actionable error.
+      reportError(err, 'Unable to update client');
     } finally {
       setSavingEdit(false);
     }
@@ -1150,7 +1170,7 @@ export default function AdminHub() {
   return (
     <MainCard title="Client Hub">
       <Stack spacing={3}>
-        {/* Errors are toast-only */}
+        {error && <Alert severity="error">{error}</Alert>}
         {success && <Alert severity="success">{success}</Alert>}
 
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
