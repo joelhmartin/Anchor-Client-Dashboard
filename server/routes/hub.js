@@ -1366,214 +1366,222 @@ router.get('/clients/:id', isAdminOrEditor, async (req, res) => {
 });
 
 router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
-  const clientId = req.params.id;
-  const {
-    display_name,
-    user_email,
-    role,
-    client_type,
-    client_subtype,
-    client_package,
-    looker_url,
-    monday_board_id,
-    monday_group_id,
-    monday_active_group_id,
-    monday_completed_group_id,
-    client_identifier_value,
-    task_workspace_id,
-    board_prefix,
-    account_manager_person_id,
-    ai_prompt,
-    ctm_account_number,
-    ctm_api_key,
-    ctm_api_secret,
-    auto_star_enabled,
-    requires_website_access,
-    requires_ga4_access,
-    requires_google_ads_access,
-    requires_meta_access,
-    requires_forms_step,
-    website_access_provided,
-    website_access_understood,
-    ga4_access_provided,
-    ga4_access_understood,
-    google_ads_access_provided,
-    google_ads_access_understood,
-    meta_access_provided,
-    meta_access_understood,
-    website_forms_details_provided,
-    website_forms_details_understood,
-    website_forms_uses_third_party,
-    website_forms_uses_hipaa,
-    website_forms_connected_crm,
-    website_forms_custom,
-    website_forms_notes
-  } = req.body;
-  if (display_name) {
-    const parts = display_name.trim().split(' ').filter(Boolean);
-    const first = parts.shift() || '';
-    const last = parts.join(' ');
-    await query('UPDATE users SET first_name=$1, last_name=$2 WHERE id=$3', [first || display_name.trim(), last, clientId]);
-  }
-  if (user_email) {
-    await query('UPDATE users SET email=$1 WHERE id=$2', [user_email, clientId]);
-  }
-  if (role && (req.user.effective_role || req.user.role) === 'superadmin') {
-    const nextRole = ['client', 'editor', 'admin', 'team'].includes(role) ? role : 'client';
-    await query('UPDATE users SET role=$1 WHERE id=$2', [nextRole, clientId]);
-  }
-  const exists = await query('SELECT user_id FROM client_profiles WHERE user_id = $1', [clientId]);
-  const normalizedPackage = CLIENT_PACKAGE_OPTIONS.includes(client_package) ? client_package : null;
-  const params = [
-    looker_url || null,
-    monday_board_id || null,
-    monday_group_id || null,
-    monday_active_group_id || null,
-    monday_completed_group_id || null,
-    client_identifier_value || null,
-    task_workspace_id || null,
-    board_prefix || null,
-    account_manager_person_id || null,
-    ai_prompt || null,
-    ctm_account_number || null,
-    ctm_api_key || null,
-    ctm_api_secret || null,
-    auto_star_enabled !== undefined ? auto_star_enabled : false,
-    client_type || null,
-    client_subtype || null,
-    normalizedPackage,
-    requires_website_access === undefined ? null : Boolean(requires_website_access),
-    requires_ga4_access === undefined ? null : Boolean(requires_ga4_access),
-    requires_google_ads_access === undefined ? null : Boolean(requires_google_ads_access),
-    requires_meta_access === undefined ? null : Boolean(requires_meta_access),
-    requires_forms_step === undefined ? null : Boolean(requires_forms_step),
-    website_access_provided === undefined ? null : Boolean(website_access_provided),
-    website_access_understood === undefined ? null : Boolean(website_access_understood),
-    ga4_access_provided === undefined ? null : Boolean(ga4_access_provided),
-    ga4_access_understood === undefined ? null : Boolean(ga4_access_understood),
-    google_ads_access_provided === undefined ? null : Boolean(google_ads_access_provided),
-    google_ads_access_understood === undefined ? null : Boolean(google_ads_access_understood),
-    meta_access_provided === undefined ? null : Boolean(meta_access_provided),
-    meta_access_understood === undefined ? null : Boolean(meta_access_understood),
-    website_forms_details_provided === undefined ? null : Boolean(website_forms_details_provided),
-    website_forms_details_understood === undefined ? null : Boolean(website_forms_details_understood),
-    website_forms_uses_third_party === undefined ? null : Boolean(website_forms_uses_third_party),
-    website_forms_uses_hipaa === undefined ? null : Boolean(website_forms_uses_hipaa),
-    website_forms_connected_crm === undefined ? null : Boolean(website_forms_connected_crm),
-    website_forms_custom === undefined ? null : Boolean(website_forms_custom),
-    website_forms_notes === undefined ? null : String(website_forms_notes || ''),
-    clientId
-  ];
-  if (exists.rows.length) {
-    await query(
-      `UPDATE client_profiles
-         SET looker_url=$1,monday_board_id=$2,monday_group_id=$3,monday_active_group_id=$4,monday_completed_group_id=$5,
-             client_identifier_value=$6, task_workspace_id=$7, board_prefix=$8,
-             account_manager_person_id=$9, ai_prompt=$10, ctm_account_number=$11, ctm_api_key=$12, ctm_api_secret=$13,
-             auto_star_enabled=$14, client_type=$15, client_subtype=$16, client_package=$17,
-             requires_website_access=COALESCE($18, requires_website_access),
-             requires_ga4_access=COALESCE($19, requires_ga4_access),
-             requires_google_ads_access=COALESCE($20, requires_google_ads_access),
-             requires_meta_access=COALESCE($21, requires_meta_access),
-             requires_forms_step=COALESCE($22, requires_forms_step),
-             website_access_provided=COALESCE($23, website_access_provided),
-             website_access_understood=COALESCE($24, website_access_understood),
-             ga4_access_provided=COALESCE($25, ga4_access_provided),
-             ga4_access_understood=COALESCE($26, ga4_access_understood),
-             google_ads_access_provided=COALESCE($27, google_ads_access_provided),
-             google_ads_access_understood=COALESCE($28, google_ads_access_understood),
-             meta_access_provided=COALESCE($29, meta_access_provided),
-             meta_access_understood=COALESCE($30, meta_access_understood),
-             website_forms_details_provided=COALESCE($31, website_forms_details_provided),
-             website_forms_details_understood=COALESCE($32, website_forms_details_understood),
-             website_forms_uses_third_party=COALESCE($33, website_forms_uses_third_party),
-             website_forms_uses_hipaa=COALESCE($34, website_forms_uses_hipaa),
-             website_forms_connected_crm=COALESCE($35, website_forms_connected_crm),
-             website_forms_custom=COALESCE($36, website_forms_custom),
-             website_forms_notes=COALESCE($37, website_forms_notes),
-             updated_at=NOW()
-       WHERE user_id=$38`,
-      params
-    );
-  } else {
-    await query(
-      `INSERT INTO client_profiles (
-         looker_url,monday_board_id,monday_group_id,monday_active_group_id,monday_completed_group_id,
-         client_identifier_value,task_workspace_id,board_prefix,
-         account_manager_person_id,ai_prompt,ctm_account_number,ctm_api_key,ctm_api_secret,auto_star_enabled,
-         client_type,client_subtype,client_package,
-         requires_website_access,requires_ga4_access,requires_google_ads_access,requires_meta_access,requires_forms_step,
-         website_access_provided,website_access_understood,
-         ga4_access_provided,ga4_access_understood,
-         google_ads_access_provided,google_ads_access_understood,
-         meta_access_provided,meta_access_understood,
-         website_forms_details_provided,website_forms_details_understood,
-         website_forms_uses_third_party,website_forms_uses_hipaa,website_forms_connected_crm,website_forms_custom,
-         website_forms_notes,
-         user_id
-       )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)`,
-      params
-    );
-  }
-
-  // If this is a client account and we have a task workspace + identifier, provision (or update) their internal task board.
   try {
-    const { rows: userRoleRows } = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [clientId]);
-    const targetRole = userRoleRows[0]?.role;
-    if (targetRole === 'client' && task_workspace_id && client_identifier_value) {
-      const name = String(client_identifier_value || '').trim();
-      const prefix = String(board_prefix || '').trim();
-
-      const { rows: wsRows } = await query('SELECT id FROM task_workspaces WHERE id = $1 LIMIT 1', [task_workspace_id]);
-      if (!wsRows.length) {
-        return res.status(400).json({ message: 'Selected task workspace is invalid' });
-      }
-
-      const { rows: profileRows } = await query(
-        'SELECT task_board_id FROM client_profiles WHERE user_id = $1 LIMIT 1',
-        [clientId]
+    const clientId = req.params.id;
+    const {
+      display_name,
+      user_email,
+      role,
+      client_type,
+      client_subtype,
+      client_package,
+      looker_url,
+      monday_board_id,
+      monday_group_id,
+      monday_active_group_id,
+      monday_completed_group_id,
+      client_identifier_value,
+      task_workspace_id,
+      board_prefix,
+      account_manager_person_id,
+      ai_prompt,
+      ctm_account_number,
+      ctm_api_key,
+      ctm_api_secret,
+      auto_star_enabled,
+      requires_website_access,
+      requires_ga4_access,
+      requires_google_ads_access,
+      requires_meta_access,
+      requires_forms_step,
+      website_access_provided,
+      website_access_understood,
+      ga4_access_provided,
+      ga4_access_understood,
+      google_ads_access_provided,
+      google_ads_access_understood,
+      meta_access_provided,
+      meta_access_understood,
+      website_forms_details_provided,
+      website_forms_details_understood,
+      website_forms_uses_third_party,
+      website_forms_uses_hipaa,
+      website_forms_connected_crm,
+      website_forms_custom,
+      website_forms_notes
+    } = req.body;
+    if (display_name) {
+      const parts = display_name.trim().split(' ').filter(Boolean);
+      const first = parts.shift() || '';
+      const last = parts.join(' ');
+      await query('UPDATE users SET first_name=$1, last_name=$2 WHERE id=$3', [first || display_name.trim(), last, clientId]);
+    }
+    if (user_email) {
+      await query('UPDATE users SET email=$1 WHERE id=$2', [user_email, clientId]);
+    }
+    if (role && (req.user.effective_role || req.user.role) === 'superadmin') {
+      const nextRole = ['client', 'editor', 'admin', 'team'].includes(role) ? role : 'client';
+      await query('UPDATE users SET role=$1 WHERE id=$2', [nextRole, clientId]);
+    }
+    const exists = await query('SELECT user_id FROM client_profiles WHERE user_id = $1', [clientId]);
+    const normalizedPackage = CLIENT_PACKAGE_OPTIONS.includes(client_package) ? client_package : null;
+    const params = [
+      looker_url || null,
+      monday_board_id || null,
+      monday_group_id || null,
+      monday_active_group_id || null,
+      monday_completed_group_id || null,
+      client_identifier_value || null,
+      task_workspace_id || null,
+      board_prefix || null,
+      account_manager_person_id || null,
+      ai_prompt || null,
+      ctm_account_number || null,
+      ctm_api_key || null,
+      ctm_api_secret || null,
+      auto_star_enabled !== undefined ? auto_star_enabled : false,
+      client_type || null,
+      client_subtype || null,
+      normalizedPackage,
+      requires_website_access === undefined ? null : Boolean(requires_website_access),
+      requires_ga4_access === undefined ? null : Boolean(requires_ga4_access),
+      requires_google_ads_access === undefined ? null : Boolean(requires_google_ads_access),
+      requires_meta_access === undefined ? null : Boolean(requires_meta_access),
+      requires_forms_step === undefined ? null : Boolean(requires_forms_step),
+      website_access_provided === undefined ? null : Boolean(website_access_provided),
+      website_access_understood === undefined ? null : Boolean(website_access_understood),
+      ga4_access_provided === undefined ? null : Boolean(ga4_access_provided),
+      ga4_access_understood === undefined ? null : Boolean(ga4_access_understood),
+      google_ads_access_provided === undefined ? null : Boolean(google_ads_access_provided),
+      google_ads_access_understood === undefined ? null : Boolean(google_ads_access_understood),
+      meta_access_provided === undefined ? null : Boolean(meta_access_provided),
+      meta_access_understood === undefined ? null : Boolean(meta_access_understood),
+      website_forms_details_provided === undefined ? null : Boolean(website_forms_details_provided),
+      website_forms_details_understood === undefined ? null : Boolean(website_forms_details_understood),
+      website_forms_uses_third_party === undefined ? null : Boolean(website_forms_uses_third_party),
+      website_forms_uses_hipaa === undefined ? null : Boolean(website_forms_uses_hipaa),
+      website_forms_connected_crm === undefined ? null : Boolean(website_forms_connected_crm),
+      website_forms_custom === undefined ? null : Boolean(website_forms_custom),
+      website_forms_notes === undefined ? null : String(website_forms_notes || ''),
+      clientId
+    ];
+    if (exists.rows.length) {
+      await query(
+        `UPDATE client_profiles
+           SET looker_url=$1,monday_board_id=$2,monday_group_id=$3,monday_active_group_id=$4,monday_completed_group_id=$5,
+               client_identifier_value=$6, task_workspace_id=$7, board_prefix=$8,
+               account_manager_person_id=$9, ai_prompt=$10, ctm_account_number=$11, ctm_api_key=$12, ctm_api_secret=$13,
+               auto_star_enabled=$14, client_type=$15, client_subtype=$16, client_package=$17,
+               requires_website_access=COALESCE($18, requires_website_access),
+               requires_ga4_access=COALESCE($19, requires_ga4_access),
+               requires_google_ads_access=COALESCE($20, requires_google_ads_access),
+               requires_meta_access=COALESCE($21, requires_meta_access),
+               requires_forms_step=COALESCE($22, requires_forms_step),
+               website_access_provided=COALESCE($23, website_access_provided),
+               website_access_understood=COALESCE($24, website_access_understood),
+               ga4_access_provided=COALESCE($25, ga4_access_provided),
+               ga4_access_understood=COALESCE($26, ga4_access_understood),
+               google_ads_access_provided=COALESCE($27, google_ads_access_provided),
+               google_ads_access_understood=COALESCE($28, google_ads_access_understood),
+               meta_access_provided=COALESCE($29, meta_access_provided),
+               meta_access_understood=COALESCE($30, meta_access_understood),
+               website_forms_details_provided=COALESCE($31, website_forms_details_provided),
+               website_forms_details_understood=COALESCE($32, website_forms_details_understood),
+               website_forms_uses_third_party=COALESCE($33, website_forms_uses_third_party),
+               website_forms_uses_hipaa=COALESCE($34, website_forms_uses_hipaa),
+               website_forms_connected_crm=COALESCE($35, website_forms_connected_crm),
+               website_forms_custom=COALESCE($36, website_forms_custom),
+               website_forms_notes=COALESCE($37, website_forms_notes),
+               updated_at=NOW()
+         WHERE user_id=$38`,
+        params
       );
-      const existingBoardId = profileRows[0]?.task_board_id;
+    } else {
+      await query(
+        `INSERT INTO client_profiles (
+           looker_url,monday_board_id,monday_group_id,monday_active_group_id,monday_completed_group_id,
+           client_identifier_value,task_workspace_id,board_prefix,
+           account_manager_person_id,ai_prompt,ctm_account_number,ctm_api_key,ctm_api_secret,auto_star_enabled,
+           client_type,client_subtype,client_package,
+           requires_website_access,requires_ga4_access,requires_google_ads_access,requires_meta_access,requires_forms_step,
+           website_access_provided,website_access_understood,
+           ga4_access_provided,ga4_access_understood,
+           google_ads_access_provided,google_ads_access_understood,
+           meta_access_provided,meta_access_understood,
+           website_forms_details_provided,website_forms_details_understood,
+           website_forms_uses_third_party,website_forms_uses_hipaa,website_forms_connected_crm,website_forms_custom,
+           website_forms_notes,
+           user_id
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)`,
+        params
+      );
+    }
 
-      if (existingBoardId) {
-        // Keep board name/prefix in sync with latest onboarding values.
-        await query('UPDATE task_boards SET name = $1, board_prefix = $2 WHERE id = $3', [name, prefix || null, existingBoardId]);
-        await query(
-          'UPDATE client_profiles SET board_prefix = $1, task_workspace_id = $2, updated_at = NOW() WHERE user_id = $3',
-          [prefix || null, task_workspace_id, clientId]
+    // If this is a client account and we have a task workspace + identifier, provision (or update) their internal task board.
+    try {
+      const { rows: userRoleRows } = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [clientId]);
+      const targetRole = userRoleRows[0]?.role;
+      if (targetRole === 'client' && task_workspace_id && client_identifier_value) {
+        const name = String(client_identifier_value || '').trim();
+        const prefix = String(board_prefix || '').trim();
+
+        const { rows: wsRows } = await query('SELECT id FROM task_workspaces WHERE id = $1 LIMIT 1', [task_workspace_id]);
+        if (!wsRows.length) {
+          return res.status(400).json({ message: 'Selected task workspace is invalid' });
+        }
+
+        const { rows: profileRows } = await query(
+          'SELECT task_board_id FROM client_profiles WHERE user_id = $1 LIMIT 1',
+          [clientId]
         );
-      } else {
-        const { rows: boardRows } = await query(
-          `INSERT INTO task_boards (workspace_id, name, description, created_by, board_prefix)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id`,
-          [task_workspace_id, name, `Client board: ${name}`, req.user.id, prefix || null]
-        );
-        const newBoardId = boardRows[0]?.id;
-        if (newBoardId) {
-          // Create a default group so items can be added immediately.
-          await query(`INSERT INTO task_groups (board_id, name, order_index) VALUES ($1,$2,$3)`, [newBoardId, 'Main', 0]);
+        const existingBoardId = profileRows[0]?.task_board_id;
+
+        if (existingBoardId) {
+          // Keep board name/prefix in sync with latest onboarding values.
+          await query('UPDATE task_boards SET name = $1, board_prefix = $2 WHERE id = $3', [name, prefix || null, existingBoardId]);
           await query(
-            `UPDATE client_profiles
-               SET task_board_id = $1, task_workspace_id = $2, board_prefix = $3, updated_at = NOW()
-             WHERE user_id = $4`,
-            [newBoardId, task_workspace_id, prefix || null, clientId]
+            'UPDATE client_profiles SET board_prefix = $1, task_workspace_id = $2, updated_at = NOW() WHERE user_id = $3',
+            [prefix || null, task_workspace_id, clientId]
           );
+        } else {
+          const { rows: boardRows } = await query(
+            `INSERT INTO task_boards (workspace_id, name, description, created_by, board_prefix)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id`,
+            [task_workspace_id, name, `Client board: ${name}`, req.user.id, prefix || null]
+          );
+          const newBoardId = boardRows[0]?.id;
+          if (newBoardId) {
+            // Create a default group so items can be added immediately.
+            await query(`INSERT INTO task_groups (board_id, name, order_index) VALUES ($1,$2,$3)`, [newBoardId, 'Main', 0]);
+            await query(
+              `UPDATE client_profiles
+                 SET task_board_id = $1, task_workspace_id = $2, board_prefix = $3, updated_at = NOW()
+               WHERE user_id = $4`,
+              [newBoardId, task_workspace_id, prefix || null, clientId]
+            );
+          }
         }
       }
+    } catch (err) {
+      console.error('[clients:task-board:provision]', err);
+      // Do not fail the whole client update if board provisioning fails.
     }
-  } catch (err) {
-    console.error('[clients:task-board:provision]', err);
-    // Do not fail the whole client update if board provisioning fails.
-  }
 
-  const { rows } = await query(
-    `SELECT u.id, u.first_name, u.last_name, u.email, u.role, cp.*
-     FROM users u LEFT JOIN client_profiles cp ON cp.user_id = u.id WHERE u.id=$1`,
-    [clientId]
-  );
-  res.json({ client: rows[0] });
+    const { rows } = await query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.role, cp.*
+       FROM users u LEFT JOIN client_profiles cp ON cp.user_id = u.id WHERE u.id=$1`,
+      [clientId]
+    );
+    res.json({ client: rows[0] });
+  } catch (err) {
+    console.error('[clients:update]', err);
+    const msg = err?.code === '42703'
+      ? `Database schema is out of date: ${err.message}. Run migrations (init.sql) to add missing columns.`
+      : (err?.message || 'Unable to update client');
+    res.status(500).json({ message: msg, code: err?.code || null });
+  }
 });
 
 router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {

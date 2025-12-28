@@ -29,6 +29,16 @@ const UPLOAD_DIR = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'upload
 const CLIENT_BUILD_DIR = path.resolve(process.cwd(), 'dist');
 const EMAIL_ASSETS_DIR = path.resolve(process.cwd(), 'server', 'assets', 'email');
 
+// Crash visibility: log async crashes so Cloud Run doesn’t just surface opaque 503s.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  // Let Cloud Run restart the container; failing fast is better than serving a broken instance.
+  process.exit(1);
+});
+
 const CSP_ALLOW_UNSAFE_EVAL = String(process.env.CSP_ALLOW_UNSAFE_EVAL || '').toLowerCase() === 'true';
 const CSP_FRAME_SRC = (process.env.CSP_FRAME_SRC || '')
   .split(',')
