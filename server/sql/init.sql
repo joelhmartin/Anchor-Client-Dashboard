@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS brand_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_brand_assets_user ON brand_assets(user_id);
 
+-- Ensure 1 brand_assets row per user when possible.
+-- IMPORTANT: Only create the UNIQUE index if no duplicates already exist, to avoid crashing startup migrations in prod.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM brand_assets
+    GROUP BY user_id
+    HAVING COUNT(*) > 1
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_brand_assets_user_unique ON brand_assets(user_id)';
+  END IF;
+END $$;
+
 -- Documents (client + admin uploaded)
 CREATE TABLE IF NOT EXISTS documents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

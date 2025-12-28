@@ -148,6 +148,24 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+async function upsertBrandAssetsLogos({ userId, nextLogos }) {
+  // brand_assets does not guarantee UNIQUE(user_id) in older DBs.
+  // Avoid `ON CONFLICT (user_id)` and instead update the newest row for the user (or insert).
+  const existing = await query(
+    'SELECT id FROM brand_assets WHERE user_id = $1 ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1',
+    [userId]
+  );
+  const rowId = existing.rows[0]?.id;
+  const json = JSON.stringify(Array.isArray(nextLogos) ? nextLogos : []);
+
+  if (rowId) {
+    await query('UPDATE brand_assets SET logos = $1, updated_at = NOW() WHERE id = $2', [json, rowId]);
+    return;
+  }
+
+  await query('INSERT INTO brand_assets (user_id, logos, updated_at) VALUES ($1, $2, NOW())', [userId, json]);
+}
+
 async function getTokenRecord(token) {
   const tokenHash = hashToken(token);
   const { rows } = await query(
@@ -1004,12 +1022,7 @@ router.post(
         }
       }
       const nextLogos = Array.isArray(logos) ? [...logos, ...newAssets] : [...newAssets];
-      await query(
-        `INSERT INTO brand_assets (user_id, logos)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET logos = $2, updated_at = NOW()`,
-        [record.user_id, JSON.stringify(nextLogos)]
-      );
+      await upsertBrandAssetsLogos({ userId: record.user_id, nextLogos });
       // Keep backwards compatible response shape
       res.json({ logos: nextLogos, assets: nextLogos });
     } catch (err) {
@@ -1054,12 +1067,7 @@ router.post(
         }
       }
       const nextLogos = Array.isArray(logos) ? [...logos, ...newAssets] : [...newAssets];
-      await query(
-        `INSERT INTO brand_assets (user_id, logos)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET logos = $2, updated_at = NOW()`,
-        [userId, JSON.stringify(nextLogos)]
-      );
+      await upsertBrandAssetsLogos({ userId, nextLogos });
       res.json({ logos: nextLogos, assets: nextLogos });
     } catch (err) {
       console.error('[onboarding:me:brand-asset]', err);
@@ -1087,12 +1095,7 @@ router.delete('/:token/brand-assets/:assetId', async (req, res) => {
     const target = list.find((a) => a?.id === assetId);
     const next = list.filter((a) => a?.id !== assetId);
 
-    await query(
-      `INSERT INTO brand_assets (user_id, logos)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET logos = $2, updated_at = NOW()`,
-      [record.user_id, JSON.stringify(next)]
-    );
+    await upsertBrandAssetsLogos({ userId: record.user_id, nextLogos: next });
 
     // Best-effort: delete the underlying file from disk.
     const url = String(target?.url || '');
@@ -1127,12 +1130,7 @@ router.delete('/me/brand-assets/:assetId', requireAuth, async (req, res) => {
     }
     const list = Array.isArray(logos) ? logos : [];
     const next = list.filter((asset) => asset?.id !== assetId);
-    await query(
-      `INSERT INTO brand_assets (user_id, logos)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET logos = $2, updated_at = NOW()`,
-      [userId, JSON.stringify(next)]
-    );
+    await upsertBrandAssetsLogos({ userId, nextLogos: next });
     res.json({ logos: next, assets: next });
   } catch (err) {
     console.error('[onboarding:me:brand-asset:delete]', err);
