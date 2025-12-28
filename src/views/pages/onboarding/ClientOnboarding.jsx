@@ -570,6 +570,10 @@ export default function ClientOnboardingPage() {
           active: service.active !== false
         }));
       if (token) {
+        const hasPassword = Boolean(data?.user?.has_password);
+        if (hasPassword) {
+          throw new Error('Your account is already activated. Please log in to finish onboarding.');
+        }
         throw new Error('Please complete step 1 to activate your account before finishing onboarding.');
       }
       await submitOnboardingMe({

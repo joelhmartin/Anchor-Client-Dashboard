@@ -9,19 +9,22 @@ import NavigationScroll from 'layout/NavigationScroll';
 import ThemeCustomization from 'themes';
 
 import { AuthProvider } from 'contexts/AuthContext';
+import { ToastProvider } from 'contexts/ToastContext';
 
 // ==============================|| APP ||============================== //
 
 export default function App() {
   return (
     <ThemeCustomization>
-      <AuthProvider>
-        <NavigationScroll>
-          <>
-            <RouterProvider router={router} />
-          </>
-        </NavigationScroll>
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <NavigationScroll>
+            <>
+              <RouterProvider router={router} />
+            </>
+          </NavigationScroll>
+        </AuthProvider>
+      </ToastProvider>
     </ThemeCustomization>
   );
 }
