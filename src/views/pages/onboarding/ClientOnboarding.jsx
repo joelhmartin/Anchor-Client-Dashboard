@@ -420,7 +420,8 @@ export default function ClientOnboardingPage() {
         return false;
       }
       const hasPassword = Boolean(data?.user?.has_password);
-      if (!hasPassword) {
+      const mustSetPasswordNow = Boolean(token) || !hasPassword;
+      if (mustSetPasswordNow) {
         if (!form.password || form.password.length < 8) {
           toast.error('Please choose a password with at least 8 characters');
           return false;
@@ -527,10 +528,9 @@ export default function ClientOnboardingPage() {
   const handleNext = async () => {
     if (!validateStep()) return;
     const key = stepConfig[activeStep]?.key;
-    const hasPassword = Boolean(data?.user?.has_password);
 
     // Step 1 completion: activate account immediately and disable onboarding links.
-    if (key === 'profile' && token && !hasPassword) {
+    if (key === 'profile' && token) {
       try {
         setSubmitting(true);
         // Save draft first so we can land back on step 2 after login.
@@ -570,11 +570,11 @@ export default function ClientOnboardingPage() {
           active: service.active !== false
         }));
       if (token) {
-        const hasPassword = Boolean(data?.user?.has_password);
-        if (hasPassword) {
-          throw new Error('Your account is already activated. Please log in to finish onboarding.');
-        }
-        throw new Error('Please complete step 1 to activate your account before finishing onboarding.');
+        // Token flow must activate+login first (step 1). If user somehow reaches submit with a token,
+        // force them back to step 1 to set/reset their password.
+        toast.error('Please set your password in step 1 before finishing onboarding.');
+        setActiveStep(0);
+        return;
       }
       await submitOnboardingMe({
         display_name: form.display_name.trim(),
@@ -691,7 +691,7 @@ export default function ClientOnboardingPage() {
             placeholder="e.g., leads@practice.com"
             helperText="Where should website form submission emails go? Comma-separated if multiple."
           />
-          {!data?.user?.has_password ? (
+          {token || !data?.user?.has_password ? (
             <>
               <FormControl fullWidth variant="outlined">
                 <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
