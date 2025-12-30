@@ -1,0 +1,682 @@
+{
+  "document": {
+    "documentLayout": {
+      "blocks": [
+        {
+          "blockId": "1",
+          "textBlock": {
+            "text": "SCREENING FORM",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "2",
+          "textBlock": {
+            "text": "For Patients with Head, Neck and Facial Pain",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "3",
+          "textBlock": {
+            "text": "& Sleep Disordered Breathing/Apnea",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "4",
+          "textBlock": {
+            "text": "☐ Primary headaches or migraines",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "5",
+          "textBlock": {
+            "text": "☐ Snoring/Sleep Apnea",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "6",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "7",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "8",
+          "textBlock": {
+            "text": "Disturbed, restless sleeping",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "9",
+          "textBlock": {
+            "text": "When your patients experience one or more of these",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "10",
+          "textBlock": {
+            "text": "symptoms, they should have a thorough evaluation",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "11",
+          "textBlock": {
+            "text": "by a dentist trained in TM and Sleep. We will be",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "12",
+          "textBlock": {
+            "text": "happy to assist you in diagnosis and treatment for",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "13",
+          "textBlock": {
+            "text": "possible Craniomandibular, Temporomandibular",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "14",
+          "textBlock": {
+            "text": "TM",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "15",
+          "textBlock": {
+            "text": "or Sleep Disordered Breathing/Apnea.",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "16",
+          "textBlock": {
+            "text": "TMJ & Sleep Therapy Centre",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "17",
+          "textBlock": {
+            "text": "CPAP Intolerance",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "18",
+          "textBlock": {
+            "text": "of Raleigh-Durham",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "19",
+          "textBlock": {
+            "text": "Patient Information :",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "20",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "21",
+          "textBlock": {
+            "text": "Daytime drowsiness",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "22",
+          "textBlock": {
+            "text": "Name:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "23",
+          "textBlock": {
+            "text": "Charles Ferzli, DDS",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "24",
+          "textBlock": {
+            "text": "DABCP, DABCDSM, FAACP",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "25",
+          "textBlock": {
+            "text": "☐ Attention deficit in children",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "26",
+          "textBlock": {
+            "text": "Address:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "27",
+          "textBlock": {
+            "text": "1150 NW Maynard Road. #140",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "28",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "29",
+          "textBlock": {
+            "text": "Earaches, stuffiness or ringing",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "30",
+          "textBlock": {
+            "text": "Email:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "31",
+          "textBlock": {
+            "text": "Cary, NC 27591",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "32",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "33",
+          "textBlock": {
+            "text": "Neck, shoulder, back pain or stiffness",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "34",
+          "textBlock": {
+            "text": "Phone:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "35",
+          "textBlock": {
+            "text": "Phone: 919.323.4242",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "36",
+          "textBlock": {
+            "text": "☐ Dizziness",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "37",
+          "textBlock": {
+            "text": "Referred by:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "38",
+          "textBlock": {
+            "text": "www.RaleighTMJandSleep.com",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "39",
+          "textBlock": {
+            "text": "☐ Pain or soreness in TM joints",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "40",
+          "textBlock": {
+            "text": "Name:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "41",
+          "textBlock": {
+            "text": "☐ Clicking or grating sounds in TM joints",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "42",
+          "textBlock": {
+            "text": "Phone:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "43",
+          "textBlock": {
+            "text": "Instructions:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "44",
+          "textBlock": {
+            "text": "Email:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "45",
+          "textBlock": {
+            "text": "☐ Limited mouth opening",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "46",
+          "textBlock": {
+            "text": "1. Mail or fax a copy to:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "47",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "48",
+          "textBlock": {
+            "text": "Locking jaw (opened or closed)",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "49",
+          "textBlock": {
+            "text": "Signature:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "50",
+          "textBlock": {
+            "text": "TMJ & Sleep Therapy Centre",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "51",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "52",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "53",
+          "textBlock": {
+            "text": "Facial or undiagnosed teeth pain",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "54",
+          "textBlock": {
+            "text": "Date:",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "55",
+          "textBlock": {
+            "text": "2. Give a copy to the patient",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "56",
+          "textBlock": {
+            "text": "Difficulty swallowing",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "57",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "58",
+          "textBlock": {
+            "text": "Exam 2nd Opinion Send Report ☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "59",
+          "textBlock": {
+            "text": "☐",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "60",
+          "textBlock": {
+            "text": "3. Keep a copy for your files",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        },
+        {
+          "blockId": "61",
+          "textBlock": {
+            "text": "☐ Call Me",
+            "type": "paragraph"
+          },
+          "pageSpan": {
+            "pageStart": 1,
+            "pageEnd": 1
+          }
+        }
+      ]
+    }
+  },
+  "humanReviewStatus": {
+    "state": "SKIPPED"
+  }
+}

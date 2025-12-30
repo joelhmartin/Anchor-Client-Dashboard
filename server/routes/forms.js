@@ -7,7 +7,16 @@ import multer from 'multer';
 import { transformWithEsbuild } from 'vite';
 import { query, getClient } from '../db.js';
 import { requireAuth, requireAnyRole } from '../middleware/auth.js';
-import { convertPDFToForm, editFormWithAI, generateSchemaFromCode, generateCodeDiff, getDefaultReactCode, getDefaultCssCode, getDefaultJsCode } from '../services/formAI.js';
+import {
+  convertPDFToForm,
+  convertPDFToFormVision,
+  editFormWithAI,
+  generateSchemaFromCode,
+  generateCodeDiff,
+  getDefaultReactCode,
+  getDefaultCssCode,
+  getDefaultJsCode
+} from '../services/formAI.js';
 import { generateSubmissionPDF, getPDFArtifact } from '../services/formPDF.js';
 import {
   renderPdfToPngBuffers,
@@ -39,6 +48,21 @@ const upload = multer({
     } else {
       cb(new Error('Only PDF files allowed'));
     }
+  }
+});
+
+// Separate upload config for Vision endpoint: allow PDF + optional screenshots.
+const uploadVision = multer({
+  storage: upload.storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+  fileFilter: (req, file, cb) => {
+    if (file.fieldname === 'pdf') {
+      return file.mimetype === 'application/pdf' ? cb(null, true) : cb(new Error('Only PDF files allowed for pdf field'));
+    }
+    if (file.fieldname === 'images') {
+      return file.mimetype.startsWith('image/') ? cb(null, true) : cb(new Error('Only image files allowed for images field'));
+    }
+    return cb(new Error('Unexpected file field'));
   }
 });
 
@@ -619,6 +643,51 @@ router.post('/:id/ai/upload-pdf', requireAuth, requireFormsAccess, upload.single
   }
 });
 
+// POST /api/forms/:id/ai/vision/upload-pdf - Upload PDF for "Vision" LLM Extract→Rebuild→Render (Vertex Gemini multimodal)
+router.post('/:id/ai/vision/upload-pdf', requireAuth, requireFormsAccess, uploadVision.fields([
+  { name: 'pdf', maxCount: 1 },
+  { name: 'images', maxCount: 10 }
+]), async (req, res) => {
+  const { id } = req.params;
+  const instructions = String(req.body?.instructions || '').trim();
+
+  const pdfFile = req.files?.pdf?.[0] || null;
+  const imageFiles = Array.isArray(req.files?.images) ? req.files.images : [];
+
+  if (!pdfFile) {
+    return res.status(400).json({ error: 'No PDF file uploaded (field: pdf)' });
+  }
+
+  try {
+    const pdfBuffer = await fs.readFile(pdfFile.path);
+    const images = [];
+    for (const f of imageFiles) {
+      // eslint-disable-next-line no-await-in-loop
+      const buf = await fs.readFile(f.path);
+      images.push({ buffer: buf, mimeType: f.mimetype });
+    }
+
+    const result = await convertPDFToFormVision(pdfBuffer, { instructions, images });
+
+    // Clean up temp file
+    await Promise.all([
+      fs.unlink(pdfFile.path).catch(() => {}),
+      ...imageFiles.map((f) => fs.unlink(f.path).catch(() => {}))
+    ]);
+
+    res.json({
+      success: true,
+      react_code: result.react_code,
+      css_code: result.css_code,
+      schema: result.schema,
+      explanation: result.explanation
+    });
+  } catch (err) {
+    console.error('Error processing PDF (vision):', err);
+    res.status(500).json({ error: err?.message || 'Failed to process PDF (vision)' });
+  }
+});
+
 // POST /api/forms/:id/ai/docai/upload-pdf - Upload PDF for DocAI Extract→Schema→HTML
 router.post('/:id/ai/docai/upload-pdf', requireAuth, requireFormsAccess, upload.single('pdf'), async (req, res) => {
   const { id } = req.params;
@@ -637,38 +706,41 @@ router.post('/:id/ai/docai/upload-pdf', requireAuth, requireFormsAccess, upload.
   try {
     const pdfBuffer = await fs.readFile(req.file.path);
 
-    // Rasterize PDF pages to PNG buffers (high DPI for better OCR/field detection)
+    // IMPORTANT:
+    // Some Document AI Layout processors do NOT accept image inputs (JPEG/PNG) and only accept PDFs.
+    // So we run Layout on the original PDF, but run Form parsing on per-page raster images for better field detection.
+
+    // 1) Layout (PDF input)
+    const layoutResult = await processWithDocAIImage({
+      imageBuffer: pdfBuffer,
+      projectId,
+      location,
+      processorId: layoutProcessorId,
+      mimeType: 'application/pdf'
+    });
+
+    // 2) Form parsing (image input per page)
+    // Rasterize PDF pages to JPEG buffers (high DPI for better OCR/field detection)
     const pageImages = await renderPdfToPngBuffers(pdfBuffer, 220);
     if (!pageImages.length) {
       throw new Error('Failed to rasterize PDF pages for DocAI');
     }
 
-    // Process each page image with the layout and form processors
-    const layoutPageResults = [];
+    // Process each page image with the form processor
     const formPageResults = [];
 
     for (const page of pageImages) {
-      const [layoutRes, formRes] = await Promise.all([
-        processWithDocAIImage({
-          imageBuffer: page.buffer,
-          projectId,
-          location,
-          processorId: layoutProcessorId,
-          mimeType: 'image/png'
-        }),
-        processWithDocAIImage({
-          imageBuffer: page.buffer,
-          projectId,
-          location,
-          processorId: formProcessorId,
-          mimeType: 'image/png'
-        })
-      ]);
-      layoutPageResults.push(layoutRes);
+      // eslint-disable-next-line no-await-in-loop
+      const formRes = await processWithDocAIImage({
+        imageBuffer: page.buffer,
+        projectId,
+        location,
+        processorId: formProcessorId,
+        mimeType: 'image/jpeg'
+      });
       formPageResults.push(formRes);
     }
 
-    const layoutResult = mergeDocAiPages(layoutPageResults);
     const formResult = mergeDocAiPages(formPageResults);
 
     // Persist raw outputs for debugging/reprocessing

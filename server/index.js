@@ -47,15 +47,27 @@ const CSP_FRAME_SRC = (process.env.CSP_FRAME_SRC || '')
 
 const baseCspDirectives = {
   'default-src': ["'self'"],
-  // Monaco often requires `unsafe-eval` depending on bundling/loader. Keep this behind an env flag.
-  'script-src': ["'self'", ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])],
+  // Monaco requires 'unsafe-eval' for parsing and its CDN for loading. Keep unsafe-eval behind an env flag.
+  'script-src': [
+    "'self'",
+    'https://cdn.jsdelivr.net', // Monaco CDN
+    ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
+  ],
+  // Some browsers report violations against script-src-elem (and fall back to script-src if not set).
+  // Explicitly set it so our intent is unambiguous.
+  'script-src-elem': [
+    "'self'",
+    'https://cdn.jsdelivr.net', // Monaco CDN
+    ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
+  ],
   'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
   'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
   'img-src': ["'self'", 'data:'],
-  'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com'],
+  // Monaco fetches files (themes, language configs) from CDN
+  'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://cdn.jsdelivr.net'],
   // Monaco uses web workers (often via blob: URLs). Without this, the editor can fail to load in production.
-  'worker-src': ["'self'", 'blob:'],
+  'worker-src': ["'self'", 'blob:', 'https://cdn.jsdelivr.net'],
   // Some browsers still consult child-src for workers if worker-src isn't applied consistently.
   'child-src': ["'self'", 'blob:'],
   // Allow embedding trusted third-party dashboards (ex: Looker Studio) via env.

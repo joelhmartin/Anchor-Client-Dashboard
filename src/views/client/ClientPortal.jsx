@@ -174,7 +174,9 @@ export default function ClientPortal() {
   const [serviceDialogOpen, setServiceDialogOpen] = useState(false);
   const [serviceDialogLead, setServiceDialogLead] = useState(null);
   const [selectedServices, setSelectedServices] = useState([]);
-  const [journeys, setJourneys] = useState([]);
+  // IMPORTANT: distinguish "not loaded yet" (null) from "loaded but empty" ([]),
+  // otherwise the journey tab can get stuck in a refetch loop when there are zero journeys.
+  const [journeys, setJourneys] = useState(null);
   const [journeysLoading, setJourneysLoading] = useState(false);
   const [concernDialog, setConcernDialog] = useState({ open: false, lead: null, journeyId: null, values: [] });
   const [concernSaving, setConcernSaving] = useState(false);
@@ -452,10 +454,10 @@ export default function ClientPortal() {
   ]);
 
   useEffect(() => {
-    if (activeTab === 'journey' && !journeys.length && !journeysLoading) {
+    if (activeTab === 'journey' && journeys === null && !journeysLoading) {
       loadJourneys();
     }
-  }, [activeTab, journeys.length, journeysLoading, loadJourneys]);
+  }, [activeTab, journeys, journeysLoading, loadJourneys]);
 
   const handleProfileSave = async () => {
     if (!profileForm.display_name || !profileForm.email) {
@@ -1041,7 +1043,7 @@ export default function ClientPortal() {
 
   const journeyByLeadId = useMemo(() => {
     const map = new Map();
-    journeys.forEach((journey) => {
+    (Array.isArray(journeys) ? journeys : []).forEach((journey) => {
       if (journey.lead_call_id) {
         map.set(journey.lead_call_id, journey);
       }
@@ -1571,10 +1573,10 @@ export default function ClientPortal() {
               </Button>
             </Stack>
             {journeysLoading && <LinearProgress />}
-            {!journeysLoading && !journeys.length && (
+            {!journeysLoading && Array.isArray(journeys) && journeys.length === 0 && (
               <Alert severity="info">Assign concerns to a lead from the Leads tab to begin a client journey.</Alert>
             )}
-            {journeys.map((journey) => {
+            {(Array.isArray(journeys) ? journeys : []).map((journey) => {
               const steps = journey.steps || [];
               const completedSteps = steps.filter((step) => step.completed_at);
               const currentStep = getJourneyCurrentStep(journey);

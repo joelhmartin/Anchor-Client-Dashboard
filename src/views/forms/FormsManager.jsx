@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
+import Editor, { loader } from '@monaco-editor/react';
+
+// Configure Monaco loader to use specific CDN version (avoids potential version mismatches)
+loader.config({
+  paths: {
+    vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs'
+  }
+});
 
 import MainCard from 'ui-component/cards/MainCard';
 import Box from '@mui/material/Box';
@@ -205,6 +212,7 @@ import {
   fetchSubmissions,
   uploadPDFForConversion,
   uploadPDFForDocAI,
+  uploadPDFForVision,
   aiEditForm,
   generateSchema,
   fetchSubmission,
@@ -841,9 +849,10 @@ function looksLikeHtml(code) {
 }
 
 function buildHtmlPreviewSrcDoc({ html, css, js }) {
-  const safeCss = css || '';
-  const safeJs = js || '';
+  const safeCss = (css || '').replace(/<\/style>/gi, '<\\/style>');
   const bodyHtml = html || '';
+  // Base64-encode JS to avoid </script> breaking srcdoc
+  const jsB64 = btoa(unescape(encodeURIComponent(js || '')));
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -873,8 +882,12 @@ function buildHtmlPreviewSrcDoc({ html, css, js }) {
           window.AnchorFormsRuntime.submit(payload);
         });
       })();
+      // Execute user JS (base64-decoded to avoid srcdoc escaping issues)
+      try {
+        var userJs = decodeURIComponent(escape(atob("${jsB64}")));
+        if (userJs.trim()) { eval(userJs); }
+      } catch(e) { console.error('Preview JS error:', e); }
     </script>
-    <script>${safeJs}</script>
   </body>
 </html>`;
 }
@@ -1015,6 +1028,7 @@ function BuilderPane({ formId, forms }) {
   const [pdfUploadOpen, setPdfUploadOpen] = useState(false);
   const [pdfInstructions, setPdfInstructions] = useState('');
   const [pdfUseDocAI, setPdfUseDocAI] = useState(true);
+  const [pdfScreenshots, setPdfScreenshots] = useState([]);
   const [aiEditOpen, setAiEditOpen] = useState(false);
   const [aiEditTarget, setAiEditTarget] = useState('form'); // 'form' | 'print'
   const [aiInstruction, setAiInstruction] = useState('');
@@ -1195,28 +1209,28 @@ function BuilderPane({ formId, forms }) {
     try {
       setAiProcessing(true);
       const result = pdfUseDocAI
-        ? await uploadPDFForDocAI(form.id, file, pdfInstructions)
+        ? await uploadPDFForVision(form.id, file, pdfInstructions, pdfScreenshots)
         : await uploadPDFForConversion(form.id, file, pdfInstructions);
 
       setReactCode(result.react_code);
       setCssCode(result.css_code || '');
 
-      // If DocAI returned a canonical schema, store it under schema_json.docai_schema
+      // If the converter returned a canonical schema, store it and hydrate JS + printable template if present.
       if (result.schema) {
-        const nextSchema = pdfUseDocAI
-          ? {
-              ...(schemaJson || {}),
-              runtime_mode: 'html',
-              docai_schema: result.schema
-            }
-          : result.schema;
-        setSchemaJson(nextSchema);
+        const nextSchema = result.schema;
+        setSchemaJson(nextSchema || null);
         setSchemaDirty(true);
         if (result.schema?.js_code) setJsCode(result.schema.js_code);
+        if (result.schema?.printable) {
+          setPrintHtml(result.schema.printable.html || '');
+          setPrintCss(result.schema.printable.css || '');
+          setPrintJs(result.schema.printable.js || '');
+        }
       }
       setHasChanges(true);
       setPdfUploadOpen(false);
       setPdfInstructions('');
+      setPdfScreenshots([]);
       toast.success('PDF converted to form!');
     } catch (err) {
       console.error('Error converting PDF:', err);
@@ -1350,8 +1364,10 @@ function BuilderPane({ formId, forms }) {
       sample[name] = name.replace(/_/g, ' ').toUpperCase();
     }
     const html = String(printHtml || '').trim() || `<div style="font-family: system-ui; padding: 16px;">No printable template yet.</div>`;
-    const css = String(printCss || '');
-    const js = String(printJs || '');
+    const css = (printCss || '').replace(/<\/style>/gi, '<\\/style>');
+    const js = printJs || '';
+    // Base64-encode user JS to avoid </script> breaking srcdoc
+    const jsB64 = btoa(unescape(encodeURIComponent(js)));
 
     return `<!doctype html>
 <html lang="en">
@@ -1386,8 +1402,12 @@ function BuilderPane({ formId, forms }) {
           }
         } catch(e){}
       })();
+      // Execute user JS (base64-decoded to avoid srcdoc escaping issues)
+      try {
+        var userJs = decodeURIComponent(escape(atob("${jsB64}")));
+        if (userJs.trim()) { eval(userJs); }
+      } catch(e) { console.error('Print preview JS error:', e); }
     </script>
-    <script>${js}</script>
   </body>
 </html>`;
   }, [printHtml, printCss, printJs, getFieldNamesForPrint]);
@@ -1563,6 +1583,11 @@ function BuilderPane({ formId, forms }) {
                   setHasChanges(true);
                 }}
                 theme="vs-dark"
+                loading={
+                  <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <CircularProgress size={18} /> Loading editor...
+                  </Box>
+                }
                 options={{
                   minimap: { enabled: false },
                   fontSize: 13,
@@ -1587,6 +1612,11 @@ function BuilderPane({ formId, forms }) {
                   setHasChanges(true);
                 }}
                 theme="vs-dark"
+                loading={
+                  <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <CircularProgress size={18} /> Loading editor...
+                  </Box>
+                }
                 options={{
                   minimap: { enabled: false },
                   fontSize: 13,
@@ -1608,6 +1638,11 @@ function BuilderPane({ formId, forms }) {
                   setHasChanges(true);
                 }}
                 theme="vs-dark"
+                loading={
+                  <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <CircularProgress size={18} /> Loading editor...
+                  </Box>
+                }
                 options={{
                   minimap: { enabled: false },
                   fontSize: 13,
@@ -1747,6 +1782,11 @@ function BuilderPane({ formId, forms }) {
                       setHasChanges(true);
                     }}
                     theme="vs-dark"
+                    loading={
+                      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <CircularProgress size={18} /> Loading editor...
+                      </Box>
+                    }
                     options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
                   />
                 ) : printTab === 1 ? (
@@ -1759,6 +1799,11 @@ function BuilderPane({ formId, forms }) {
                       setHasChanges(true);
                     }}
                     theme="vs-dark"
+                    loading={
+                      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <CircularProgress size={18} /> Loading editor...
+                      </Box>
+                    }
                     options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
                   />
                 ) : (
@@ -1771,6 +1816,11 @@ function BuilderPane({ formId, forms }) {
                       setHasChanges(true);
                     }}
                     theme="vs-dark"
+                    loading={
+                      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <CircularProgress size={18} /> Loading editor...
+                      </Box>
+                    }
                     options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, wordWrap: 'on' }}
                   />
                 )}
@@ -1871,7 +1921,17 @@ function BuilderPane({ formId, forms }) {
       </Dialog>
 
       {/* PDF Upload Dialog */}
-      <Dialog open={pdfUploadOpen} onClose={() => !aiProcessing && setPdfUploadOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={pdfUploadOpen}
+        onClose={() => {
+          if (aiProcessing) return;
+          setPdfUploadOpen(false);
+          setPdfInstructions('');
+          setPdfScreenshots([]);
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
             <IconUpload size={20} />
@@ -1883,8 +1943,14 @@ function BuilderPane({ formId, forms }) {
             <Alert severity="info">Upload a PDF document and it will be converted into an editable digital form.</Alert>
             <FormControlLabel
               control={<Checkbox checked={pdfUseDocAI} onChange={(e) => setPdfUseDocAI(e.target.checked)} />}
-              label="Use Document AI (recommended)"
+              label="Use Vision AI (recommended)"
             />
+            {pdfUseDocAI && (
+              <Alert severity="warning">
+                If PDF→image rendering is unreliable in your environment, attach screenshots (or exported images) of the PDF page(s) below.
+                Vision AI requires images.
+              </Alert>
+            )}
             <TextField
               label="Instructions (optional)"
               value={pdfInstructions}
@@ -1895,6 +1961,38 @@ function BuilderPane({ formId, forms }) {
               fullWidth
               disabled={aiProcessing}
             />
+            {pdfUseDocAI && (
+              <Box
+                sx={{
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 2,
+                  p: 2,
+                  bgcolor: 'grey.50'
+                }}
+              >
+                <Stack spacing={1}>
+                  <Typography variant="subtitle2">Optional screenshots (recommended)</Typography>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => setPdfScreenshots(Array.from(e.target.files || []))}
+                    style={{ display: 'none' }}
+                    id="pdf-screenshots-input"
+                    disabled={aiProcessing}
+                  />
+                  <label htmlFor="pdf-screenshots-input">
+                    <Button variant="outlined" component="span" disabled={aiProcessing}>
+                      Choose Screenshot Images
+                    </Button>
+                  </label>
+                  <Typography variant="caption" color="text.secondary">
+                    {pdfScreenshots?.length ? `${pdfScreenshots.length} image(s) selected` : 'No images selected'}
+                  </Typography>
+                </Stack>
+              </Box>
+            )}
             <Box
               sx={{
                 border: '2px dashed',
@@ -1930,7 +2028,14 @@ function BuilderPane({ formId, forms }) {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPdfUploadOpen(false)} disabled={aiProcessing}>
+          <Button
+            onClick={() => {
+              setPdfUploadOpen(false);
+              setPdfInstructions('');
+              setPdfScreenshots([]);
+            }}
+            disabled={aiProcessing}
+          >
             Cancel
           </Button>
         </DialogActions>

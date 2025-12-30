@@ -1371,10 +1371,8 @@ export default function AdminHub() {
                   </TableCell>
                   <TableCell>Display Name</TableCell>
                   <TableCell>Email</TableCell>
-                  <TableCell>Analytics</TableCell>
                   <TableCell>Role</TableCell>
                   <TableCell>Onboarding</TableCell>
-                  <TableCell>Board</TableCell>
                   <TableCell align="right">Action</TableCell>
                 </TableRow>
               </TableHead>
@@ -1391,17 +1389,6 @@ export default function AdminHub() {
                     </TableCell>
                     <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                     <TableCell>{c.email}</TableCell>
-                    <TableCell>
-                      {c.looker_url ? (
-                        <Button size="small" href={c.looker_url} target="_blank" rel="noreferrer">
-                          Open
-                        </Button>
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          Not set
-                        </Typography>
-                      )}
-                    </TableCell>
                     <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
                     <TableCell>
                       {c.role === 'client' ? (
@@ -1424,7 +1411,6 @@ export default function AdminHub() {
                         </Typography>
                       )}
                     </TableCell>
-                    <TableCell>{c.monday_board_id || '-'}</TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>

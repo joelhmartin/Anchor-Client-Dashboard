@@ -82,6 +82,19 @@ export function uploadPDFForDocAI(formId, file, instructions = '') {
   }).then((res) => res.data);
 }
 
+export function uploadPDFForVision(formId, file, instructions = '', images = []) {
+  const formData = new FormData();
+  formData.append('pdf', file);
+  // Optional screenshots to guarantee image-based extraction even if PDF rasterization is unreliable.
+  for (const img of images || []) {
+    if (img) formData.append('images', img);
+  }
+  if (instructions) formData.append('instructions', instructions);
+  return client.post(`/forms/${formId}/ai/vision/upload-pdf`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((res) => res.data);
+}
+
 export function aiEditForm(formId, { instruction, current_code, current_css, current_js }) {
   return client.post(`/forms/${formId}/ai/edit`, {
     instruction,

@@ -1,9 +1,161 @@
 import crypto from 'crypto';
-import { createCanvas } from 'canvas';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 
 // Uses Document AI REST API with GoogleAuth (available via @google-cloud/vertexai transitive deps).
 // We avoid adding a heavy SDK dependency and keep calls explicit.
+
+const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
+
+const pdfjsDistBaseDir = path.dirname(require.resolve('pdfjs-dist/package.json'));
+const standardFontDataUrl = pathToFileURL(path.join(pdfjsDistBaseDir, 'standard_fonts/')).href;
+const cMapUrl = pathToFileURL(path.join(pdfjsDistBaseDir, 'cmaps/')).href;
+
+async function canRun(cmd) {
+  try {
+    await execFileAsync(cmd, ['-h'], { timeout: 3000 });
+    return true;
+  } catch (e) {
+    // If the binary exists, it usually returns exit code 0/1 with help output.
+    if (e?.code === 0 || e?.code === 1) return true;
+    return false;
+  }
+}
+
+async function renderPdfToJpegBuffersPoppler(pdfBuffer, dpi = 220) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anchor-pdf-'));
+  const inputPath = path.join(tmpDir, 'input.pdf');
+  const outPrefix = path.join(tmpDir, 'page');
+  try {
+    await fs.writeFile(inputPath, pdfBuffer);
+    // pdftoppm outputs page-1.jpg, page-2.jpg, ...
+    await execFileAsync('pdftoppm', ['-jpeg', '-r', String(dpi), inputPath, outPrefix], {
+      timeout: 120_000,
+      maxBuffer: 1024 * 1024 * 50
+    });
+    const files = (await fs.readdir(tmpDir))
+      .filter((f) => /^page-\\d+\\.jpg$/i.test(f))
+      .sort((a, b) => {
+        const na = Number(a.match(/page-(\\d+)\\.jpg/i)?.[1] || 0);
+        const nb = Number(b.match(/page-(\\d+)\\.jpg/i)?.[1] || 0);
+        return na - nb;
+      });
+    const out = [];
+    for (const f of files) {
+      const pageNumber = Number(f.match(/page-(\\d+)\\.jpg/i)?.[1] || 0) || 1;
+      // eslint-disable-next-line no-await-in-loop
+      const buf = await fs.readFile(path.join(tmpDir, f));
+      out.push({ buffer: buf, pageNumber });
+    }
+    return out;
+  } finally {
+    // Best-effort cleanup
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function renderPdfToJpegBuffersPdfjs(pdfBuffer, dpi = 220) {
+  const [canvasMod, pdfjsMod] = await Promise.all([import('canvas'), import('pdfjs-dist/legacy/build/pdf.mjs')]);
+  const { createCanvas, Image, ImageData, DOMMatrix } = canvasMod;
+  const pdfjsLib = pdfjsMod?.default ?? pdfjsMod;
+
+  // Some PDFs embed raster images. In Node, pdfjs may end up creating image objects that
+  // aren't recognized by node-canvas unless these globals exist.
+  // This is safe to set (we keep existing values if present).
+  if (Image && !globalThis.Image) globalThis.Image = Image;
+  if (ImageData && !globalThis.ImageData) globalThis.ImageData = ImageData;
+  if (DOMMatrix && !globalThis.DOMMatrix) globalThis.DOMMatrix = DOMMatrix;
+
+  // pdfjs-dist requires a proper Uint8Array, not a Node Buffer.
+  const pdfBytes = new Uint8Array(pdfBuffer.buffer.slice(pdfBuffer.byteOffset, pdfBuffer.byteOffset + pdfBuffer.byteLength));
+
+  const doc = await pdfjsLib
+    .getDocument({
+      data: pdfBytes,
+      verbosity: 0,
+      standardFontDataUrl,
+      cMapUrl,
+      cMapPacked: true
+    })
+    .promise;
+
+  const pageBuffers = [];
+  const scale = dpi / 72;
+
+  for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+    const page = await doc.getPage(pageNum);
+    const viewport = page.getViewport({ scale, rotation: page.rotate || 0 });
+    const width = Math.max(1, Math.ceil(viewport.width));
+    const height = Math.max(1, Math.ceil(viewport.height));
+    const canvas = createCanvas(width, height);
+    const context = canvas.getContext('2d');
+
+    // JPEG has no alpha channel; explicitly paint a white background.
+    context.save();
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.restore();
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    const jpegBuffer = canvas.toBuffer('image/jpeg', { quality: 0.92 });
+    pageBuffers.push({ buffer: jpegBuffer, pageNumber: pageNum });
+  }
+
+  return pageBuffers;
+}
+
+/**
+ * Extract PDF text without rasterizing (canvas-free), using pdfjs getTextContent().
+ * This is useful to "cross-check" AI outputs for missing/misspelled labels.
+ */
+export async function extractPdfTextLines(pdfBuffer, { maxPages = 5 } = {}) {
+  if (!pdfBuffer?.length) return [];
+  const pdfjsMod = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjsLib = pdfjsMod?.default ?? pdfjsMod;
+  const pdfBytes = new Uint8Array(pdfBuffer.buffer.slice(pdfBuffer.byteOffset, pdfBuffer.byteOffset + pdfBuffer.byteLength));
+  const doc = await pdfjsLib
+    .getDocument({
+      data: pdfBytes,
+      verbosity: 0,
+      standardFontDataUrl,
+      cMapUrl,
+      cMapPacked: true
+    })
+    .promise;
+
+  const pageCount = Math.min(doc.numPages || 0, Math.max(1, Number(maxPages) || 5));
+  const lines = [];
+
+  for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    // eslint-disable-next-line no-await-in-loop
+    const page = await doc.getPage(pageNum);
+    // eslint-disable-next-line no-await-in-loop
+    const tc = await page.getTextContent({ disableCombineTextItems: false });
+    const items = Array.isArray(tc?.items) ? tc.items : [];
+    for (const it of items) {
+      const s = String(it?.str || '').replace(/\s+/g, ' ').trim();
+      if (!s) continue;
+      lines.push(s);
+    }
+  }
+
+  // De-dupe while preserving order
+  const seen = new Set();
+  const out = [];
+  for (const l of lines) {
+    const key = l.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(l);
+  }
+  return out;
+}
 
 async function getAccessToken() {
   const { GoogleAuth } = await import('google-auth-library');
@@ -55,27 +207,33 @@ export async function processWithDocAIImage({ imageBuffer, projectId, location, 
 }
 
 /**
- * Render a PDF buffer to per-page PNG buffers at the given DPI.
+ * Render a PDF buffer to per-page raster image buffers at the given DPI.
+ *
+ * Note: Some DocAI processors (notably certain Layout processors) reject image/png.
+ * JPEG is broadly accepted, so we default to JPEG output here.
  */
 export async function renderPdfToPngBuffers(pdfBuffer, dpi = 220) {
   if (!pdfBuffer?.length) throw new Error('Missing PDF buffer for rasterization');
+  const rasterizer = String(process.env.FORMS_PDF_RASTERIZER || 'auto').toLowerCase();
+  const tryPoppler = rasterizer === 'auto' || rasterizer === 'poppler';
+  const tryPdfjs = rasterizer === 'auto' || rasterizer === 'pdfjs';
 
-  // Use legacy build to avoid worker configuration headaches in Node
-  const doc = await pdfjsLib.getDocument({ data: pdfBuffer, verbosity: 0 }).promise;
-  const pageBuffers = [];
-  const scale = dpi / 72;
-
-  for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
-    const page = await doc.getPage(pageNum);
-    const viewport = page.getViewport({ scale });
-    const canvas = createCanvas(viewport.width, viewport.height);
-    const context = canvas.getContext('2d');
-    await page.render({ canvasContext: context, viewport }).promise;
-    const pngBuffer = canvas.toBuffer('image/png');
-    pageBuffers.push({ buffer: pngBuffer, pageNumber: pageNum });
+  if (tryPoppler && (await canRun('pdftoppm'))) {
+    try {
+      console.log('[pdf-raster] using poppler (pdftoppm)');
+      return await renderPdfToJpegBuffersPoppler(pdfBuffer, dpi);
+    } catch (e) {
+      console.warn('[pdf-raster] poppler failed, falling back to pdfjs:', e?.message || String(e));
+      if (!tryPdfjs) throw e;
+    }
   }
 
-  return pageBuffers;
+  if (tryPdfjs) {
+    console.log('[pdf-raster] using pdfjs+canvas');
+    return await renderPdfToJpegBuffersPdfjs(pdfBuffer, dpi);
+  }
+
+  throw new Error('No PDF rasterizer available (set FORMS_PDF_RASTERIZER=pdfjs or install poppler-utils)');
 }
 
 /**
@@ -224,6 +382,126 @@ export function normalizeDocAiToSchema({ layoutResult, formResult, templateId, i
   const formPages = Array.isArray(formDoc?.pages) ? formDoc.pages : [];
   const entities = Array.isArray(formDoc?.entities) ? formDoc.entities : [];
 
+  // Some Layout processors return a different shape: document.documentLayout.blocks[] (no pages/lines).
+  // In that case, we build a minimal schema and infer fields directly from the extracted block text.
+  const layoutBlocks = Array.isArray(layoutDoc?.documentLayout?.blocks) ? layoutDoc.documentLayout.blocks : [];
+
+  function normalizeFieldsFromLayoutBlocks(blocks) {
+    const out = [];
+    const usedNames = new Set();
+
+    const cleanLabel = (s) =>
+      String(s || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[:\s]+$/, '');
+
+    const isBareCheckbox = (t) => {
+      const s = String(t || '').trim();
+      return s === '☐' || s === '☑' || s === '□' || s === '■' || s === '[ ]' || s === '[x]' || s === '( )' || s === '(x)';
+    };
+
+    const parseCheckboxLine = (t) => {
+      const s = String(t || '').trim();
+      // Match leading checkbox symbols and take the remainder as label
+      const m = s.match(/^(?:☐|☑|□|■|\[ \]|\[x\]|\( \)|\(x\))\s*(.+)$/i);
+      if (!m) return null;
+      return cleanLabel(m[1]);
+    };
+
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      const rawText = b?.textBlock?.text ?? b?.text_block?.text ?? '';
+      const text = String(rawText || '').trim();
+      if (!text) continue;
+
+      const pageStart = Number(b?.pageSpan?.pageStart ?? b?.page_span?.page_start ?? 1) || 1;
+
+      // Checkbox: either inline "☐ Label" or a bare checkbox followed by a label block
+      const checkboxInlineLabel = parseCheckboxLine(text);
+      if (checkboxInlineLabel) {
+        const base = snakeCase(checkboxInlineLabel) || `checkbox_${out.length + 1}`;
+        let name = base;
+        let n = 2;
+        while (usedNames.has(name)) name = `${base}_${n++}`;
+        usedNames.add(name);
+        out.push({
+          id: `field_${crypto.randomUUID().slice(0, 8)}`,
+          type: 'field',
+          name,
+          label: checkboxInlineLabel,
+          inputType: 'checkbox',
+          required: false,
+          confidence: null,
+          page_number: pageStart,
+          y: 0,
+          x: 0
+        });
+        continue;
+      }
+
+      if (isBareCheckbox(text)) {
+        const next = blocks[i + 1];
+        const nextText = String(next?.textBlock?.text ?? next?.text_block?.text ?? '').trim();
+        const nextPage = Number(next?.pageSpan?.pageStart ?? next?.page_span?.page_start ?? pageStart) || pageStart;
+        if (nextText && nextPage === pageStart) {
+          const label = cleanLabel(nextText);
+          if (label) {
+            const base = snakeCase(label) || `checkbox_${out.length + 1}`;
+            let name = base;
+            let n = 2;
+            while (usedNames.has(name)) name = `${base}_${n++}`;
+            usedNames.add(name);
+            out.push({
+              id: `field_${crypto.randomUUID().slice(0, 8)}`,
+              type: 'field',
+              name,
+              label,
+              inputType: 'checkbox',
+              required: false,
+              confidence: null,
+              page_number: pageStart,
+              y: 0,
+              x: 0
+            });
+            i++; // consume label block
+            continue;
+          }
+        }
+        continue;
+      }
+
+      // Text field heuristics from plain text:
+      // - "Label:" or "Label: ____"
+      // - "Label ____"
+      const t = text.replace(/\s+/g, ' ').trim();
+      const mColon = t.match(/^(.{2,80}?):\s*(?:_{2,}.*)?$/);
+      const mUnderscore = t.match(/^(.{2,80}?)\s+_{4,}\s*$/);
+      const candidate = cleanLabel(mColon?.[1] || mUnderscore?.[1] || '');
+      if (candidate && !looksLikeSectionHeader(candidate)) {
+        const base = snakeCase(candidate) || `field_${out.length + 1}`;
+        let name = base;
+        let n = 2;
+        while (usedNames.has(name)) name = `${base}_${n++}`;
+        usedNames.add(name);
+        out.push({
+          id: `field_${crypto.randomUUID().slice(0, 8)}`,
+          type: 'field',
+          name,
+          label: candidate,
+          inputType: /notes|description|explain|reason|comment/i.test(candidate) ? 'textarea' : 'text',
+          required: false,
+          confidence: null,
+          page_number: pageStart,
+          y: 0,
+          x: 0
+        });
+      }
+    }
+
+    return out;
+  }
+
   // Extract section headers from layout paragraphs/blocks
   const sections = [];
   for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
@@ -281,19 +559,42 @@ export function normalizeDocAiToSchema({ layoutResult, formResult, templateId, i
     },
     instructions,
     sections,
-    page_count: Math.max(pages.length, formPages.length),
-    pages: pages.map((p, idx) => {
-      const dim = p.dimension || {};
-      return {
-        page_number: idx + 1,
-        width: dim.width ?? null,
-        height: dim.height ?? null
-      };
-    })
+    page_count:
+      pages.length > 0
+        ? Math.max(pages.length, formPages.length)
+        : Math.max(
+            1,
+            formPages.length,
+            layoutBlocks.reduce((max, b) => Math.max(max, Number(b?.pageSpan?.pageEnd ?? b?.page_span?.page_end ?? 1) || 1), 1)
+          ),
+    pages:
+      pages.length > 0
+        ? pages.map((p, idx) => {
+            const dim = p.dimension || {};
+            return {
+              page_number: idx + 1,
+              width: dim.width ?? null,
+              height: dim.height ?? null
+            };
+          })
+        : Array.from({ length: Math.max(1, formPages.length) }, (_, idx) => ({
+            page_number: idx + 1,
+            width: null,
+            height: null
+          }))
   };
 
   const used = new Set();
   const fields = [];
+
+  // 0) If we have no page geometry but we do have documentLayout.blocks, infer fields from blocks.
+  if (pages.length === 0 && layoutBlocks.length > 0) {
+    const blockFields = normalizeFieldsFromLayoutBlocks(layoutBlocks);
+    for (const f of blockFields) {
+      used.add(f.name);
+      fields.push(f);
+    }
+  }
 
   // 1) Prefer Form Parser formFields (checkboxes + detected inputs)
   for (let pageIdx = 0; pageIdx < formPages.length; pageIdx++) {

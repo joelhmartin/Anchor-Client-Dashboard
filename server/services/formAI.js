@@ -8,17 +8,25 @@
  */
 
 import { VertexAI } from '@google-cloud/vertexai';
+import path from 'path';
+import fs from 'fs/promises';
+import { extractPdfTextLines, renderPdfToPngBuffers } from './docai.js';
 
 // Initialize Vertex AI
 const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID || 'anchor-hub-480305';
 const location = process.env.VERTEX_LOCATION || process.env.GOOGLE_CLOUD_REGION || 'us-central1';
-const modelId = process.env.VERTEX_MODEL || 'gemini-1.5-flash-001';
+// Prefer aliases over pinned versions to avoid retirement 404s.
+// You can override with VERTEX_MODEL / VERTEX_VISION_MODEL in env.
+const modelId = process.env.VERTEX_MODEL || 'gemini-3-flash';
+// NOTE: Vision model availability varies by project/region and Google retires model versions.
+// We select from a fallback list at runtime to avoid hard-failing on 404s.
 
 let vertexAI = null;
 let generativeModel = null;
+const modelCache = new Map();
 
-function getModel() {
-  if (!generativeModel) {
+function getVertexAI() {
+  if (!vertexAI) {
     vertexAI = new VertexAI({
       project: projectId,
       location,
@@ -26,16 +34,62 @@ function getModel() {
         scopes: ['https://www.googleapis.com/auth/cloud-platform']
       }
     });
-    generativeModel = vertexAI.getGenerativeModel({ model: modelId });
+  }
+  return vertexAI;
+}
+
+function getCachedModel(modelName) {
+  if (!modelName) throw new Error('Missing Vertex model name');
+  if (!modelCache.has(modelName)) {
+    modelCache.set(modelName, getVertexAI().getGenerativeModel({ model: modelName }));
+  }
+  return modelCache.get(modelName);
+}
+
+function getModel() {
+  if (!generativeModel) {
+    generativeModel = getCachedModel(modelId);
   }
   return generativeModel;
+}
+
+function isModelNotFoundError(err) {
+  const msg = String(err?.message || '');
+  return msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('was not found') || msg.includes('Publisher Model');
+}
+
+async function generateContentWithFallback({ candidates, request, purpose }) {
+  const unique = Array.from(new Set((candidates || []).filter(Boolean)));
+  let lastErr = null;
+
+  for (const candidate of unique) {
+    try {
+      console.log(`[VertexAI] ${purpose} trying model:`, candidate);
+      const model = getCachedModel(candidate);
+      const result = await model.generateContent(request);
+      console.log(`[VertexAI] ${purpose} model success:`, candidate);
+      return { result, model: candidate };
+    } catch (e) {
+      lastErr = e;
+      if (isModelNotFoundError(e)) {
+        console.warn(`[VertexAI] ${purpose} model not available:`, candidate);
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  throw new Error(
+    `No available Vertex model found for ${purpose}. ` +
+      `Set the appropriate env var (VERTEX_MODEL / VERTEX_VISION_MODEL). ` +
+      `Last error: ${lastErr?.message || lastErr}`
+  );
 }
 
 /**
  * Convert PDF content to React form code
  */
 export async function convertPDFToForm(pdfBuffer, options = {}) {
-  const model = getModel();
   const instructions = String(options?.instructions || '').trim();
 
   // Defensive guardrails: large multi-page PDFs can exceed model limits / token budgets.
@@ -82,25 +136,41 @@ Important:
     // Convert PDF buffer to base64
     const pdfBase64 = pdfBuffer.toString('base64');
 
-    const result = await model.generateContent({
-      generationConfig: {
-        // Ask the model to return actual JSON (still keep our own parsing defensive).
-        responseMimeType: 'application/json'
-      },
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: 'application/pdf',
-                data: pdfBase64
+    const candidates = [
+      process.env.VERTEX_MODEL,
+      // Modern aliases (preferred)
+      'gemini-3-flash',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      // Last resorts (pinned older versions, may be retired)
+      'gemini-1.5-flash-002',
+      'gemini-1.5-flash-001'
+    ];
+
+    const { result } = await generateContentWithFallback({
+      purpose: 'pdf->form (pdf inlineData)',
+      candidates,
+      request: {
+        generationConfig: {
+          // Ask the model to return actual JSON (still keep our own parsing defensive).
+          responseMimeType: 'application/json'
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: 'application/pdf',
+                  data: pdfBase64
+                }
               }
-            }
-          ]
-        }
-      ]
+            ]
+          }
+        ]
+      }
     });
 
     const response = result.response;
@@ -120,6 +190,441 @@ Important:
     console.error('PDF to form conversion error:', err);
     throw new Error(`AI conversion failed: ${err.message}`);
   }
+}
+
+/**
+ * Convert PDF to form using multimodal "vision" (rasterized pages) for better layout reconstruction.
+ * This mirrors the "screenshot → ChatGPT" success path, but uses Vertex AI Gemini.
+ */
+export async function convertPDFToFormVision(pdfBuffer, options = {}) {
+  const instructions = String(options?.instructions || '').trim();
+  const providedImages = Array.isArray(options?.images) ? options.images.filter((x) => x?.buffer?.length) : [];
+
+  const estimatedPages = estimatePdfPageCount(pdfBuffer);
+  const maxPages = parseInt(process.env.FORMS_AI_VISION_MAX_PAGES || process.env.FORMS_AI_PDF_MAX_PAGES || '10', 10);
+  if (estimatedPages && estimatedPages > maxPages) {
+    throw new Error(
+      `PDF appears to have ~${estimatedPages} pages. Please split it into smaller PDFs (<= ${maxPages} pages) and upload again.`
+    );
+  }
+
+  // We MUST have images for the vision workflow (either provided screenshots or rasterized PDF pages).
+  // PDF can be included for extra text accuracy, but we do not allow a "PDF only" run.
+  let selected = [];
+  let pages = [];
+  if (providedImages.length) {
+    selected = providedImages.slice(0, maxPages).map((img, idx) => ({
+      buffer: img.buffer,
+      pageNumber: idx + 1,
+      mimeType: img.mimeType || 'image/jpeg',
+      source: 'upload'
+    }));
+    pages = selected;
+  } else {
+    // Rasterize pages (DocAI module already handles pdfjs+canvas and returns JPEG buffers now).
+    const dpi = parseInt(process.env.FORMS_AI_VISION_DPI || '220', 10);
+    pages = await renderPdfToPngBuffers(pdfBuffer, dpi);
+    if (!pages.length) throw new Error('Failed to rasterize PDF pages for vision processing');
+    const maxImages = Math.min(pages.length, maxPages);
+    selected = pages.slice(0, maxImages).map((p) => ({ ...p, mimeType: 'image/jpeg', source: 'raster' }));
+  }
+
+  // If rasterization produces blank images (common when pdfjs+canvas can't render a PDF correctly),
+  // we still want the model to succeed. We'll always include the original PDF as an inline part,
+  // and we'll skip any page images that look blank to avoid confusing the model.
+  const nonBlankSelected = [];
+  for (const p of selected) {
+    // eslint-disable-next-line no-await-in-loop
+    const blank = await looksLikeBlankJpeg(p?.buffer);
+    if (!blank) nonBlankSelected.push(p);
+  }
+
+  // Optional: dump the exact rasterized JPEGs we send to the vision model (to debug "blank image" outputs).
+  // Enable with: FORMS_AI_VISION_DEBUG_DUMP=1
+  if (String(process.env.FORMS_AI_VISION_DEBUG_DUMP || '').toLowerCase() === '1') {
+    try {
+      const dumpDir = path.resolve(process.cwd(), process.env.UPLOAD_DIR || 'uploads', 'forms', 'vision-debug');
+      await fs.mkdir(dumpDir, { recursive: true });
+      const stamp = Date.now();
+      const maxDump = Math.min(selected.length, parseInt(process.env.FORMS_AI_VISION_DEBUG_DUMP_MAX || '3', 10));
+      for (let i = 0; i < maxDump; i++) {
+        const p = selected[i];
+        const pageNum = Number(p.pageNumber || i + 1);
+        const outPath = path.join(dumpDir, `${stamp}_page_${String(pageNum).padStart(2, '0')}.jpg`);
+        // eslint-disable-next-line no-await-in-loop
+        await fs.writeFile(outPath, p.buffer);
+        console.log('[Vision AI] Debug dump wrote:', outPath, `(${p.buffer?.length || 0} bytes)`);
+      }
+    } catch (e) {
+      console.warn('[Vision AI] Debug dump failed:', e?.message || String(e));
+    }
+  }
+
+  // Preset classes/CSS used by Anchor forms. We do NOT want the model inventing new classnames.
+  // We include the preset CSS in the final output regardless; the model should primarily emit HTML using these classes.
+  const presetCss = getDefaultCssCode();
+
+  const classContract = `
+Use ONLY these existing classes (do not invent new class names):
+- Layout: ac-form-container, ac-form-title, ac-form, ac-section, ac-section-title, ac-field-row, ac-cols-2, ac-cols-3, ac-cols-4, ac-checkbox-row
+- Inputs: ac-form-group, ac-input, ac-textarea, ac-label, ac-static-label
+- Choice controls: ac-check, ac-radio (pattern: <label class="ac-check"><input ... /><span></span> Label</label>)
+- Button: ac-button
+
+Floating label pattern (required):
+<div class="ac-form-group">
+  <input class="ac-input" id="field" name="field" placeholder=" " />
+  <label class="ac-label" for="field">Label</label>
+</div>
+`;
+
+  const prompt = `You are reconstructing a PDF form. You are given:
+- The ORIGINAL PDF (best for text accuracy)
+- PAGE IMAGES (best for layout fidelity; may be blank/unavailable in some environments)
+
+GOAL: produce a high-fidelity, multi-column HTML form that matches the PDF visually and structurally.
+
+ABSOLUTE REQUIREMENTS:
+1) Extract ALL visible content: headings, instructions, labels, checkboxes, and fields across ALL pages provided.
+2) Every field must have a stable name="snake_case" (no generic names).
+3) Use semantic grouping: fieldsets/sections (.ac-section + .ac-section-title).
+4) Use grid rows for multi-column blocks (.ac-field-row + .ac-cols-2/.ac-cols-3).
+5) Use real checkboxes/radios for options.
+6) Use ONLY the preset classes and patterns below.
+
+PRESET CLASSES + PATTERNS:
+${classContract}
+
+PRINTABLE TEMPLATE:
+Also return a printable HTML/CSS/JS version that renders a completed submission for printing:
+- Same structure/sections
+- Use {{field_name}} placeholders for values
+- For checkboxes: render checked/unchecked based on {{field_name}} (true/false)
+
+User instructions (apply if present): ${instructions || '(none)'}
+
+OUTPUT: Return ONLY JSON. Code fields MUST be base64 encoded:
+{
+  "html_b64": "base64(utf8(html))",
+  "css_b64": "base64(utf8(optional tiny overrides only; do NOT redefine base classes))",
+  "js_b64": "base64(utf8(optional; can be empty))",
+  "print_html_b64": "base64(utf8(print_html))",
+  "print_css_b64": "base64(utf8(print_css))",
+  "print_js_b64": "base64(utf8(print_js))",
+  "explanation": "brief"
+}`;
+
+  console.log('[Vision AI] Vision model candidates will be tried (env override first).');
+  console.log('[Vision AI] Prompt length:', prompt.length, 'chars');
+  console.log('[Vision AI] Rasterized pages:', selected.length, 'non-blank pages:', nonBlankSelected.length);
+
+  try {
+    const pdfBase64 = Buffer.from(pdfBuffer).toString('base64');
+
+    // If we have no usable images, DO NOT proceed (images are mandatory for this flow).
+    if (!nonBlankSelected.length) {
+      const hint =
+        providedImages.length > 0
+          ? 'All provided screenshots appear blank/unsupported.'
+          : 'PDF→image rasterization produced blank images in this environment.';
+      throw new Error(
+        `${hint} To proceed, install Poppler (pdftoppm) / set FORMS_PDF_RASTERIZER=poppler, or upload screenshots alongside the PDF.`
+      );
+    }
+
+    const parts = [
+      { text: prompt },
+      {
+        inlineData: {
+          mimeType: 'application/pdf',
+          data: pdfBase64
+        }
+      },
+      ...(nonBlankSelected.length
+        ? nonBlankSelected.map((p) => ({
+            inlineData: {
+              mimeType: p.mimeType || 'image/jpeg',
+              data: p.buffer.toString('base64')
+            }
+          }))
+        : [
+            {
+              text: 'NOTE: Rasterized page images were detected as blank in this environment. Use the PDF content above as the source of truth.'
+            }
+          ]),
+      {
+        text:
+          selected.length < pages.length
+            ? `NOTE: Only the first ${selected.length} page images were available (of ${pages.length} total).`
+            : ''
+      }
+    ].filter((x) => !(x.text !== undefined && String(x.text).trim() === ''));
+
+    const modelCandidates = [
+      process.env.VERTEX_VISION_MODEL,
+      // Prefer best reasoning first for reconstruction, then fall back to workhorse.
+      'gemini-3-pro',
+      'gemini-3-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro',
+      'gemini-1.5-flash',
+      // Last resorts (pinned older versions, may be retired)
+      'gemini-1.5-pro-002',
+      'gemini-1.5-flash-002',
+      'gemini-1.5-flash-001'
+    ];
+
+    const { result } = await generateContentWithFallback({
+      purpose: 'pdf->form (vision images)',
+      candidates: modelCandidates,
+      request: {
+        generationConfig: { responseMimeType: 'application/json' },
+        contents: [{ role: 'user', parts }]
+      }
+    });
+
+    const response = result.response;
+    const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    console.log('[Vision AI] Raw response length:', text.length);
+    console.log('[Vision AI] First 500 chars:', text.substring(0, 500));
+
+    const parsed = parseAiJson(text);
+    const html = decodeB64OrFallback(parsed, 'html_b64', 'html_code') || getDefaultReactCode();
+    const aiCss = decodeB64OrFallback(parsed, 'css_b64', 'css_code') || '';
+    const js = decodeB64OrFallback(parsed, 'js_b64', 'js_code') || getDefaultJsCode();
+    const printHtml = decodeB64OrFallback(parsed, 'print_html_b64', 'print_html') || '';
+    const printCss = decodeB64OrFallback(parsed, 'print_css_b64', 'print_css') || '';
+    const printJs = decodeB64OrFallback(parsed, 'print_js_b64', 'print_js') || '';
+
+    // Always include the preset CSS, then append any AI overrides.
+    const fullCss = presetCss + (aiCss ? `\n\n/* Form-specific overrides (AI) */\n${aiCss}` : '');
+
+    console.log('[Vision AI] Extracted HTML length:', html.length);
+    console.log('[Vision AI] HTML preview:', html.substring(0, 300));
+
+    // Cross-check: compare AI labels against text extracted from the PDF (canvas-free).
+    // This does not block success; it produces a report to help spot missing/misspelled fields.
+    let validation = null;
+    try {
+      const pdfLines = await extractPdfTextLines(pdfBuffer, {
+        maxPages: parseInt(process.env.FORMS_AI_VISION_VALIDATE_PAGES || '3', 10)
+      });
+      validation = validateAiHtmlAgainstPdfText({ html, pdfLines });
+      if (validation?.missing?.length || validation?.possible_typos?.length) {
+        console.warn('[Vision AI] Validation warnings:', {
+          missing: validation.missing?.slice(0, 10),
+          possible_typos: validation.possible_typos?.slice(0, 10)
+        });
+      }
+    } catch (e) {
+      console.warn('[Vision AI] Validation skipped:', e?.message || String(e));
+      validation = null;
+    }
+
+    let schemaObj = null;
+    const schemaJson = decodeB64OrFallback(parsed, 'schema_json_b64', 'schema_json') || '';
+    if (schemaJson) {
+      try {
+        schemaObj = JSON.parse(schemaJson);
+      } catch {
+        schemaObj = null;
+      }
+    }
+
+    const schema = {
+      ...(schemaObj || {}),
+      runtime_mode: 'html',
+      js_code: js,
+      ai_validation: validation,
+      printable: {
+        html: printHtml,
+        css: printCss,
+        js: printJs
+      }
+    };
+
+    return {
+      react_code: html,
+      css_code: fullCss,
+      schema,
+      explanation: parsed.explanation || 'Form generated from PDF (vision)'
+    };
+  } catch (err) {
+    console.error('PDF to form vision conversion error:', err);
+    throw new Error(`AI conversion failed: ${err.message}`);
+  }
+}
+
+async function looksLikeBlankJpeg(jpegBuffer) {
+  try {
+    if (!jpegBuffer || jpegBuffer.length < 2000) return true;
+    // Super cheap heuristic first: very small JPEGs are often blank.
+    if (jpegBuffer.length < 25_000) return true;
+
+    // More robust: sample pixels. Dynamic import so we don't hard-require canvas in every environment.
+    const { createCanvas, loadImage } = await import('canvas');
+    const img = await loadImage(jpegBuffer);
+    const w = Math.max(1, Math.min(200, img.width || 1));
+    const h = Math.max(1, Math.min(200, img.height || 1));
+    const canvas = createCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+
+    // Sample a grid of pixels and compute how many are near-white.
+    const stepX = Math.max(1, Math.floor(w / 20));
+    const stepY = Math.max(1, Math.floor(h / 20));
+    let sampled = 0;
+    let nearWhite = 0;
+    for (let y = 0; y < h; y += stepY) {
+      for (let x = 0; x < w; x += stepX) {
+        const idx = (y * w + x) * 4;
+        const r = data[idx] || 0;
+        const g = data[idx + 1] || 0;
+        const b = data[idx + 2] || 0;
+        sampled++;
+        if (r > 245 && g > 245 && b > 245) nearWhite++;
+      }
+    }
+    if (!sampled) return true;
+    return nearWhite / sampled > 0.985;
+  } catch {
+    // If we can't decode, don't treat as blank (avoid dropping useful images).
+    return false;
+  }
+}
+
+function normalizeComparableText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function bigramSet(s) {
+  const t = normalizeComparableText(s).replace(/\s/g, '');
+  const out = new Set();
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+
+function diceSimilarity(a, b) {
+  const A = bigramSet(a);
+  const B = bigramSet(b);
+  if (!A.size || !B.size) return 0;
+  let overlap = 0;
+  for (const x of A) if (B.has(x)) overlap++;
+  return (2 * overlap) / (A.size + B.size);
+}
+
+function extractLabelsFromHtml(html) {
+  const src = String(html || '');
+  const labels = [];
+
+  // <label ...>Text</label>
+  for (const m of src.matchAll(/<label[^>]*>([\s\S]*?)<\/label>/gi)) {
+    const inner = String(m[1] || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (inner) labels.push(inner);
+  }
+
+  // Headings and legends can carry important section titles that we don't want to "miss"
+  for (const m of src.matchAll(/<(?:h1|h2|h3|legend)[^>]*>([\s\S]*?)<\/(?:h1|h2|h3|legend)>/gi)) {
+    const inner = String(m[1] || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (inner) labels.push(inner);
+  }
+
+  // De-dupe
+  const seen = new Set();
+  const out = [];
+  for (const l of labels) {
+    const k = normalizeComparableText(l);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(l);
+  }
+  return out;
+}
+
+function extractCandidateLabelsFromPdfText(pdfLines) {
+  const lines = Array.isArray(pdfLines) ? pdfLines : [];
+  const candidates = [];
+
+  for (const line of lines) {
+    const t = String(line || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!t) continue;
+    // Filter obvious non-label noise (addresses/phones/URLs)
+    if (/(www\.|https?:\/\/)/i.test(t)) continue;
+    if (/^\d{3,}[\.\-\s]?\d{3,}/.test(t)) continue;
+
+    // Common form label patterns
+    const mColon = t.match(/^(.{2,80}?):\s*$/);
+    if (mColon) {
+      candidates.push(mColon[1].trim());
+      continue;
+    }
+
+    // Checkbox items often appear as standalone phrases
+    if (t.length >= 6 && t.length <= 80 && /[a-z]/i.test(t) && !/[{}]/.test(t)) {
+      candidates.push(t);
+    }
+  }
+
+  // De-dupe
+  const seen = new Set();
+  const out = [];
+  for (const c of candidates) {
+    const k = normalizeComparableText(c);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
+
+function validateAiHtmlAgainstPdfText({ html, pdfLines }) {
+  const aiLabels = extractLabelsFromHtml(html);
+  const pdfLabels = extractCandidateLabelsFromPdfText(pdfLines);
+
+  const missing = [];
+  const possible_typos = [];
+
+  for (const expected of pdfLabels) {
+    const expNorm = normalizeComparableText(expected);
+    if (!expNorm) continue;
+
+    let best = { score: 0, label: null };
+    for (const got of aiLabels) {
+      const score = diceSimilarity(expected, got);
+      if (score > best.score) best = { score, label: got };
+    }
+
+    // Thresholds tuned to be conservative: don't spam.
+    if (best.score < 0.72) {
+      missing.push({ expected, best_match: best.label, score: Number(best.score.toFixed(3)) });
+    } else if (best.score < 0.9) {
+      possible_typos.push({ expected, best_match: best.label, score: Number(best.score.toFixed(3)) });
+    }
+  }
+
+  return {
+    pdf_label_count: pdfLabels.length,
+    ai_label_count: aiLabels.length,
+    missing,
+    possible_typos
+  };
 }
 
 function parseAiJson(text) {
@@ -259,7 +764,6 @@ function estimatePdfPageCount(pdfBuffer) {
  * AI-assisted form code editing
  */
 export async function editFormWithAI(currentCode, currentCss, instruction) {
-  const model = getModel();
   const isHtml = looksLikeHtml(currentCode);
 
   const prompt = isHtml
@@ -323,8 +827,21 @@ Important:
 - Use valid MUI component imports`;
 
   try {
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    const candidates = [
+      process.env.VERTEX_MODEL,
+      'gemini-3-pro',
+      'gemini-3-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro',
+      'gemini-1.5-flash'
+    ];
+
+    const { result } = await generateContentWithFallback({
+      purpose: 'ai edit',
+      candidates,
+      request: { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
     });
 
     const response = result.response;
@@ -361,8 +878,6 @@ function looksLikeHtml(code) {
  * Generate schema from React code
  */
 export async function generateSchemaFromCode(reactCode) {
-  const model = getModel();
-
   const prompt = `Analyze this React form component and extract the form schema (list of fields with their types, labels, and validation rules).
 
 React Code:
@@ -385,8 +900,21 @@ Output format - return a JSON object:
 }`;
 
   try {
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    const candidates = [
+      process.env.VERTEX_MODEL,
+      'gemini-3-pro',
+      'gemini-3-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro',
+      'gemini-1.5-flash'
+    ];
+
+    const { result } = await generateContentWithFallback({
+      purpose: 'schema generation',
+      candidates,
+      request: { contents: [{ role: 'user', parts: [{ text: prompt }] }] }
     });
 
     const response = result.response;
@@ -955,6 +1483,61 @@ body {
   left: 4px;
 }
 
+/* Field rows for multi-column layouts */
+.ac-field-row {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.ac-field-row .ac-form-group { margin-bottom: 0; }
+
+.ac-cols-2 { grid-template-columns: repeat(2, 1fr); }
+.ac-cols-3 { grid-template-columns: repeat(3, 1fr); }
+.ac-cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+/* Checkbox row for horizontal checkbox lists */
+.ac-checkbox-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.ac-checkbox-row.ac-cols-2 { display: grid; grid-template-columns: repeat(2, 1fr); }
+.ac-checkbox-row.ac-cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); }
+.ac-checkbox-row.ac-cols-4 { display: grid; grid-template-columns: repeat(4, 1fr); }
+
+/* Section grouping */
+.ac-section {
+  border: 2px solid var(--ac-color-border);
+  border-radius: var(--ac-radius);
+  padding: 24px;
+  margin-bottom: 28px;
+}
+
+.ac-section-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ac-color-text);
+  margin-bottom: 20px;
+  padding: 0 8px;
+  background: var(--ac-color-bg);
+}
+
+/* Responsive breakpoints */
+@media (max-width: 600px) {
+  .ac-cols-2, .ac-cols-3, .ac-cols-4,
+  .ac-checkbox-row.ac-cols-2, .ac-checkbox-row.ac-cols-3, .ac-checkbox-row.ac-cols-4 {
+    grid-template-columns: 1fr;
+  }
+  
+  .ac-form-container {
+    padding: 24px;
+    max-width: 100%;
+  }
+}
+
 /* Button */
 .ac-button {
   width: 100%;
@@ -977,9 +1560,54 @@ body {
 }
 
 /**
- * Default JS code template
+ * Simpler default JS that only handles floating labels - defensive, no errors if elements missing
  */
 export function getDefaultJsCode() {
+  return `document.addEventListener('DOMContentLoaded', function() {
+  /* Floating labels for inputs and textarea */
+  var inputs = document.querySelectorAll('.ac-input, .ac-textarea');
+  if (inputs && inputs.length) {
+    inputs.forEach(function(el) {
+      var update = function() {
+        if (el.value && el.value.trim() !== '') {
+          el.classList.add('ac-has-content');
+        } else {
+          el.classList.remove('ac-has-content');
+        }
+      };
+      el.addEventListener('input', update);
+      el.addEventListener('change', update);
+      update();
+      setTimeout(update, 50);
+    });
+  }
+
+  /* Form submission - prevent default, log data */
+  var form = document.querySelector('[data-anchor-form]') || document.querySelector('form');
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var data = {};
+      var fd = new FormData(form);
+      fd.forEach(function(value, key) {
+        if (data[key]) {
+          if (!Array.isArray(data[key])) data[key] = [data[key]];
+          data[key].push(value);
+        } else {
+          data[key] = value;
+        }
+      });
+      console.log('Form submitted:', data);
+      alert('Form submitted! Check console for data.');
+    });
+  }
+});`;
+}
+
+/**
+ * Full default JS code template with all advanced widgets (for the default template only)
+ */
+export function getFullDefaultJsCode() {
   return `document.addEventListener('DOMContentLoaded', () => {
   /* Floating labels for inputs and textarea */
   document.querySelectorAll('.ac-input, .ac-textarea').forEach(el => {
@@ -995,6 +1623,7 @@ export function getDefaultJsCode() {
   const trigger = document.getElementById('countryTrigger');
   const dropdown = document.getElementById('countryDropdown');
   const nativeSelect = document.getElementById('country');
+  if (!trigger || !dropdown || !nativeSelect) return;
   const options = Array.from(dropdown.querySelectorAll('.ac-select-option'));
 
   const openSelect = () => {

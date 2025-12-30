@@ -15,6 +15,15 @@ import { createSubmissionJobs } from '../services/formSubmissionJobs.js';
 
 const router = Router();
 
+// These routes are intended to be embedded/loaded from arbitrary third-party sites.
+// Helmet sets `Cross-Origin-Resource-Policy: same-origin` by default, which causes browsers to block
+// loading our embed script cross-origin with:
+// `net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin` (even though the response is 200 OK).
+router.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
+
 // Simple rate limiting (in production, use Redis)
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
