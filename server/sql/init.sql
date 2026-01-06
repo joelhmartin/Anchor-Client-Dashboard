@@ -17,6 +17,15 @@ CREATE TABLE IF NOT EXISTS users (
 -- Helpful index for lookups
 CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 
+-- Persistent avatar storage.
+-- NOTE: Cloud Run filesystem is ephemeral; storing avatars under /uploads will "disappear" after instance recycle.
+CREATE TABLE IF NOT EXISTS user_avatars (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+  bytes BYTEA NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Client profile metadata
 CREATE TABLE IF NOT EXISTS client_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

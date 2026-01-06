@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 
 import { query } from '../db.js';
@@ -963,8 +964,17 @@ router.post('/:token/avatar', uploadAvatar.single('avatar'), async (req, res) =>
     const record = await getTokenRecord(req.params.token);
     if (!record) return res.status(404).json({ message: 'Onboarding link is invalid or expired' });
     if (!req.file) return res.status(400).json({ message: 'Avatar file is required' });
-    const url = `/uploads/avatars/${req.file.filename}`;
-    await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, record.user_id]);
+    const bytes = await fsPromises.readFile(req.file.path);
+    const contentType = String(req.file.mimetype || 'image/jpeg');
+    await query(
+      `INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, updated_at = NOW()`,
+      [record.user_id, contentType, bytes]
+    );
+    await fsPromises.unlink(req.file.path).catch(() => {});
+    const url = `/api/hub/users/${record.user_id}/avatar?v=${Date.now()}`;
+    await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, record.user_id]);
     res.json({ avatar_url: url });
   } catch (err) {
     console.error('[onboarding:avatar]', err);
@@ -977,8 +987,17 @@ router.post('/me/avatar', requireAuth, uploadAvatar.single('avatar'), async (req
   try {
     const userId = req.portalUserId;
     if (!req.file) return res.status(400).json({ message: 'Avatar file is required' });
-    const url = `/uploads/avatars/${req.file.filename}`;
-    await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, userId]);
+    const bytes = await fsPromises.readFile(req.file.path);
+    const contentType = String(req.file.mimetype || 'image/jpeg');
+    await query(
+      `INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, updated_at = NOW()`,
+      [userId, contentType, bytes]
+    );
+    await fsPromises.unlink(req.file.path).catch(() => {});
+    const url = `/api/hub/users/${userId}/avatar?v=${Date.now()}`;
+    await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, userId]);
     res.json({ avatar_url: url });
   } catch (err) {
     console.error('[onboarding:me:avatar]', err);

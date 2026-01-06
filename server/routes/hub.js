@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -477,6 +478,48 @@ function publicUrl(filePath) {
 
 router.use(requireAuth);
 
+async function upsertUserAvatarFromUpload({ userId, file }) {
+  if (!userId) throw new Error('Missing userId');
+  if (!file?.path) throw new Error('Missing uploaded file path');
+  const bytes = await fsPromises.readFile(file.path);
+  const contentType = String(file.mimetype || 'image/jpeg');
+  await query(
+    `INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, updated_at = NOW()`,
+    [userId, contentType, bytes]
+  );
+  // Best effort cleanup of ephemeral disk file.
+  await fsPromises.unlink(file.path).catch(() => {});
+  // Store a stable URL; include cache-busting version.
+  const url = `/api/hub/users/${userId}/avatar?v=${Date.now()}`;
+  await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, userId]);
+  return url;
+}
+
+router.get('/users/:id/avatar', async (req, res) => {
+  try {
+    const targetUserId = String(req.params.id || '').trim();
+    if (!targetUserId) return res.status(400).send('Missing user id');
+
+    const role = req.user?.effective_role || req.user?.role;
+    const isSelf = req.user?.id === targetUserId;
+    const canView = isSelf || role === 'admin' || role === 'superadmin' || role === 'team';
+    if (!canView) return res.status(403).send('Forbidden');
+
+    const { rows } = await query('SELECT content_type, bytes FROM user_avatars WHERE user_id = $1 LIMIT 1', [targetUserId]);
+    if (!rows.length) return res.status(404).send('Not found');
+
+    const row = rows[0];
+    res.setHeader('Content-Type', row.content_type || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.send(row.bytes);
+  } catch (err) {
+    console.error('[hub:avatar:get]', err);
+    res.status(500).send('Failed to load avatar');
+  }
+});
+
 async function resolveAccountManagerContact(userId, options = {}) {
   if (!userId) return null;
   const { rows } = await query(
@@ -825,10 +868,14 @@ router.put('/profile', async (req, res) => {
 
 router.post('/profile/avatar', uploadAvatar.single('avatar'), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  const url = publicUrl(req.file.path);
   const targetUserId = req.portalUserId || req.user.id;
-  await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [url, targetUserId]);
-  res.json({ avatar_url: url });
+  try {
+    const url = await upsertUserAvatarFromUpload({ userId: targetUserId, file: req.file });
+    res.json({ avatar_url: url });
+  } catch (err) {
+    console.error('[hub:profile:avatar]', err);
+    res.status(500).json({ message: 'Unable to upload avatar' });
+  }
 });
 
 router.get('/brand', async (req, res) => {
