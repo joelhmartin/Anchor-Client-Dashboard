@@ -141,6 +141,15 @@ export default function ClientOnboardingPage() {
   const [serviceList, setServiceList] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState('');
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl && typeof URL !== 'undefined') {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+    };
+  }, [avatarPreviewUrl]);
   const [logoUploadError, setLogoUploadError] = useState('');
   const [styleGuideUploadError, setStyleGuideUploadError] = useState('');
   const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -606,6 +615,7 @@ export default function ClientOnboardingPage() {
       try {
         await refreshUser();
       } catch {}
+      setOnboardingComplete(true);
       // Show completion modal instead of redirecting to a separate thank-you page.
       setCompleteOpen(true);
     } catch (err) {
@@ -617,6 +627,13 @@ export default function ClientOnboardingPage() {
     }
   };
 
+  // Once onboarding is marked complete and the modal is dismissed, move the user to the portal.
+  useEffect(() => {
+    if (onboardingComplete && !completeOpen) {
+      navigate('/portal', { replace: true });
+    }
+  }, [onboardingComplete, completeOpen, navigate]);
+
   const renderProfileStep = () => (
     <Stack spacing={2}>
       <Typography variant="h6">Profile Details</Typography>
@@ -626,7 +643,7 @@ export default function ClientOnboardingPage() {
       <Stack spacing={2}>
         <Stack direction="row" spacing={2} alignItems="center">
           <Avatar
-            src={form.avatar_url || ''}
+            src={avatarPreviewUrl || form.avatar_url || ''}
             alt="Avatar"
             sx={{ width: 96, height: 96, bgcolor: 'grey.200', color: 'grey.600' }}
           >
@@ -641,6 +658,12 @@ export default function ClientOnboardingPage() {
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
+                // Immediate local preview for UX; revoke previous URL if any.
+                if (avatarPreviewUrl && typeof URL !== 'undefined') {
+                  URL.revokeObjectURL(avatarPreviewUrl);
+                }
+                const localUrl = typeof URL !== 'undefined' ? URL.createObjectURL(file) : '';
+                setAvatarPreviewUrl(localUrl);
                 try {
                   const res = token ? await uploadOnboardingAvatar(token, file) : await uploadOnboardingAvatarMe(file);
                   setForm((prev) => ({ ...prev, avatar_url: res.data?.avatar_url || prev.avatar_url }));
@@ -1292,7 +1315,7 @@ export default function ClientOnboardingPage() {
       {completeOpen && (
         <Box sx={{ position: 'fixed', inset: 0, zIndex: 2200 }}>
           {/* Semi-transparent overlay */}
-          <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(10, 14, 26, 0.72)', zIndex: 0 }} />
+          <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(10, 14, 26, 0.5)', zIndex: 0 }} />
 
           {/* Fireworks behind popup but above overlay */}
           <FireworksCanvas style={{ zIndex: 1 }} />
