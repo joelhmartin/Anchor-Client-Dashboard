@@ -40,6 +40,7 @@ process.on('uncaughtException', (err) => {
 });
 
 const CSP_ALLOW_UNSAFE_EVAL = String(process.env.CSP_ALLOW_UNSAFE_EVAL || '').toLowerCase() === 'true';
+const CSP_ALLOW_UNSAFE_INLINE_SCRIPTS = String(process.env.CSP_ALLOW_UNSAFE_INLINE_SCRIPTS || '').toLowerCase() === 'true';
 const CSP_FRAME_SRC = (process.env.CSP_FRAME_SRC || '')
   .split(',')
   .map((s) => s.trim())
@@ -51,6 +52,7 @@ const baseCspDirectives = {
   'script-src': [
     "'self'",
     'https://cdn.jsdelivr.net', // Monaco CDN
+    ...(CSP_ALLOW_UNSAFE_INLINE_SCRIPTS ? ["'unsafe-inline'"] : []),
     ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
   ],
   // Some browsers report violations against script-src-elem (and fall back to script-src if not set).
@@ -58,10 +60,12 @@ const baseCspDirectives = {
   'script-src-elem': [
     "'self'",
     'https://cdn.jsdelivr.net', // Monaco CDN
+    ...(CSP_ALLOW_UNSAFE_INLINE_SCRIPTS ? ["'unsafe-inline'"] : []),
     ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
   ],
-  'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-  'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  // Monaco loads CSS from its CDN.
+  'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://cdn.jsdelivr.net'],
+  'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://cdn.jsdelivr.net'],
   'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
   'img-src': ["'self'", 'data:'],
   // Monaco fetches files (themes, language configs) from CDN

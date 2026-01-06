@@ -57,8 +57,10 @@ import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import FileUploadList from 'ui-component/extended/Form/FileUploadList';
 import AnchorStepIcon from 'ui-component/extended/AnchorStepIcon';
+import FireworksCanvas from 'ui-component/FireworksCanvas';
 
 const emptyService = () => ({ name: '', active: true, isDefault: false });
+const CALENDAR_LINK = 'https://calendar.app.google/zgRn9gFuVizsnMmM9';
 const BASE_STEP_CONFIG = [
   { key: 'profile', label: 'Profile & Credentials', description: 'Confirm account basics and set a password.' },
   { key: 'brand', label: 'Brand Assets', description: 'Upload logos/style guides and share brand basics.' },
@@ -114,7 +116,7 @@ export default function ClientOnboardingPage() {
   const { token } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { login: authLogin } = useAuth();
+  const { login: authLogin, refreshUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -138,6 +140,7 @@ export default function ClientOnboardingPage() {
   });
   const [serviceList, setServiceList] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
+  const [completeOpen, setCompleteOpen] = useState(false);
   const [logoUploadError, setLogoUploadError] = useState('');
   const [styleGuideUploadError, setStyleGuideUploadError] = useState('');
   const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -599,7 +602,12 @@ export default function ClientOnboardingPage() {
           if (data?.user?.id) window.localStorage.removeItem(`anchor:onboarding:draft:user:${data.user.id}`);
         }
       } catch {}
-      navigate('/onboarding/thank-you', { replace: true, state: { email: data.user.email } });
+      // Immediately refresh the current user so sidebar + route gating switches to the full app.
+      try {
+        await refreshUser();
+      } catch {}
+      // Show completion modal instead of redirecting to a separate thank-you page.
+      setCompleteOpen(true);
     } catch (err) {
       const msg = getErrorMessage(err, 'Unable to save onboarding information');
       setError(msg);
@@ -1280,9 +1288,79 @@ export default function ClientOnboardingPage() {
   }
 
   return (
-    <Container maxWidth="md" sx={{ my: 6 }}>
-      <Paper elevation={2} sx={{ p: { xs: 3, md: 4 } }}>
-        <Stack spacing={3}>
+    <>
+      {completeOpen && (
+        <Box sx={{ position: 'fixed', inset: 0, zIndex: 2200 }}>
+          {/* Semi-transparent overlay */}
+          <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(10, 14, 26, 0.72)', zIndex: 0 }} />
+
+          {/* Fireworks behind popup but above overlay */}
+          <FireworksCanvas style={{ zIndex: 1 }} />
+
+          {/* Popup */}
+          <Box
+            sx={{
+              position: 'relative',
+              zIndex: 2,
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: 2
+            }}
+          >
+            <Paper
+              elevation={0}
+              sx={{
+                width: '100%',
+                maxWidth: 560,
+                p: { xs: 3, md: 4 },
+                borderRadius: 3,
+                bgcolor: 'rgba(255,255,255,0.96)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.55)'
+              }}
+            >
+              <Stack spacing={2.25}>
+                <Typography variant="h4" sx={{ fontWeight: 800, letterSpacing: -0.6 }}>
+                  Thank you for completing your onboarding
+                </Typography>
+                <Typography variant="body1" color="text.secondary">
+                  We appreciate you taking the time to share these details. Your onboarding form has been received, and your account is
+                  ready for the next steps.
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Next step: schedule a quick kick-off with your Account Manager.
+                </Typography>
+
+                <Button
+                  component="a"
+                  href={CALENDAR_LINK}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                >
+                  Schedule a meeting with your Account Manager
+                </Button>
+
+                <Button variant="text" onClick={() => setCompleteOpen(false)} sx={{ alignSelf: 'center' }}>
+                  Close
+                </Button>
+
+                <Typography variant="caption" color="text.secondary">
+                  If you have any questions, reply to your onboarding email or reach out to your account manager directly.
+                </Typography>
+              </Stack>
+            </Paper>
+          </Box>
+        </Box>
+      )}
+
+      <Container maxWidth="md" sx={{ my: 6 }}>
+        <Paper elevation={2} sx={{ p: { xs: 3, md: 4 } }}>
+          <Stack spacing={3}>
           <Box>
             <Typography variant="h4" gutterBottom>
               Welcome to Anchor
@@ -1336,8 +1414,9 @@ export default function ClientOnboardingPage() {
               {isLastStep ? (submitting ? 'Saving…' : 'Complete Onboarding') : 'Continue'}
             </Button>
           </Stack>
-        </Stack>
-      </Paper>
-    </Container>
+          </Stack>
+        </Paper>
+      </Container>
+    </>
   );
 }

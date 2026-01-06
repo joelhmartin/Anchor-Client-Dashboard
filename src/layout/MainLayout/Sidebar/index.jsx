@@ -20,6 +20,7 @@ import { handlerDrawerOpen, useGetMenuMaster } from 'api/menu';
 import useAuth from 'hooks/useAuth';
 import { useLocation } from 'react-router-dom';
 import portalMenu from 'menu-items/portal';
+import portalOnboardingMenu from 'menu-items/portalOnboarding';
 import tasksMenu from 'menu-items/tasks';
 import formsMenu from 'menu-items/forms';
 import TaskSidebarPanel from './TaskSidebarPanel';
@@ -39,6 +40,7 @@ function Sidebar() {
   const isPortal = user?.role === 'client' || Boolean(actingClientId) || location.pathname.startsWith('/portal');
   const isTasks = location.pathname.startsWith('/tasks');
   const isForms = location.pathname.startsWith('/forms');
+  const onboardingPending = user?.role === 'client' && !user?.onboarding_completed_at;
 
   const {
     state: { miniDrawer }
@@ -74,7 +76,7 @@ function Sidebar() {
     }
 
     // Determine which menu config to use
-    const menuConfig = isPortal ? portalMenu : isForms ? formsMenu : isTasks ? tasksMenu : undefined;
+    const menuConfig = isPortal ? (onboardingPending ? portalOnboardingMenu : portalMenu) : isForms ? formsMenu : isTasks ? tasksMenu : undefined;
 
     let drawerSX = { paddingLeft: '0px', paddingRight: '0px', marginTop: '20px' };
     if (drawerOpen) drawerSX = { paddingLeft: '16px', paddingRight: '16px', marginTop: '0px' };
@@ -94,7 +96,18 @@ function Sidebar() {
         )}
       </>
     );
-  }, [downMD, drawerOpen, isPortal, isTasks, isForms]);
+  }, [
+    downMD,
+    drawerOpen,
+    isPortal,
+    isTasks,
+    isForms,
+    onboardingPending,
+    location.pathname,
+    user?.role,
+    user?.onboarding_completed_at,
+    actingClientId
+  ]);
 
   return (
     <Box component="nav" sx={{ flexShrink: { md: 0 }, width: { xs: 'auto', md: drawerWidth } }} aria-label="mailbox folders">
