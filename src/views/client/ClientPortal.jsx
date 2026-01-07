@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
@@ -37,6 +37,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SaveIcon from '@mui/icons-material/Save';
 
 import MainCard from 'ui-component/cards/MainCard';
+import FireworksCanvas from 'ui-component/FireworksCanvas';
 import useAuth from 'hooks/useAuth';
 import { fetchAnalyticsUrl } from 'api/analytics';
 import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
@@ -105,6 +106,8 @@ const BRAND_FIELD_ORDER = [
 export default function ClientPortal() {
   const { actingClientId, clearActingClient } = useAuth();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const tabParam = searchParams.get('tab') || 'profile';
   const [activeTab, setActiveTab] = useState(tabParam);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -196,6 +199,14 @@ export default function ClientPortal() {
   const [archivedClients, setArchivedClients] = useState([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
+  const [onboardingModalOpen, setOnboardingModalOpen] = useState(Boolean(location.state?.onboardingComplete));
+
+  // Clear navigation state after showing the modal so it doesn't re-open on subsequent navigations.
+  useEffect(() => {
+    if (onboardingModalOpen && location.state?.onboardingComplete) {
+      navigate(location.pathname + location.search, { replace: true, state: {} });
+    }
+  }, [onboardingModalOpen, location.pathname, location.search, location.state, navigate]);
 
   const handleCloseRequestDialog = () => {
     setRequestDialogOpen(false);
@@ -2368,6 +2379,63 @@ export default function ClientPortal() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {onboardingModalOpen && (
+        <Box sx={{ position: 'fixed', inset: 0, zIndex: 2200 }}>
+          <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(10, 14, 26, 0.5)', zIndex: 0 }} />
+          <FireworksCanvas style={{ zIndex: 1 }} />
+          <Box
+            sx={{
+              position: 'relative',
+              zIndex: 2,
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: 2
+            }}
+          >
+            <Paper
+              elevation={0}
+              sx={{
+                width: '100%',
+                maxWidth: 560,
+                p: { xs: 3, md: 4 },
+                borderRadius: 3,
+                bgcolor: 'rgba(255,255,255,0.96)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.55)'
+              }}
+            >
+              <Stack spacing={2.25}>
+                <Typography variant="h4" sx={{ fontWeight: 800, letterSpacing: -0.6 }}>
+                  Thank you for completing your onboarding
+                </Typography>
+                <Typography variant="body1" color="text.secondary">
+                  Your account is ready for the next steps. We’ve saved your details.
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Next step: schedule a quick kick-off with your Account Manager.
+                </Typography>
+                <Button
+                  component="a"
+                  href="https://calendar.app.google/zgRn9gFuVizsnMmM9"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                >
+                  Schedule a meeting with your Account Manager
+                </Button>
+                <Button variant="text" onClick={() => setOnboardingModalOpen(false)} sx={{ alignSelf: 'center' }}>
+                  Close
+                </Button>
+              </Stack>
+            </Paper>
+          </Box>
+        </Box>
+      )}
     </MainCard>
   );
 }

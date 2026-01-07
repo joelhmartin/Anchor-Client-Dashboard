@@ -615,9 +615,10 @@ export default function ClientOnboardingPage() {
       try {
         await refreshUser();
       } catch {}
+      // Redirect to portal with a flag to show completion modal over the dashboard.
+      setCompleteOpen(false);
       setOnboardingComplete(true);
-      // Show completion modal instead of redirecting to a separate thank-you page.
-      setCompleteOpen(true);
+      navigate('/portal', { replace: true, state: { onboardingComplete: true } });
     } catch (err) {
       const msg = getErrorMessage(err, 'Unable to save onboarding information');
       setError(msg);
@@ -627,12 +628,12 @@ export default function ClientOnboardingPage() {
     }
   };
 
-  // Once onboarding is marked complete and the modal is dismissed, move the user to the portal.
+  // Once onboarding is marked complete (should already redirect), guard against any lingering state.
   useEffect(() => {
-    if (onboardingComplete && !completeOpen) {
-      navigate('/portal', { replace: true });
+    if (onboardingComplete) {
+      navigate('/portal', { replace: true, state: { onboardingComplete: true } });
     }
-  }, [onboardingComplete, completeOpen, navigate]);
+  }, [onboardingComplete, navigate]);
 
   const renderProfileStep = () => (
     <Stack spacing={2}>
@@ -1312,6 +1313,7 @@ export default function ClientOnboardingPage() {
 
   return (
     <>
+      {/* Local completion modal is no longer used; completion now redirects to /portal to show the modal over the dashboard. */}
       {completeOpen && (
         <Box sx={{ position: 'fixed', inset: 0, zIndex: 2200 }}>
           {/* Semi-transparent overlay */}
