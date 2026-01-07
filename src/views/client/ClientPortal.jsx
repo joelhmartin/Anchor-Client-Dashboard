@@ -104,7 +104,7 @@ const BRAND_FIELD_ORDER = [
 ];
 
 export default function ClientPortal() {
-  const { actingClientId, clearActingClient } = useAuth();
+  const { actingClientId, clearActingClient, refreshUser } = useAuth();
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -505,6 +505,10 @@ export default function ClientPortal() {
       const updated = await updateProfile(payload);
       setProfile(updated);
       triggerMessage('success', 'Profile saved');
+      // Refresh auth context so header and other components reflect changes
+      try {
+        await refreshUser();
+      } catch {}
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to save profile');
     } finally {
@@ -519,6 +523,10 @@ export default function ClientPortal() {
       await uploadAvatar(file);
       triggerMessage('success', 'Avatar updated');
       loadProfile();
+      // Refresh auth context so header avatar updates everywhere
+      try {
+        await refreshUser();
+      } catch {}
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to upload avatar');
     }

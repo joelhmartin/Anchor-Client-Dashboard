@@ -861,8 +861,8 @@ router.put('/profile', async (req, res) => {
     const includeClientProfile = (row?.role || (isPortalClient ? 'client' : null)) === 'client';
     res.json({ user: serializeHubProfileUser(row, { includeClientProfile }) });
   } catch (err) {
-    console.error('[profile]', err);
-    res.status(500).json({ message: 'Unable to update profile' });
+    console.error('[profile:update]', err.message || err, err.stack);
+    res.status(500).json({ message: err.message || 'Unable to update profile' });
   }
 });
 
