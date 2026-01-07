@@ -13,6 +13,8 @@ const router = Router();
 
 router.use(cookieParser());
 
+const dateToString = (val) => (val instanceof Date ? val.toISOString() : val);
+
 const userSchema = z.object({
   id: z.string(),
   email: z.string().email(),
@@ -20,8 +22,8 @@ const userSchema = z.object({
   last_name: z.string().min(1),
   role: z.string().default('client'),
   avatar_url: z.string().optional().nullable(),
-  onboarding_completed_at: z.string().optional().nullable(),
-  created_at: z.preprocess((val) => (val instanceof Date ? val.toISOString() : val), z.string())
+  onboarding_completed_at: z.preprocess(dateToString, z.string().optional().nullable()),
+  created_at: z.preprocess(dateToString, z.string())
 });
 
 const nameSchema = z
