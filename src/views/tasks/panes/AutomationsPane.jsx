@@ -1,17 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Autocomplete,
-  Box,
-  Button,
-  CircularProgress,
-  Divider,
-  MenuItem,
-  Select,
-  Stack,
-  TextField,
-  Typography
-} from '@mui/material';
+import { Alert, Autocomplete, Box, Button, CircularProgress, Divider, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
 import {
   fetchTaskBoardsAll,
   fetchTaskBoardAutomations,
@@ -82,7 +70,8 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
   const effectiveBoardId = canShowBoard ? selectedBoardId : '';
 
   const statusOptions = useMemo(() => {
-    const labels = Array.isArray(boardStatusLabels) && boardStatusLabels.length ? boardStatusLabels : [{ id: 'default', label: 'Needs Attention' }];
+    const labels =
+      Array.isArray(boardStatusLabels) && boardStatusLabels.length ? boardStatusLabels : [{ id: 'default', label: 'Needs Attention' }];
     return labels.map((l) => l.label);
   }, [boardStatusLabels]);
 
@@ -90,7 +79,8 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
     setError('');
     setLoadingRules(true);
     try {
-      const next = scope === 'global' ? await fetchGlobalTaskAutomations() : effectiveBoardId ? await fetchTaskBoardAutomations(effectiveBoardId) : [];
+      const next =
+        scope === 'global' ? await fetchGlobalTaskAutomations() : effectiveBoardId ? await fetchTaskBoardAutomations(effectiveBoardId) : [];
       setRules(next || []);
     } catch (err) {
       setRules([]);
@@ -102,7 +92,8 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
     // runs
     setLoadingRuns(true);
     try {
-      const params = scope === 'global' ? { scope: 'global' } : effectiveBoardId ? { scope: 'board', board_id: effectiveBoardId } : { scope: 'board' };
+      const params =
+        scope === 'global' ? { scope: 'global' } : effectiveBoardId ? { scope: 'board', board_id: effectiveBoardId } : { scope: 'board' };
       const rows = await fetchAutomationRuns(params);
       setRuns(rows || []);
     } catch (_err) {
@@ -310,12 +301,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
 
         <Stack spacing={1}>
           <Typography variant="subtitle2">Create automation</Typography>
-          <TextField
-            size="small"
-            label="Name"
-            value={draft.name}
-            onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
-          />
+          <TextField size="small" label="Name" value={draft.name} onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))} />
           <Select
             size="small"
             value={draft.trigger_type}
@@ -379,7 +365,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
-      </Typography>
+                    </Typography>
                   </Stack>
                   <Stack direction="row" spacing={0.5}>
                     <Button size="small" variant="outlined" onClick={() => toggleActive(r)}>
@@ -404,7 +390,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
           ) : (
             <Stack spacing={0.75}>
               {!runs.length && (
-      <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" color="text.secondary">
                   No runs yet.
                 </Typography>
               )}
@@ -416,7 +402,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
                   {r.error ? (
                     <Typography variant="body2" color="error" sx={{ mt: 0.25 }}>
                       {r.error}
-      </Typography>
+                    </Typography>
                   ) : null}
                 </Box>
               ))}
@@ -427,4 +413,3 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
     </Box>
   );
 }
-
