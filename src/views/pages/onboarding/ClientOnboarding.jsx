@@ -1,38 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
-import {
-  Alert,
-  Avatar,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  Container,
-  FormControl,
-  FormControlLabel,
-  Grid,
-  IconButton,
-  InputAdornment,
-  InputLabel,
-  Link,
-  List,
-  ListItem,
-  ListItemText,
-  OutlinedInput,
-  Paper,
-  Radio,
-  RadioGroup,
-  Stack,
-  Step,
-  StepLabel,
-  Stepper,
-  TextField,
-  Typography
-} from '@mui/material';
-import { IconPlus, IconTrash, IconUser } from '@tabler/icons-react';
-import CheckBoxIcon from '@mui/icons-material/CheckBox';
-import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
+import { Alert, Box, Button, CircularProgress, Container, Paper, Stack, Step, StepLabel, Stepper, Typography } from '@mui/material';
 
 import {
   fetchOnboarding,
@@ -53,11 +22,17 @@ import { findClientTypePreset } from 'constants/clientPresets';
 import { strengthColor, strengthIndicator } from 'utils/password-strength';
 import { useToast } from 'contexts/ToastContext';
 import { getErrorMessage } from 'utils/errors';
-import Visibility from '@mui/icons-material/Visibility';
-import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import FileUploadList from 'ui-component/extended/Form/FileUploadList';
 import AnchorStepIcon from 'ui-component/extended/AnchorStepIcon';
 import FireworksCanvas from 'ui-component/FireworksCanvas';
+
+import ProfileStep from './steps/ProfileStep';
+import BrandStep from './steps/BrandStep';
+import ServicesStep from './steps/ServicesStep';
+import WebsiteAccessStep from './steps/WebsiteAccessStep';
+import Ga4Step from './steps/Ga4Step';
+import GoogleAdsStep from './steps/GoogleAdsStep';
+import MetaStep from './steps/MetaStep';
+import FormsStep from './steps/FormsStep';
 
 const emptyService = () => ({ name: '', active: true, isDefault: false });
 const CALENDAR_LINK = 'https://calendar.app.google/zgRn9gFuVizsnMmM9';
@@ -71,7 +46,11 @@ const ACCESS_STEP_CONFIG = [
   { key: 'website_access', label: 'Website Access', description: 'Confirm access to your website platform/hosting/DNS.' },
   { key: 'ga4', label: 'Google Analytics (GA4)', description: 'Confirm Analytics access so we can configure tracking and reporting.' },
   { key: 'google_ads', label: 'Google Ads', description: 'Confirm Google Ads access so we can manage campaigns and conversions.' },
-  { key: 'meta', label: 'Facebook Business Manager', description: 'Confirm Meta access so we can manage ads, pixels, and page connections.' },
+  {
+    key: 'meta',
+    label: 'Facebook Business Manager',
+    description: 'Confirm Meta access so we can manage ads, pixels, and page connections.'
+  },
   {
     key: 'forms',
     label: 'Website Forms & Integrations',
@@ -233,8 +212,7 @@ export default function ClientOnboardingPage() {
         const defaultServiceNames = getDefaultServices(payload.profile);
         setDefaultOptions(defaultServiceNames);
         const defaultNameSet = new Set(defaultServiceNames.map((name) => name.toLowerCase()));
-        const initialName =
-          [payload.user.first_name, payload.user.last_name].filter(Boolean).join(' ').trim() || payload.user.email;
+        const initialName = [payload.user.first_name, payload.user.last_name].filter(Boolean).join(' ').trim() || payload.user.email;
         const presetBrand = {
           business_name: payload.brand?.business_name || '',
           business_description: payload.brand?.business_description || '',
@@ -259,9 +237,7 @@ export default function ClientOnboardingPage() {
         if (token) localCandidates.push(readLocalDraft(localDraftKeyForToken(token)));
         if (payload?.user?.id) localCandidates.push(readLocalDraft(localDraftKeyForUser(payload.user.id)));
         localCandidates.push(readLocalDraft(LOCAL_DRAFT_ME_KEY));
-        const localBest = localCandidates
-          .filter(Boolean)
-          .sort((a, b) => Number(b.saved_at || 0) - Number(a.saved_at || 0))[0];
+        const localBest = localCandidates.filter(Boolean).sort((a, b) => Number(b.saved_at || 0) - Number(a.saved_at || 0))[0];
         const draft = localBest?.draft || serverDraft;
 
         const draftForm = draft?.form ? { ...draft.form } : null;
@@ -330,10 +306,7 @@ export default function ClientOnboardingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const allServicesValid = useMemo(
-    () => serviceList.every((service) => !service.name || service.name.trim().length > 0),
-    [serviceList]
-  );
+  const allServicesValid = useMemo(() => serviceList.every((service) => !service.name || service.name.trim().length > 0), [serviceList]);
 
   const addServiceByName = useCallback((name, options = {}) => {
     const clean = String(name || '').trim();
@@ -414,8 +387,6 @@ export default function ClientOnboardingPage() {
   const handleToggleConfirmPassword = () => setShowConfirmPassword((prev) => !prev);
   const handleMouseDownPassword = (event) => event.preventDefault();
 
-  const CheckboxRadio = (props) => <Radio {...props} icon={<CheckBoxOutlineBlankIcon />} checkedIcon={<CheckBoxIcon />} />;
-
   const setAccessStatus = (statusKey, statusValue, mapping) => {
     setAccess((prev) => ({
       ...prev,
@@ -423,6 +394,27 @@ export default function ClientOnboardingPage() {
       ...(typeof mapping === 'function' ? mapping(statusValue, prev) : {})
     }));
   };
+
+  const clearMessages = useCallback(() => {
+    setError('');
+    setSuccessMessage('');
+  }, []);
+
+  const uploadAvatar = useCallback(
+    (tokenValue, file) => (tokenValue ? uploadOnboardingAvatar(tokenValue, file) : uploadOnboardingAvatarMe(file)),
+    []
+  );
+
+  const uploadBrandAssets = useCallback(
+    (tokenValue, files, options) =>
+      tokenValue ? uploadOnboardingBrandAssets(tokenValue, files, options) : uploadOnboardingBrandAssetsMe(files, options),
+    []
+  );
+
+  const deleteBrandAsset = useCallback(
+    (tokenValue, assetId) => (tokenValue ? deleteOnboardingBrandAsset(tokenValue, assetId) : deleteOnboardingBrandAssetMe(assetId)),
+    []
+  );
 
   const validateStep = (stepIndex = activeStep) => {
     const key = stepConfig[stepIndex]?.key;
@@ -636,631 +628,78 @@ export default function ClientOnboardingPage() {
   }, [onboardingComplete, navigate]);
 
   const renderProfileStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Profile Details</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Confirm the name we should use in-app and the password you&apos;ll use to log in.
-      </Typography>
-      <Stack spacing={2}>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Avatar
-            src={avatarPreviewUrl || form.avatar_url || ''}
-            alt="Avatar"
-            sx={{ width: 96, height: 96, bgcolor: 'grey.200', color: 'grey.600' }}
-          >
-            {!form.avatar_url && <IconUser size={36} />}
-          </Avatar>
-          <Button variant="outlined" component="label">
-            Upload Avatar
-            <input
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                // Immediate local preview for UX; revoke previous URL if any.
-                if (avatarPreviewUrl && typeof URL !== 'undefined') {
-                  URL.revokeObjectURL(avatarPreviewUrl);
-                }
-                const localUrl = typeof URL !== 'undefined' ? URL.createObjectURL(file) : '';
-                setAvatarPreviewUrl(localUrl);
-                try {
-                  const res = token ? await uploadOnboardingAvatar(token, file) : await uploadOnboardingAvatarMe(file);
-                  setForm((prev) => ({ ...prev, avatar_url: res.data?.avatar_url || prev.avatar_url }));
-                } catch (err) {
-                  toast.error(getErrorMessage(err, 'Unable to upload avatar'));
-                }
-              }}
-            />
-          </Button>
-        </Stack>
-          <TextField
-            label="Display Name"
-            fullWidth
-            value={form.display_name}
-            onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
-          />
-          <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
-          <TextField
-            label="Call Tracking Main Phone Number"
-            fullWidth
-            value={form.call_tracking_main_number}
-            onChange={(e) => setForm((prev) => ({ ...prev, call_tracking_main_number: e.target.value }))}
-            placeholder="e.g., (555) 123-4567"
-          />
-          <TextField
-            label="Front Desk Email(s)"
-            fullWidth
-            value={form.front_desk_emails}
-            onChange={(e) => setForm((prev) => ({ ...prev, front_desk_emails: e.target.value }))}
-            placeholder="e.g., frontdesk@practice.com, scheduling@practice.com"
-            helperText="Comma-separated if multiple."
-          />
-          <TextField
-            label="Office Admin (Name)"
-            fullWidth
-            value={form.office_admin_name}
-            onChange={(e) => setForm((prev) => ({ ...prev, office_admin_name: e.target.value }))}
-          />
-          <TextField
-            label="Office Admin (Email)"
-            fullWidth
-            value={form.office_admin_email}
-            onChange={(e) => setForm((prev) => ({ ...prev, office_admin_email: e.target.value }))}
-          />
-          <TextField
-            label="Office Admin (Phone)"
-            fullWidth
-            value={form.office_admin_phone}
-            onChange={(e) => setForm((prev) => ({ ...prev, office_admin_phone: e.target.value }))}
-          />
-          <TextField
-            label="Form Submission Recipient Email(s)"
-            fullWidth
-            value={form.form_email_recipients}
-            onChange={(e) => setForm((prev) => ({ ...prev, form_email_recipients: e.target.value }))}
-            placeholder="e.g., leads@practice.com"
-            helperText="Where should website form submission emails go? Comma-separated if multiple."
-          />
-          {token || !data?.user?.has_password ? (
-            <>
-              <FormControl fullWidth variant="outlined">
-                <InputLabel htmlFor="client-onboarding-password">Password</InputLabel>
-                <OutlinedInput
-                  id="client-onboarding-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={(e) => changePassword(e.target.value)}
-                  endAdornment={
-                    <InputAdornment position="end">
-                      <IconButton
-                        aria-label="toggle password visibility"
-                        onClick={handleTogglePassword}
-                        onMouseDown={handleMouseDownPassword}
-                        edge="end"
-                        size="large"
-                      >
-                        {showPassword ? <Visibility /> : <VisibilityOff />}
-                      </IconButton>
-                    </InputAdornment>
-                  }
-                  label="Password"
-                />
-              </FormControl>
-              {strength !== 0 && (
-                <Box sx={{ mt: 1 }}>
-                  <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
-                    <Box sx={{ width: 90, height: 8, borderRadius: '7px', bgcolor: level?.color }} />
-                    <Typography variant="caption" color="text.secondary">
-                      {level?.label}
-                    </Typography>
-                  </Stack>
-                </Box>
-              )}
-              <FormControl fullWidth variant="outlined">
-                <InputLabel htmlFor="client-onboarding-password-confirm">Confirm Password</InputLabel>
-                <OutlinedInput
-                  id="client-onboarding-password-confirm"
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  value={form.password_confirm}
-                  onChange={(e) => setForm((prev) => ({ ...prev, password_confirm: e.target.value }))}
-                  endAdornment={
-                    <InputAdornment position="end">
-                      <IconButton
-                        aria-label="toggle confirm password visibility"
-                        onClick={handleToggleConfirmPassword}
-                        onMouseDown={handleMouseDownPassword}
-                        edge="end"
-                        size="large"
-                      >
-                        {showConfirmPassword ? <Visibility /> : <VisibilityOff />}
-                      </IconButton>
-                    </InputAdornment>
-                  }
-                  label="Confirm Password"
-                />
-              </FormControl>
-            </>
-          ) : (
-            <Alert severity="info">
-              Your account is active. Use “Save &amp; Continue Later” anytime and come back via login — you’ll return right
-              where you left off.
-            </Alert>
-          )}
-      </Stack>
-    </Stack>
+    <ProfileStep
+      token={token}
+      data={data}
+      form={form}
+      setForm={setForm}
+      submitting={submitting}
+      avatarPreviewUrl={avatarPreviewUrl}
+      setAvatarPreviewUrl={setAvatarPreviewUrl}
+      uploadAvatar={uploadAvatar}
+      toast={toast}
+      getErrorMessage={getErrorMessage}
+      showPassword={showPassword}
+      showConfirmPassword={showConfirmPassword}
+      onTogglePassword={handleTogglePassword}
+      onToggleConfirmPassword={handleToggleConfirmPassword}
+      onMouseDownPassword={handleMouseDownPassword}
+      strength={strength}
+      level={level}
+      onChangePassword={changePassword}
+    />
   );
 
   const renderBrandStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Brand Assets</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Upload logo/style guide files and share your business basics so we can build consistent creative and tracking.
-      </Typography>
-      <Stack spacing={2}>
-          <TextField
-            label="Business Name"
-            fullWidth
-            value={form.brand.business_name || ''}
-            onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_name: e.target.value } }))}
-          />
-          <TextField
-          label="Business Description"
-          fullWidth
-          multiline
-          minRows={3}
-          value={form.brand.business_description || ''}
-          onChange={(e) =>
-            setForm((prev) => ({ ...prev, brand: { ...prev.brand, business_description: e.target.value } }))
-          }
-        />
-        <TextField
-          label="Website URL"
-          fullWidth
-          value={form.brand.website_url || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
-        />
-        <TextField
-          label="Brand Notes"
-          multiline
-          minRows={3}
-          fullWidth
-          value={form.brand.brand_notes || ''}
-          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
-        />
-        <Stack spacing={2}>
-          <FileUploadList
-            title="Logos"
-            description="Upload one or more logo files (PNG/JPG/WebP/SVG)."
-            accept="image/*"
-            multiple
-            disabled={submitting}
-            busy={uploadingLogo}
-            errorText={logoUploadError}
-            kindLabel="Logo"
-            items={(Array.isArray(data?.brand?.logos) ? data.brand.logos : []).filter((a) => (a?.kind || 'logo') === 'logo')}
-            onAddFiles={async (files) => {
-              setLogoUploadError('');
-              setError('');
-              setSuccessMessage('');
-              setUploadingLogo(true);
-              try {
-                const res = token
-                  ? await uploadOnboardingBrandAssets(token, files, { kind: 'logo' })
-                  : await uploadOnboardingBrandAssetsMe(files, { kind: 'logo' });
-                const next = res?.data?.logos || res?.data?.assets || [];
-                setData((prev) => ({ ...prev, brand: { ...(prev?.brand || {}), logos: next } }));
-              } catch (err) {
-                const msg = getErrorMessage(err, 'Unable to upload logo(s)');
-                setLogoUploadError(msg);
-                toast.error(msg);
-              } finally {
-                setUploadingLogo(false);
-              }
-            }}
-            onRemove={async (asset) => {
-              setLogoUploadError('');
-              setError('');
-              setSuccessMessage('');
-              setRemovingBrandAssetId(asset?.id || '');
-              try {
-                const next = token ? await deleteOnboardingBrandAsset(token, asset.id) : await deleteOnboardingBrandAssetMe(asset.id);
-                const logos = next?.logos || next?.assets || [];
-                setData((prev) => ({ ...prev, brand: { ...(prev?.brand || {}), logos } }));
-              } catch (err) {
-                const msg = getErrorMessage(err, 'Unable to remove file');
-                setLogoUploadError(msg);
-                toast.error(msg);
-              } finally {
-                setRemovingBrandAssetId('');
-              }
-            }}
-          />
-
-          <FileUploadList
-            title="Style Guides"
-            description="Upload style guides or brand docs (PDF/DOC/DOCX). You can upload multiple."
-            accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            multiple
-            disabled={submitting}
-            busy={uploadingStyleGuide}
-            errorText={styleGuideUploadError}
-            kindLabel="Style Guide"
-            items={(Array.isArray(data?.brand?.logos) ? data.brand.logos : []).filter((a) => a?.kind === 'style_guide')}
-            onAddFiles={async (files) => {
-              setStyleGuideUploadError('');
-              setError('');
-              setSuccessMessage('');
-              setUploadingStyleGuide(true);
-              try {
-                const res = token
-                  ? await uploadOnboardingBrandAssets(token, files, { kind: 'style_guide' })
-                  : await uploadOnboardingBrandAssetsMe(files, { kind: 'style_guide' });
-                const next = res?.data?.logos || res?.data?.assets || [];
-                setData((prev) => ({ ...prev, brand: { ...(prev?.brand || {}), logos: next } }));
-              } catch (err) {
-                const msg = getErrorMessage(err, 'Unable to upload style guide(s)');
-                setStyleGuideUploadError(msg);
-                toast.error(msg);
-              } finally {
-                setUploadingStyleGuide(false);
-              }
-            }}
-            onRemove={async (asset) => {
-              setStyleGuideUploadError('');
-              setError('');
-              setSuccessMessage('');
-              setRemovingBrandAssetId(asset?.id || '');
-              try {
-                const next = token ? await deleteOnboardingBrandAsset(token, asset.id) : await deleteOnboardingBrandAssetMe(asset.id);
-                const logos = next?.logos || next?.assets || [];
-                setData((prev) => ({ ...prev, brand: { ...(prev?.brand || {}), logos } }));
-              } catch (err) {
-                const msg = getErrorMessage(err, 'Unable to remove file');
-                setStyleGuideUploadError(msg);
-                toast.error(msg);
-              } finally {
-                setRemovingBrandAssetId('');
-              }
-            }}
-          />
-
-          <Typography variant="caption" color="text.secondary">
-            Tip: Uploaded items appear above. Use the X to remove anything incorrect.
-          </Typography>
-        </Stack>
-      </Stack>
-    </Stack>
+    <BrandStep
+      token={token}
+      data={data}
+      setData={setData}
+      form={form}
+      setForm={setForm}
+      submitting={submitting}
+      uploadingLogo={uploadingLogo}
+      setUploadingLogo={setUploadingLogo}
+      logoUploadError={logoUploadError}
+      setLogoUploadError={setLogoUploadError}
+      uploadingStyleGuide={uploadingStyleGuide}
+      setUploadingStyleGuide={setUploadingStyleGuide}
+      styleGuideUploadError={styleGuideUploadError}
+      setStyleGuideUploadError={setStyleGuideUploadError}
+      removingBrandAssetId={removingBrandAssetId}
+      setRemovingBrandAssetId={setRemovingBrandAssetId}
+      uploadBrandAssets={uploadBrandAssets}
+      deleteBrandAsset={deleteBrandAsset}
+      onClearMessages={clearMessages}
+      toast={toast}
+      getErrorMessage={getErrorMessage}
+    />
   );
 
   const renderServicesStep = () => (
-    <Stack spacing={2}>
-      <Box>
-        <Typography variant="h6">Services</Typography>
-        <Typography variant="body2" color="text.secondary">
-          Pick the services that apply to your engagement. You can add more or remove preset ones.
-        </Typography>
-      </Box>
-
-      {/* Monthly revenue goal (disabled for now) */}
-      {/*
-      <TextField
-        label="Monthly Revenue Goal"
-        type="number"
-        fullWidth
-        value={form.monthly_revenue_goal}
-        onChange={(e) => setForm((prev) => ({ ...prev, monthly_revenue_goal: e.target.value }))}
-      />
-      */}
-
-      {defaultOptions.length ? (
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>
-            Recommended Services
-          </Typography>
-          <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }}>
-            {defaultOptions.map((option) => (
-              <FormControlLabel
-                key={option}
-                control={
-                  <Checkbox
-                    checked={isDefaultChecked(option)}
-                    onChange={() => handleToggleDefaultService(option)}
-                    color="primary"
-                  />
-                }
-                label={option}
-              />
-            ))}
-          </Stack>
-        </Paper>
-      ) : (
-        <Alert severity="info">No preset services configured yet. Add your own below.</Alert>
-      )}
-
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-        <TextField
-          fullWidth
-          label="Add another service"
-          placeholder="e.g., Campaign Management"
-          value={customServiceName}
-          onChange={(e) => setCustomServiceName(e.target.value)}
-          onKeyDown={handleCustomServiceKeyDown}
-        />
-        <Button
-          variant="contained"
-          startIcon={<IconPlus />}
-          onClick={handleCustomServiceAdd}
-          disabled={!customServiceName.trim()}
-          sx={{ minWidth: { xs: '100%', sm: 160 } }}
-        >
-          Add Service
-        </Button>
-      </Stack>
-
-      {!serviceList.length ? (
-        <Alert severity="info">Select or add at least one service to continue.</Alert>
-      ) : (
-        serviceList.map((service, index) => (
-          <Paper key={service.id || `${service.name}-${index}`} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <TextField
-                  label="Service Name"
-                  fullWidth
-                  value={service.name}
-                  onChange={(e) => handleServiceChange(index, 'name', e.target.value)}
-                  InputProps={{ readOnly: service.isDefault }}
-                  helperText={service.isDefault ? 'Default service from your preset' : ''}
-                />
-              </Grid>
-              <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                <IconButton color="error" onClick={() => handleRemoveService(index)}>
-                  <IconTrash size={18} />
-                </IconButton>
-              </Grid>
-            </Grid>
-          </Paper>
-        ))
-      )}
-    </Stack>
+    <ServicesStep
+      defaultOptions={defaultOptions}
+      isDefaultChecked={isDefaultChecked}
+      handleToggleDefaultService={handleToggleDefaultService}
+      customServiceName={customServiceName}
+      setCustomServiceName={setCustomServiceName}
+      handleCustomServiceKeyDown={handleCustomServiceKeyDown}
+      handleCustomServiceAdd={handleCustomServiceAdd}
+      serviceList={serviceList}
+      handleServiceChange={handleServiceChange}
+      handleRemoveService={handleRemoveService}
+    />
   );
 
-  const renderWebsiteAccessStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Website Access</Typography>
-      <Typography variant="body2" color="text.secondary">
-        We need <strong>Admin access</strong> to your website platform so we can manage updates, tracking,
-        integrations, performance optimization, and ongoing support.
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle2">This may include</Typography>
-        <List dense>
-          {['WordPress admin access (preferred)', 'Hosting provider access (Kinsta, WP Engine, etc.)', 'DNS access (if required)', 'FTP or SFTP access (if applicable)'].map(
-            (t) => (
-              <ListItem key={t} sx={{ pl: 0 }}>
-                <ListItemText primary={t} />
-              </ListItem>
-            )
-          )}
-        </List>
-        <Typography variant="subtitle2" sx={{ mt: 1 }}>
-          How to grant access
-        </Typography>
-        <Stack spacing={0.5}>
-          <Link href="https://wordpress.com/support/invite-people/" target="_blank" rel="noreferrer">
-            WordPress: invite people to your site
-          </Link>
-          <Link href="https://www.godaddy.com/help/invite-a-delegate-to-access-my-godaddy-account-12376" target="_blank" rel="noreferrer">
-            GoDaddy: invite a delegate to access your account
-          </Link>
-        </Stack>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          Add: <strong>access@anchorcorps.com</strong> (Admin access)
-        </Typography>
-      </Paper>
-      <RadioGroup
-        value={access.website_access_status}
-        onChange={(_e, v) =>
-          setAccessStatus('website_access_status', v, (val) => ({
-            website_access_provided: val === 'provided',
-            website_access_understood: val === 'will_provide'
-          }))
-        }
-      >
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided access" />
-        <FormControlLabel
-          value="will_provide"
-          control={<CheckboxRadio />}
-          label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
-        />
-        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Please help! I don’t know who has administrative access to my website account" />
-      </RadioGroup>
-    </Stack>
-  );
+  const renderWebsiteAccessStep = () => <WebsiteAccessStep access={access} setAccessStatus={setAccessStatus} />;
 
-  const renderGa4Step = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Google Analytics (GA4)</Typography>
-      <Typography variant="body2" color="text.secondary">
-        We need <strong>Admin access</strong> to your Google Analytics property so we can configure tracking, conversions, events, integrations, and reporting.
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle2">How to grant access</Typography>
-        <Link href="https://support.google.com/analytics/answer/1009702" target="_blank" rel="noreferrer">
-          Google Analytics access instructions
-                  </Link>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          Please add: <strong>access@anchorcorps.com</strong> (Admin access)
-        </Typography>
-      </Paper>
-      <RadioGroup
-        value={access.ga4_access_status}
-        onChange={(_e, v) =>
-          setAccessStatus('ga4_access_status', v, (val) => ({
-            ga4_access_provided: val === 'provided',
-            ga4_access_understood: val === 'will_provide'
-          }))
-        }
-      >
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided access" />
-        <FormControlLabel
-          value="will_provide"
-          control={<CheckboxRadio />}
-          label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
-        />
-        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Please help! I don’t know who has administrative access to my Google Analytics account" />
-      </RadioGroup>
-    </Stack>
-  );
+  const renderGa4Step = () => <Ga4Step access={access} setAccessStatus={setAccessStatus} />;
 
-  const renderGoogleAdsStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Google Ads</Typography>
-      <Typography variant="body2" color="text.secondary">
-        We need administrative access to your Google Ads account so we can manage campaigns, conversions, budgets, and integrations with analytics.
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle2">How to grant access</Typography>
-        <Link href="https://support.google.com/google-ads/answer/6372672?sjid=11176952801985058373-NA" target="_blank" rel="noreferrer">
-          Google Ads access instructions
-        </Link>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          Please add: <strong>access@anchorcorps.com</strong> (Admin access)
-        </Typography>
-      </Paper>
-      <RadioGroup
-        value={access.google_ads_access_status}
-        onChange={(_e, v) =>
-          setAccessStatus('google_ads_access_status', v, (val) => ({
-            google_ads_access_provided: val === 'provided',
-            google_ads_access_understood: val === 'will_provide'
-          }))
-        }
-      >
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided access" />
-        <FormControlLabel
-          value="will_provide"
-          control={<CheckboxRadio />}
-          label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
-        />
-        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Please help!  I don’t know who has administrative access to my Google Ads account" />
-      </RadioGroup>
-    </Stack>
-  );
+  const renderGoogleAdsStep = () => <GoogleAdsStep access={access} setAccessStatus={setAccessStatus} />;
 
-  const renderMetaStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Facebook Business Manager (Meta)</Typography>
-        <Typography variant="body2" color="text.secondary">
-        We need access through Facebook Business Manager to manage ads, pixels, conversion events, and page connections.
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle2">How to grant access</Typography>
-        <Link href="https://www.facebook.com/business/help/1717412048538897?id=2190812977867143" target="_blank" rel="noreferrer">
-          Meta partner access instructions
-        </Link>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          Give partner access to the <strong>Anchor Business Portfolio</strong> (Business ID <strong>577506357410429</strong>) and ensure <strong>Admin access</strong> is granted.
-        </Typography>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          If you also need to add a person by email anywhere in the flow, use <strong>access@anchorcorps.com</strong> (Admin access).
-        </Typography>
-      </Paper>
-      <RadioGroup
-        value={access.meta_access_status}
-        onChange={(_e, v) =>
-          setAccessStatus('meta_access_status', v, (val) => ({
-            meta_access_provided: val === 'provided_access',
-            meta_access_understood: val === 'will_provide_access'
-          }))
-        }
-      >
-        <FormControlLabel value="no_social_accounts" control={<CheckboxRadio />} label="I do not have a Facebook page or Instagram account" />
-        <FormControlLabel value="no_meta_ads_history" control={<CheckboxRadio />} label="I have not run Meta Ads before" />
-        <FormControlLabel
-          value="agency_owns_ad_account"
-          control={<CheckboxRadio />}
-          label="I am running Meta ads but my agency owns the ad account. We will need to start a new ad account"
-        />
-        <FormControlLabel value="provided_access" control={<CheckboxRadio />} label="I have provided access" />
-        <FormControlLabel
-          value="will_provide_access"
-          control={<CheckboxRadio />}
-          label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
-        />
-        <FormControlLabel value="not_running_meta" control={<CheckboxRadio />} label="Anchor Corps will not be running Meta for my business initially" />
-        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Please help!  I don’t know who has administrative access to my Meta account" />
-      </RadioGroup>
-    </Stack>
-  );
+  const renderMetaStep = () => <MetaStep access={access} setAccessStatus={setAccessStatus} />;
 
-  const renderFormsStep = () => (
-    <Stack spacing={2}>
-      <Typography variant="h6">Website Forms & Integrations</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Tell us how your website forms are set up so we can ensure lead tracking, compliance, and integrations work correctly.
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
-        <Typography variant="subtitle2">Check all that apply</Typography>
-        <Stack>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={access.website_forms_uses_third_party}
-                onChange={(e) => setAccess((p) => ({ ...p, website_forms_uses_third_party: e.target.checked }))}
-              />
-            }
-            label="Third-party form tools (Jotform, Formstack, Typeform, etc.)"
-          />
-          <FormControlLabel
-            control={<Checkbox checked={access.website_forms_uses_hipaa} onChange={(e) => setAccess((p) => ({ ...p, website_forms_uses_hipaa: e.target.checked }))} />}
-            label="HIPAA-compliant or secure intake forms"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={access.website_forms_connected_crm}
-                onChange={(e) => setAccess((p) => ({ ...p, website_forms_connected_crm: e.target.checked }))}
-              />
-            }
-            label="Forms connected to a CRM or practice management system"
-          />
-          <FormControlLabel
-            control={<Checkbox checked={access.website_forms_custom} onChange={(e) => setAccess((p) => ({ ...p, website_forms_custom: e.target.checked }))} />}
-            label="Custom-built or developer-managed forms"
-          />
-        </Stack>
-        <TextField
-          label="Notes"
-          fullWidth
-          multiline
-          minRows={3}
-          value={access.website_forms_notes}
-          onChange={(e) => setAccess((p) => ({ ...p, website_forms_notes: e.target.value }))}
-          sx={{ mt: 1 }}
-        />
-      </Paper>
-      <RadioGroup
-        value={access.website_forms_details_status}
-        onChange={(_e, v) =>
-          setAccessStatus('website_forms_details_status', v, (val) => ({
-            website_forms_details_provided: val === 'provided',
-            website_forms_details_understood: val === 'will_provide'
-          }))
-        }
-      >
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided details about my website form setup and integrations" />
-        <FormControlLabel
-          value="will_provide"
-          control={<CheckboxRadio />}
-          label="I have access and will be providing form/integration details to Anchor Corps as soon as possible to ensure a smooth onboarding"
-        />
-        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Please help! I’m not sure what information you need for website forms/integrations" />
-      </RadioGroup>
-    </Stack>
-  );
+  const renderFormsStep = () => <FormsStep access={access} setAccess={setAccess} setAccessStatus={setAccessStatus} />;
 
   const renderStepContent = () => {
     switch (currentStep?.key) {
@@ -1386,59 +825,52 @@ export default function ClientOnboardingPage() {
       <Container maxWidth="md" sx={{ my: 6 }}>
         <Paper elevation={2} sx={{ p: { xs: 3, md: 4 } }}>
           <Stack spacing={3}>
-          <Box>
-            <Typography variant="h4" gutterBottom>
-              Welcome to Anchor
-            </Typography>
-            <Typography variant="body1" color="text.secondary">
-              We&apos;ll take you through a few quick steps to personalize your dashboard. You can always revisit these
-              details later in the client portal.
-            </Typography>
-          </Box>
+            <Box>
+              <Typography variant="h4" gutterBottom>
+                Welcome to Anchor
+              </Typography>
+              <Typography variant="body1" color="text.secondary">
+                We&apos;ll take you through a few quick steps to personalize your dashboard. You can always revisit these details later in
+                the client portal.
+              </Typography>
+            </Box>
 
-          {/* Errors are toast-only. Keep UI clean during multi-step onboarding. */}
-          {successMessage && <Alert severity="success">{successMessage}</Alert>}
+            {/* Errors are toast-only. Keep UI clean during multi-step onboarding. */}
+            {successMessage && <Alert severity="success">{successMessage}</Alert>}
 
-          <Stepper
-            activeStep={activeStep}
-            alternativeLabel
-            sx={{
-              pt: 1,
-              '& .MuiStepLabel-label.Mui-active': { fontWeight: 700, transform: 'scale(1.03)' },
-              '& .MuiStepLabel-labelContainer': { transformOrigin: 'center' }
-            }}
-          >
-            {stepConfig.map((step) => (
-              <Step key={step.key}>
-                <StepLabel StepIconComponent={AnchorStepIcon}>{step.label}</StepLabel>
-              </Step>
-            ))}
-          </Stepper>
-
-          <Typography variant="body2" color="text.secondary">
-            {currentStep?.description}
-          </Typography>
-
-          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: { xs: 2, md: 3 } }}>
-            {renderStepContent()}
-          </Box>
-
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
-            <Button onClick={handleBack} disabled={activeStep === 0 || submitting}>
-              Back
-            </Button>
-            <Button variant="outlined" onClick={handleSaveDraft} disabled={submitting}>
-              Save &amp; Continue Later
-            </Button>
-            <Button
-              variant="contained"
-              size="large"
-              onClick={isLastStep ? handleSubmit : handleNext}
-              disabled={submitting}
+            <Stepper
+              activeStep={activeStep}
+              alternativeLabel
+              sx={{
+                pt: 1,
+                '& .MuiStepLabel-label.Mui-active': { fontWeight: 700, transform: 'scale(1.03)' },
+                '& .MuiStepLabel-labelContainer': { transformOrigin: 'center' }
+              }}
             >
-              {isLastStep ? (submitting ? 'Saving…' : 'Complete Onboarding') : 'Continue'}
-            </Button>
-          </Stack>
+              {stepConfig.map((step) => (
+                <Step key={step.key}>
+                  <StepLabel StepIconComponent={AnchorStepIcon}>{step.label}</StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+
+            <Typography variant="body2" color="text.secondary">
+              {currentStep?.description}
+            </Typography>
+
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: { xs: 2, md: 3 } }}>{renderStepContent()}</Box>
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
+              <Button onClick={handleBack} disabled={activeStep === 0 || submitting}>
+                Back
+              </Button>
+              <Button variant="outlined" onClick={handleSaveDraft} disabled={submitting}>
+                Save &amp; Continue Later
+              </Button>
+              <Button variant="contained" size="large" onClick={isLastStep ? handleSubmit : handleNext} disabled={submitting}>
+                {isLastStep ? (submitting ? 'Saving…' : 'Complete Onboarding') : 'Continue'}
+              </Button>
+            </Stack>
           </Stack>
         </Paper>
       </Container>

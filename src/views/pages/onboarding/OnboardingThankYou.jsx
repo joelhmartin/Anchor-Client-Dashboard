@@ -69,7 +69,7 @@ export default function OnboardingThankYou() {
             </Typography>
 
             <Stack direction={{ xs: 'column', sm: 'column' }} spacing={1.25} sx={{ pt: 1 }}>
-              <Button
+              {/* <Button
                 component="a"
                 href={CALENDAR_LINK}
                 target="_blank"
@@ -79,7 +79,7 @@ export default function OnboardingThankYou() {
                 fullWidth
               >
                 Schedule a meeting with your Account Manager
-              </Button>
+              </Button> */}
               <Button component={RouterLink} to="/portal" variant="text" size="large" fullWidth>
                 Back to Dashboard
               </Button>

@@ -1,7 +1,23 @@
 import client from './client';
 
+// Fetch cached calls (instant load from database)
 export function fetchCalls() {
-  return client.get('/hub/calls').then((res) => res.data.calls || []);
+  return client.get('/hub/calls').then((res) => ({
+    calls: res.data.calls || [],
+    cached: res.data.cached || false,
+    message: res.data.message
+  }));
+}
+
+// Sync with CTM and return updated calls (use for background refresh)
+export function syncCalls() {
+  return client.post('/hub/calls/sync').then((res) => ({
+    calls: res.data.calls || [],
+    synced: res.data.synced || false,
+    newCalls: res.data.newCalls || 0,
+    updatedCalls: res.data.updatedCalls || 0,
+    message: res.data.message
+  }));
 }
 
 export function scoreCall(callId, score) {

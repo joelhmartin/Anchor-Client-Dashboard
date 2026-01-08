@@ -10,11 +10,13 @@ import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
+import Collapse from '@mui/material/Collapse';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
+import Drawer from '@mui/material/Drawer';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Grid from '@mui/material/Grid';
 import IconButton from '@mui/material/IconButton';
@@ -31,10 +33,23 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SaveIcon from '@mui/icons-material/Save';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import PhoneIcon from '@mui/icons-material/Phone';
+import EmailIcon from '@mui/icons-material/Email';
+import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import ArchiveIcon from '@mui/icons-material/Archive';
+import PauseIcon from '@mui/icons-material/Pause';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 import MainCard from 'ui-component/cards/MainCard';
 import FireworksCanvas from 'ui-component/FireworksCanvas';
@@ -44,7 +59,7 @@ import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
 import { fetchBrand, saveBrand } from 'api/brand';
 import { deleteDocument, fetchDocuments, markDocumentViewed, uploadDocuments } from 'api/documents';
 import { fetchTasksAndRequests, submitRequest } from 'api/requests';
-import { fetchCalls, scoreCall, clearCallScore, clearAndReloadCalls } from 'api/calls';
+import { fetchCalls, syncCalls, scoreCall, clearCallScore, clearAndReloadCalls } from 'api/calls';
 import { fetchServices, agreeToService, fetchActiveClients, restoreActiveClient } from 'api/services';
 import {
   fetchJourneys,
@@ -193,8 +208,10 @@ export default function ClientPortal() {
   const [templateDraft, setTemplateDraft] = useState([]);
   const [templateLoading, setTemplateLoading] = useState(false);
   const [templateSaving, setTemplateSaving] = useState(false);
-  const [noteDialog, setNoteDialog] = useState({ open: false, journeyId: null, value: '' });
+  const [noteDialog, setNoteDialog] = useState({ open: false, journeyId: null, stepId: null, value: '' });
   const [timelineDialog, setTimelineDialog] = useState({ open: false, journey: null });
+  const [journeyDrawer, setJourneyDrawer] = useState({ open: false, journey: null });
+  const [expandedSteps, setExpandedSteps] = useState({});
   const [archivedJourneys, setArchivedJourneys] = useState([]);
   const [archivedClients, setArchivedClients] = useState([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -311,13 +328,50 @@ export default function ClientPortal() {
       .finally(() => setJourneysLoading(false));
   }, [triggerMessage]);
 
-  const loadCalls = useCallback(() => {
+  const [ctmSyncing, setCtmSyncing] = useState(false);
+
+  const loadCalls = useCallback(async () => {
     setCallsLoading(true);
-    fetchCalls()
-      .then((data) => setCalls(data))
-      .catch((err) => triggerMessage('error', err.message || 'Unable to load calls'))
-      .finally(() => setCallsLoading(false));
-  }, []);
+    try {
+      // Step 1: Instant load from cache (shows immediately)
+      const { calls: cachedCalls } = await fetchCalls();
+      setCalls(cachedCalls);
+      setCallsLoading(false);
+      
+      // Step 2: Background sync with CTM (updates in place when done)
+      setCtmSyncing(true);
+      try {
+        const { calls: syncedCalls, newCalls, updatedCalls, message } = await syncCalls();
+        setCalls(syncedCalls);
+        if (newCalls > 0 || updatedCalls > 0) {
+          triggerMessage('success', message || `Synced ${newCalls} new, ${updatedCalls} updated calls`);
+        }
+      } catch (syncErr) {
+        // Sync failure is non-critical since we already have cached data
+        console.warn('[CTM Sync]', syncErr.message);
+      } finally {
+        setCtmSyncing(false);
+      }
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to load calls');
+      setCallsLoading(false);
+    }
+  }, [triggerMessage]);
+
+  // Manual sync - just syncs with CTM without reloading cache
+  const handleManualCtmSync = useCallback(async () => {
+    if (ctmSyncing) return;
+    setCtmSyncing(true);
+    try {
+      const { calls: syncedCalls, newCalls, updatedCalls, message } = await syncCalls();
+      setCalls(syncedCalls);
+      triggerMessage('success', message || (newCalls || updatedCalls ? `Synced ${newCalls} new, ${updatedCalls} updated` : 'Already up to date with CTM'));
+    } catch (err) {
+      triggerMessage('error', err.message || 'Sync with CTM failed');
+    } finally {
+      setCtmSyncing(false);
+    }
+  }, [ctmSyncing, triggerMessage]);
 
   const updateLocalCallRating = useCallback((callId, nextRating) => {
     setCalls((prev) => {
@@ -760,6 +814,8 @@ export default function ClientPortal() {
   const upsertJourney = useCallback((journey) => {
     if (!journey) return;
     setJourneys((prev) => {
+      // Handle null state (journeys not yet loaded)
+      if (!prev) return [journey];
       const index = prev.findIndex((item) => item.id === journey.id);
       if (index === -1) return [journey, ...prev];
       const clone = [...prev];
@@ -795,9 +851,8 @@ export default function ClientPortal() {
     }
     setConcernSaving(true);
     try {
-      let journey;
       if (concernDialog.journeyId) {
-        journey = await updateJourney(concernDialog.journeyId, { symptoms: selections });
+        await updateJourney(concernDialog.journeyId, { symptoms: selections });
       } else {
         const payload = {
           lead_call_id: concernDialog.lead?.id,
@@ -806,9 +861,10 @@ export default function ClientPortal() {
           client_email: concernDialog.lead?.caller_email || '',
           symptoms: selections
         };
-        journey = await createJourney(payload);
+        await createJourney(payload);
       }
-      upsertJourney(journey);
+      // Reload all journeys to ensure we have the complete list
+      await loadJourneys();
       triggerMessage('success', 'Client journey updated');
       handleCloseConcernDialog();
     } catch (err) {
@@ -822,26 +878,40 @@ export default function ClientPortal() {
     try {
       const journey = await updateJourney(journeyId, changes);
       upsertJourney(journey);
+      updateDrawerJourney(journey);
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to update journey');
     }
   };
 
-  const handleOpenNoteDialog = (journey) => {
-    setNoteDialog({ open: true, journeyId: journey.id, value: '' });
+  const handleOpenNoteDialog = (journey, stepId = null) => {
+    // Pre-populate with existing step note if editing
+    let existingNote = '';
+    if (stepId && journey.steps) {
+      const step = journey.steps.find((s) => s.id === stepId);
+      existingNote = step?.notes || '';
+    }
+    setNoteDialog({ open: true, journeyId: journey.id, stepId, value: existingNote });
   };
 
   const handleCloseNoteDialog = () => {
-    setNoteDialog({ open: false, journeyId: null, value: '' });
+    setNoteDialog({ open: false, journeyId: null, stepId: null, value: '' });
   };
 
-  const handleSaveJourneyNote = async () => {
+  const handleSaveStepNote = async () => {
     const body = noteDialog.value?.trim();
-    if (!body || !noteDialog.journeyId) return;
+    if (!body || !noteDialog.journeyId || !noteDialog.stepId) return;
     try {
-      const journey = await addJourneyNote(noteDialog.journeyId, body);
+      // Update step notes
+      const journey = await updateJourneyStep(noteDialog.journeyId, noteDialog.stepId, {
+        notes: body
+      });
       upsertJourney(journey);
-      triggerMessage('success', 'Note added');
+      // Also update drawer if open
+      if (journeyDrawer.open && journeyDrawer.journey?.id === noteDialog.journeyId) {
+        setJourneyDrawer((prev) => ({ ...prev, journey }));
+      }
+      triggerMessage('success', 'Note added to step');
       handleCloseNoteDialog();
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to add note');
@@ -853,6 +923,28 @@ export default function ClientPortal() {
   };
 
   const handleCloseTimelineDialog = () => setTimelineDialog({ open: false, journey: null });
+
+  // Journey Drawer handlers
+  const handleOpenJourneyDrawer = (journey) => {
+    setJourneyDrawer({ open: true, journey });
+    setExpandedSteps({});
+  };
+
+  const handleCloseJourneyDrawer = () => {
+    setJourneyDrawer({ open: false, journey: null });
+    setExpandedSteps({});
+  };
+
+  const toggleStepExpanded = (stepId) => {
+    setExpandedSteps((prev) => ({ ...prev, [stepId]: !prev[stepId] }));
+  };
+
+  // Update journey in drawer when it changes
+  const updateDrawerJourney = useCallback((journey) => {
+    if (journeyDrawer.open && journeyDrawer.journey?.id === journey.id) {
+      setJourneyDrawer((prev) => ({ ...prev, journey }));
+    }
+  }, [journeyDrawer.open, journeyDrawer.journey?.id]);
 
   const handleJourneyAgreedToService = (journey) => {
     const pseudoLead = {
@@ -885,6 +977,7 @@ export default function ClientPortal() {
     try {
       const journey = await applyJourneyTemplate(journeyId);
       upsertJourney(journey);
+      updateDrawerJourney(journey);
       triggerMessage('success', 'Follow-up template applied');
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to apply template');
@@ -943,6 +1036,7 @@ export default function ClientPortal() {
         journey = await addJourneyStep(stepDialog.journeyId, payload);
       }
       upsertJourney(journey);
+      updateDrawerJourney(journey);
       handleCloseStepDialog();
       triggerMessage('success', `Step ${stepDialog.stepId ? 'updated' : 'added'}`);
     } catch (err) {
@@ -956,6 +1050,7 @@ export default function ClientPortal() {
         completed_at: step.completed_at ? null : new Date().toISOString()
       });
       upsertJourney(journey);
+      updateDrawerJourney(journey);
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to update step');
     }
@@ -966,6 +1061,7 @@ export default function ClientPortal() {
     try {
       const journey = await deleteJourneyStep(journeyId, stepId);
       upsertJourney(journey);
+      updateDrawerJourney(journey);
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to delete step');
     }
@@ -1389,13 +1485,28 @@ export default function ClientPortal() {
 
         {activeTab === 'leads' && (
           <Stack spacing={2}>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
-              <Button variant="contained" onClick={loadCalls}>
-                Reload Calls
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center" flexWrap="wrap">
+              <Button variant="contained" onClick={loadCalls} disabled={callsLoading || ctmSyncing}>
+                {callsLoading ? 'Loading...' : 'Refresh'}
+              </Button>
+              <Button 
+                variant="outlined" 
+                onClick={handleManualCtmSync} 
+                disabled={ctmSyncing || callsLoading}
+              >
+                {ctmSyncing ? 'Syncing...' : 'Sync with CTM'}
               </Button>
               <Button variant="outlined" color="error" onClick={() => setClearCallsDialogOpen(true)}>
                 Clear & Reload All
               </Button>
+              {ctmSyncing && (
+                <Chip
+                  label="Syncing with CTM..."
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                />
+              )}
               <TextField
                 select
                 label="Activity Type"
@@ -1583,13 +1694,16 @@ export default function ClientPortal() {
 
         {activeTab === 'journey' && (
           <Stack spacing={2}>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
               <Button variant="contained" onClick={loadJourneys} disabled={journeysLoading}>
-                Refresh Journeys
+                Refresh
               </Button>
               <Button variant="outlined" onClick={handleOpenTemplateDialog}>
                 Edit Follow-Up Template
               </Button>
+              <Typography variant="body2" color="text.secondary" sx={{ ml: { md: 'auto' } }}>
+                {Array.isArray(journeys) ? `${journeys.length} active journey${journeys.length !== 1 ? 's' : ''}` : ''}
+              </Typography>
             </Stack>
             {journeysLoading && <LinearProgress />}
             {!journeysLoading && Array.isArray(journeys) && journeys.length === 0 && (
@@ -1599,130 +1713,85 @@ export default function ClientPortal() {
               const steps = journey.steps || [];
               const completedSteps = steps.filter((step) => step.completed_at);
               const currentStep = getJourneyCurrentStep(journey);
-              const nextActionDate = journey.next_action_at
-                ? formatDateDisplay(journey.next_action_at)
-                : currentStep?.due_at
-                ? formatDateDisplay(currentStep.due_at)
-                : 'Not scheduled';
 
               return (
-                <Card key={journey.id} variant="outlined">
-                  <CardContent>
-                    <Stack spacing={2}>
-                      <Stack
-                        direction={{ xs: 'column', md: 'row' }}
-                        spacing={1}
-                        alignItems={{ xs: 'flex-start', md: 'center' }}
-                      >
-                        <Typography variant="h6">
-                          {journey.client_name || journey.client_phone || journey.client_email || 'Unnamed Lead'}
-                        </Typography>
-                      {journey.paused && (
-                        <Chip label="Paused" color="warning" size="small" />
-                      )}
-                        <Stack direction="row" spacing={1} sx={{ ml: { md: 'auto' } }}>
-                          <Button size="small" onClick={() => handleOpenConcernDialog(null, journey)}>
-                            Edit Concerns
-                          </Button>
-                          <Button
-                            size="small"
-                            onClick={() => handleJourneyStatusChange(journey.id, { paused: !journey.paused })}
-                          >
-                            {journey.paused ? 'Resume Journey' : 'Pause Journey'}
-                          </Button>
-                          <Button size="small" onClick={() => handleOpenTimelineDialog(journey)}>
-                            View Client Journey
-                          </Button>
-                        </Stack>
-                      </Stack>
-                      {(journey.client_phone || journey.client_email) && (
-                        <Typography variant="body2" color="text.secondary">
-                          {[journey.client_phone, journey.client_email].filter(Boolean).join(' · ')}
-                        </Typography>
-                      )}
-            {journey.symptoms?.length > 0 && (
-              <Stack direction="row" spacing={1} flexWrap="wrap">
-                {journey.symptoms.map((concern) => (
-                  <Chip key={`${journey.id}-${concern}`} label={concern} size="small" variant="outlined" />
-                ))}
-              </Stack>
-            )}
-            {journey.symptoms_redacted && (
-              <Typography variant="caption" color="text.secondary">
-                Concerns redacted after 90 days.
-              </Typography>
-            )}
-                      <Box
-                        sx={{
-                          border: '1px dashed',
-                          borderColor: 'divider',
-                          borderRadius: 2,
-                          p: 2,
-                          bgcolor: currentStep ? 'background.paper' : 'grey.50'
-                        }}
-                      >
-                        <Typography variant="subtitle2" gutterBottom>
-                          {currentStep ? 'Current Follow-Up Step' : 'No Steps Defined'}
-                        </Typography>
-                        {currentStep ? (
-                          <Stack spacing={0.5}>
-                            <Typography variant="body1">{currentStep.label}</Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              Channel: {currentStep.channel || 'Not specified'}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              Due: {currentStep.due_at ? formatDateDisplay(currentStep.due_at) : 'No due date'}
-                            </Typography>
-                            {currentStep.message && (
+                <Card
+                  key={journey.id}
+                  variant="outlined"
+                  sx={{
+                    transition: 'box-shadow 0.2s',
+                    '&:hover': { boxShadow: 2 },
+                    borderLeft: journey.paused ? '4px solid' : 'none',
+                    borderLeftColor: journey.paused ? 'warning.main' : 'transparent'
+                  }}
+                >
+                  <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
+                    <Stack direction="row" alignItems="flex-start" spacing={2}>
+                      {/* Left: Lead Info */}
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        {/* Top row: Name, Phone, Current Step */}
+                        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
+                          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                            {journey.client_name || 'Unnamed Lead'}
+                          </Typography>
+                          {journey.client_phone && (
+                            <Stack direction="row" spacing={0.5} alignItems="center">
+                              <PhoneIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
                               <Typography variant="body2" color="text.secondary">
-                                Instructions: {currentStep.message}
+                                {journey.client_phone}
                               </Typography>
-                            )}
-                          </Stack>
-                        ) : (
-                          <Stack spacing={1}>
-                            <Typography variant="body2" color="text.secondary">
-                              No steps yet. Apply your follow-up template to generate the outreach plan.
-                            </Typography>
-                            <Button
-                              variant="outlined"
+                            </Stack>
+                          )}
+                          {journey.paused && (
+                            <Chip label="Paused" color="warning" size="small" />
+                          )}
+                          <Box sx={{ flex: 1 }} />
+                          {currentStep ? (
+                            <Chip
+                              label={`Step: ${currentStep.label}`}
                               size="small"
-                              onClick={() => handleApplyTemplateToJourney(journey.id)}
-                            >
-                              Apply Follow-Up Template
-                            </Button>
+                              color="primary"
+                              variant="outlined"
+                              icon={<RadioButtonUncheckedIcon />}
+                            />
+                          ) : steps.length === 0 ? (
+                            <Chip label="No steps" size="small" variant="outlined" />
+                          ) : (
+                            <Chip label="All complete" size="small" color="success" icon={<CheckCircleIcon />} />
+                          )}
+                          <Typography variant="caption" color="text.secondary">
+                            {completedSteps.length}/{steps.length}
+                          </Typography>
+                        </Stack>
+
+                        {/* Concerns chips */}
+                        {journey.symptoms?.length > 0 && (
+                          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                            {journey.symptoms.map((concern) => (
+                              <Chip
+                                key={`${journey.id}-${concern}`}
+                                label={concern}
+                                size="small"
+                                sx={{ fontSize: '0.75rem', height: 24 }}
+                              />
+                            ))}
                           </Stack>
                         )}
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                          Next contact: {nextActionDate} · Completed {completedSteps.length}/{steps.length} steps
-                        </Typography>
+                        {journey.symptoms_redacted && (
+                          <Typography variant="caption" color="text.secondary">
+                            Concerns redacted after 90 days.
+                          </Typography>
+                        )}
                       </Box>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                        <Button
-                          variant="contained"
-                          color="success"
-                          disabled={!currentStep}
-                          onClick={() => handleMarkCurrentStepComplete(journey)}
-                        >
-                          Mark Step Complete
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          onClick={() => handleJourneyAgreedToService(journey)}
-                          disabled={!journey.lead_call_key && !journey.lead_call_id}
-                        >
-                          Agreed to Service
-                        </Button>
-                        <Button variant="outlined" onClick={() => handleOpenStepDialog(journey)}>
-                          Add Step
-                        </Button>
-                        <Button variant="outlined" onClick={() => handleOpenNoteDialog(journey)}>
-                          Add Note
-                        </Button>
-                        <Button variant="outlined" color="error" onClick={() => handleArchiveJourney(journey)}>
-                          Archive Journey
-                        </Button>
-                      </Stack>
+
+                      {/* Right: View Journey Button */}
+                      <Button
+                        variant="contained"
+                        onClick={() => handleOpenJourneyDrawer(journey)}
+                        sx={{ minWidth: 140, whiteSpace: 'nowrap' }}
+                      >
+                        View Journey
+                      </Button>
                     </Stack>
                   </CardContent>
                 </Card>
@@ -2203,7 +2272,7 @@ export default function ClientPortal() {
       </Dialog>
 
       <Dialog open={noteDialog.open} onClose={handleCloseNoteDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Journey Note</DialogTitle>
+        <DialogTitle>{noteDialog.stepId ? 'Add Step Note' : 'Add Journey Note'}</DialogTitle>
         <DialogContent>
           <TextField
             multiline
@@ -2211,13 +2280,13 @@ export default function ClientPortal() {
             fullWidth
             value={noteDialog.value}
             onChange={(e) => setNoteDialog((prev) => ({ ...prev, value: e.target.value }))}
-            placeholder="Record what happened during this outreach."
+            placeholder={noteDialog.stepId ? 'Record what happened during this follow-up step.' : 'Record what happened during this outreach.'}
             sx={{ mt: 1 }}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseNoteDialog}>Cancel</Button>
-          <Button variant="contained" onClick={handleSaveJourneyNote} disabled={!noteDialog.value?.trim()}>
+          <Button variant="contained" onClick={handleSaveStepNote} disabled={!noteDialog.value?.trim() || !noteDialog.stepId}>
             Save Note
           </Button>
         </DialogActions>
@@ -2420,7 +2489,7 @@ export default function ClientPortal() {
                   Thank you for completing your onboarding
                 </Typography>
                 <Typography variant="body1" color="text.secondary">
-                  Your account is ready for the next steps. We’ve saved your details.
+                  Your account is ready for the next steps. We've saved your details.
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Next step: schedule a quick kick-off with your Account Manager.
@@ -2444,6 +2513,308 @@ export default function ClientPortal() {
           </Box>
         </Box>
       )}
+
+      {/* Journey Management Drawer */}
+      <Drawer
+        anchor="right"
+        open={journeyDrawer.open}
+        onClose={handleCloseJourneyDrawer}
+        PaperProps={{
+          sx: { width: { xs: '100%', sm: 480, md: 560 }, p: 0 }
+        }}
+      >
+        {journeyDrawer.journey && (() => {
+          const journey = journeyDrawer.journey;
+          const steps = (journey.steps || []).slice().sort((a, b) => a.position - b.position);
+          const completedSteps = steps.filter((s) => s.completed_at);
+          const currentStep = getJourneyCurrentStep(journey);
+
+          return (
+            <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              {/* Header */}
+              <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'grey.50' }}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                    {journey.client_name || 'Unnamed Lead'}
+                  </Typography>
+                  <IconButton onClick={handleCloseJourneyDrawer} size="small">
+                    <CloseIcon />
+                  </IconButton>
+                </Stack>
+                <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+                  {journey.client_phone && (
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <PhoneIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                      <Typography variant="body2">{journey.client_phone}</Typography>
+                    </Stack>
+                  )}
+                  {journey.client_email && (
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <EmailIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                      <Typography variant="body2">{journey.client_email}</Typography>
+                    </Stack>
+                  )}
+                </Stack>
+                {journey.symptoms?.length > 0 && (
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+                    {journey.symptoms.map((concern) => (
+                      <Chip key={concern} label={concern} size="small" />
+                    ))}
+                    <Chip
+                      label="Edit"
+                      size="small"
+                      variant="outlined"
+                      onClick={() => handleOpenConcernDialog(null, journey)}
+                      icon={<EditIcon sx={{ fontSize: 14 }} />}
+                    />
+                  </Stack>
+                )}
+                {/* Quick Actions */}
+                <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+                  <Tooltip title={journey.paused ? 'Resume Journey' : 'Pause Journey'}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color={journey.paused ? 'success' : 'warning'}
+                      startIcon={journey.paused ? <PlayArrowIcon /> : <PauseIcon />}
+                      onClick={() => handleJourneyStatusChange(journey.id, { paused: !journey.paused })}
+                    >
+                      {journey.paused ? 'Resume' : 'Pause'}
+                    </Button>
+                  </Tooltip>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => handleJourneyAgreedToService(journey)}
+                    disabled={!journey.lead_call_key && !journey.lead_call_id}
+                  >
+                    Convert to Client
+                  </Button>
+                  <Box sx={{ flex: 1 }} />
+                  <Tooltip title="Archive Journey">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => {
+                        handleArchiveJourney(journey);
+                        handleCloseJourneyDrawer();
+                      }}
+                    >
+                      <ArchiveIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+              </Box>
+
+              {/* Progress Bar */}
+              <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Progress
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {completedSteps.length} of {steps.length} steps completed
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  variant="determinate"
+                  value={steps.length ? (completedSteps.length / steps.length) * 100 : 0}
+                  sx={{ height: 6, borderRadius: 3 }}
+                />
+              </Box>
+
+              {/* Timeline Steps */}
+              <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+                <Stack spacing={0}>
+                  {steps.length === 0 ? (
+                    <Box sx={{ textAlign: 'center', py: 4 }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        No follow-up steps defined yet.
+                      </Typography>
+                      <Button
+                        variant="outlined"
+                        onClick={() => handleApplyTemplateToJourney(journey.id)}
+                        sx={{ mr: 1 }}
+                      >
+                        Apply Template
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        startIcon={<AddIcon />}
+                        onClick={() => handleOpenStepDialog(journey)}
+                      >
+                        Add Step
+                      </Button>
+                    </Box>
+                  ) : (
+                    steps.map((step, index) => {
+                      const isExpanded = expandedSteps[step.id];
+                      const isCurrent = currentStep?.id === step.id;
+                      const isComplete = Boolean(step.completed_at);
+
+                      return (
+                        <Box key={step.id}>
+                          {/* Timeline connector */}
+                          {index > 0 && (
+                            <Box
+                              sx={{
+                                width: 2,
+                                height: 16,
+                                bgcolor: steps[index - 1]?.completed_at ? 'success.main' : 'grey.300',
+                                ml: '15px'
+                              }}
+                            />
+                          )}
+                          <Paper
+                            variant="outlined"
+                            sx={{
+                              p: 1.5,
+                              borderColor: isCurrent ? 'primary.main' : 'divider',
+                              borderWidth: isCurrent ? 2 : 1,
+                              bgcolor: isComplete ? 'success.50' : isCurrent ? 'primary.50' : 'background.paper'
+                            }}
+                          >
+                            <Stack direction="row" alignItems="flex-start" spacing={1.5}>
+                              {/* Status Icon */}
+                              <Box
+                                sx={{
+                                  width: 32,
+                                  height: 32,
+                                  borderRadius: '50%',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  bgcolor: isComplete ? 'success.main' : isCurrent ? 'primary.main' : 'grey.200',
+                                  color: isComplete || isCurrent ? 'white' : 'grey.600',
+                                  flexShrink: 0,
+                                  cursor: 'pointer',
+                                  '&:hover': { opacity: 0.8 }
+                                }}
+                                onClick={() => handleToggleStepComplete(journey.id, step)}
+                              >
+                                {isComplete ? (
+                                  <CheckCircleIcon sx={{ fontSize: 20 }} />
+                                ) : (
+                                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                                    {index + 1}
+                                  </Typography>
+                                )}
+                              </Box>
+
+                              {/* Step Content */}
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                    {step.label}
+                                  </Typography>
+                                  <IconButton size="small" onClick={() => toggleStepExpanded(step.id)}>
+                                    {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                                  </IconButton>
+                                </Stack>
+                                <Stack direction="row" spacing={1} alignItems="center">
+                                  {step.channel && (
+                                    <Chip label={step.channel} size="small" sx={{ fontSize: '0.7rem', height: 20 }} />
+                                  )}
+                                  {step.due_at && (
+                                    <Typography variant="caption" color="text.secondary">
+                                      Due: {formatDateDisplay(step.due_at)}
+                                    </Typography>
+                                  )}
+                                  {isComplete && (
+                                    <Typography variant="caption" color="success.main">
+                                      ✓ {formatDateDisplay(step.completed_at)}
+                                    </Typography>
+                                  )}
+                                </Stack>
+
+                                {/* Expanded Content */}
+                                <Collapse in={isExpanded}>
+                                  <Box sx={{ mt: 1.5 }}>
+                                    {step.message && (
+                                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                                        {step.message}
+                                      </Typography>
+                                    )}
+                                    {/* Step Notes */}
+                                    {step.notes && (
+                                      <Paper variant="outlined" sx={{ p: 1, mb: 1.5, bgcolor: 'grey.50' }}>
+                                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                                          Notes:
+                                        </Typography>
+                                        <Typography variant="body2">{step.notes}</Typography>
+                                      </Paper>
+                                    )}
+                                    {/* Step Actions */}
+                                    <Stack direction="row" spacing={1}>
+                                      <Button
+                                        size="small"
+                                        variant={isComplete ? 'outlined' : 'contained'}
+                                        color={isComplete ? 'inherit' : 'success'}
+                                        onClick={() => handleToggleStepComplete(journey.id, step)}
+                                      >
+                                        {isComplete ? 'Mark Incomplete' : 'Mark Complete'}
+                                      </Button>
+                                      <Button
+                                        size="small"
+                                        variant="outlined"
+                                        onClick={() => handleOpenNoteDialog(journey, step.id)}
+                                      >
+                                        {step.notes ? 'Edit Note' : 'Add Note'}
+                                      </Button>
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => handleOpenStepDialog(journey, step)}
+                                      >
+                                        <EditIcon fontSize="small" />
+                                      </IconButton>
+                                      <IconButton
+                                        size="small"
+                                        color="error"
+                                        onClick={() => handleDeleteStep(journey.id, step.id)}
+                                      >
+                                        <DeleteOutlineIcon fontSize="small" />
+                                      </IconButton>
+                                    </Stack>
+                                  </Box>
+                                </Collapse>
+                              </Box>
+                            </Stack>
+                          </Paper>
+                        </Box>
+                      );
+                    })
+                  )}
+                </Stack>
+              </Box>
+
+              {/* Footer Actions */}
+              <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'grey.50' }}>
+                <Stack direction="row" spacing={1}>
+                  {currentStep && (
+                    <Button
+                      variant="contained"
+                      color="success"
+                      startIcon={<CheckCircleIcon />}
+                      onClick={() => handleMarkCurrentStepComplete(journey)}
+                      sx={{ flex: 1 }}
+                    >
+                      Complete Current Step
+                    </Button>
+                  )}
+                  <Button
+                    variant="outlined"
+                    startIcon={<AddIcon />}
+                    onClick={() => handleOpenStepDialog(journey)}
+                    sx={{ flex: currentStep ? 0 : 1 }}
+                  >
+                    Add Step
+                  </Button>
+                </Stack>
+              </Box>
+            </Box>
+          );
+        })()}
+      </Drawer>
     </MainCard>
   );
 }
