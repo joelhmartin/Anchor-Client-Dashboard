@@ -38,9 +38,11 @@ export default function ProfileStep({
 }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Profile Details</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Create your login details
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        Confirm the name we should use in-app and the password you&apos;ll use to log in.
+        These details let you return to onboarding anytime and access your dashboard later.
       </Typography>
       <Stack spacing={2}>
         <Stack direction="row" spacing={2} alignItems="center">
@@ -185,8 +187,7 @@ export default function ProfileStep({
           </>
         ) : (
           <Alert severity="info">
-            Your account is active. Use “Save &amp; Continue Later” anytime and come back via login — you’ll return right where you left
-            off.
+            Your account is active. You can save and continue at any time. When you log back in, you’ll resume where you left off.
           </Alert>
         )}
       </Stack>

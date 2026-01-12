@@ -4,9 +4,14 @@ import CheckboxRadio from './CheckboxRadio';
 export default function FormsStep({ access, setAccess, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Website Forms & Integrations</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Contact and lead forms
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        Tell us how your website forms are set up so we can ensure lead tracking, compliance, and integrations work correctly.
+        These are the forms visitors use to contact you, book appointments, or request information.
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        Examples: Contact form, appointment request, consultation request
       </Typography>
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Typography variant="subtitle2">Check all that apply</Typography>

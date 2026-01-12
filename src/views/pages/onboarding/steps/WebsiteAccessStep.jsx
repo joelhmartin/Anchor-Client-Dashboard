@@ -4,18 +4,19 @@ import CheckboxRadio from './CheckboxRadio';
 export default function WebsiteAccessStep({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Website Access</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Website information and access
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        We need <strong>Admin access</strong> to your website platform so we can manage updates, tracking, integrations, performance optimization,
-        and ongoing support.
+        We only ask for access if updates or tracking need to be installed. If someone else manages your site, you can loop them in later.
       </Typography>
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Typography variant="subtitle2">This may include</Typography>
         <List dense>
           {[
-            'WordPress admin access (preferred)',
+            'Website platform login (WordPress, Squarespace, Webflow, etc.)',
             'Hosting provider access (Kinsta, WP Engine, etc.)',
-            'DNS access (if required)',
+            'Domain / DNS provider access (if needed)',
             'FTP or SFTP access (if applicable)'
           ].map((t) => (
             <ListItem key={t} sx={{ pl: 0 }}>
@@ -47,6 +48,8 @@ export default function WebsiteAccessStep({ access, setAccessStatus }) {
           }))
         }
       >
+        <FormControlLabel value="not_sure" control={<CheckboxRadio />} label="I’m not sure who manages this" />
+        <FormControlLabel value="someone_else_will_provide" control={<CheckboxRadio />} label="Someone else will provide access" />
         <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided access" />
         <FormControlLabel
           value="will_provide"
@@ -56,7 +59,7 @@ export default function WebsiteAccessStep({ access, setAccessStatus }) {
         <FormControlLabel
           value="need_help"
           control={<CheckboxRadio />}
-          label="Please help! I don’t know who has administrative access to my website account"
+          label="Not sure / I need help figuring out what you need"
         />
       </RadioGroup>
     </Stack>

@@ -4,10 +4,11 @@ import CheckboxRadio from './CheckboxRadio';
 export default function Ga4Step({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Google Analytics (GA4)</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Google Analytics (GA4)
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        We need <strong>Admin access</strong> to your Google Analytics property so we can configure tracking, conversions, events, integrations,
-        and reporting.
+        Google Analytics helps track website traffic and conversions. If you’re unsure whether this exists, select “Not sure”.
       </Typography>
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Typography variant="subtitle2">How to grant access</Typography>
@@ -27,7 +28,7 @@ export default function Ga4Step({ access, setAccessStatus }) {
           }))
         }
       >
-        <FormControlLabel value="no_ga4_setup" control={<CheckboxRadio />} label="I do not have Google Analytics / GA4 set up yet" />
+        <FormControlLabel value="no_ga4_setup" control={<CheckboxRadio />} label="No — please help set it up" />
         <FormControlLabel
           value="agency_controls_ga4"
           control={<CheckboxRadio />}
@@ -38,7 +39,7 @@ export default function Ga4Step({ access, setAccessStatus }) {
           control={<CheckboxRadio />}
           label="We are using a different analytics setup (not GA4) and need guidance"
         />
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided access" />
+        <FormControlLabel value="provided" control={<CheckboxRadio />} label="Yes — we already have GA4 and can grant access" />
         <FormControlLabel
           value="will_provide"
           control={<CheckboxRadio />}
@@ -47,12 +48,12 @@ export default function Ga4Step({ access, setAccessStatus }) {
         <FormControlLabel
           value="not_running_ga4"
           control={<CheckboxRadio />}
-          label="Anchor Corps will not be managing GA4 for my business initially"
+          label="Not applicable / we’re not prioritizing GA4 right now"
         />
         <FormControlLabel
           value="need_help"
           control={<CheckboxRadio />}
-          label="Please help! I don’t know who has administrative access to my Google Analytics account"
+          label="Not sure"
         />
       </RadioGroup>
     </Stack>

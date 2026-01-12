@@ -4,9 +4,11 @@ import CheckboxRadio from './CheckboxRadio';
 export default function MetaStep({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Facebook Business Manager (Meta)</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Facebook and Instagram (Meta)
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        We need access through Facebook Business Manager to manage ads, pixels, conversion events, and page connections.
+        If you advertise or plan to advertise on Facebook or Instagram, this helps us connect tracking and campaigns.
       </Typography>
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Typography variant="subtitle2">How to grant access</Typography>
@@ -30,6 +32,7 @@ export default function MetaStep({ access, setAccessStatus }) {
           }))
         }
       >
+        <FormControlLabel value="not_sure" control={<CheckboxRadio />} label="Not sure" />
         <FormControlLabel value="no_social_accounts" control={<CheckboxRadio />} label="I do not have a Facebook page or Instagram account" />
         <FormControlLabel value="no_meta_ads_history" control={<CheckboxRadio />} label="I have not run Meta Ads before" />
         <FormControlLabel
@@ -46,7 +49,7 @@ export default function MetaStep({ access, setAccessStatus }) {
         <FormControlLabel
           value="not_running_meta"
           control={<CheckboxRadio />}
-          label="Anchor Corps will not be running Meta for my business initially"
+          label="No — not using Meta ads right now"
         />
         <FormControlLabel
           value="need_help"

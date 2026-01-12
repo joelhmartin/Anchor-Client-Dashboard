@@ -16,9 +16,14 @@ export default function ServicesStep({
   return (
     <Stack spacing={2}>
       <Box>
-        <Typography variant="h6">Services</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+          Services you want to promote
+        </Typography>
         <Typography variant="body2" color="text.secondary">
-          Pick the services that apply to your engagement. You can add more or remove preset ones.
+          Select the services that matter most for your website or marketing. This helps us prioritize content and tracking.
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          You can change this later.
         </Typography>
       </Box>
 
@@ -31,7 +36,9 @@ export default function ServicesStep({
             {defaultOptions.map((option) => (
               <FormControlLabel
                 key={option}
-                control={<Checkbox checked={isDefaultChecked(option)} onChange={() => handleToggleDefaultService(option)} color="primary" />}
+                control={
+                  <Checkbox checked={isDefaultChecked(option)} onChange={() => handleToggleDefaultService(option)} color="primary" />
+                }
                 label={option}
               />
             ))}
@@ -89,5 +96,3 @@ export default function ServicesStep({
     </Stack>
   );
 }
-
-

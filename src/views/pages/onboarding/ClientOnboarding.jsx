@@ -37,24 +37,28 @@ import FormsStep from './steps/FormsStep';
 const emptyService = () => ({ name: '', active: true, isDefault: false });
 const CALENDAR_LINK = 'https://calendar.app.google/zgRn9gFuVizsnMmM9';
 const BASE_STEP_CONFIG = [
-  { key: 'profile', label: 'Profile & Credentials', description: 'Confirm account basics and set a password.' },
-  { key: 'brand', label: 'Brand Assets', description: 'Upload logos/style guides and share brand basics.' },
-  { key: 'services', label: 'Services', description: 'Review your services before completing onboarding.' }
+  { key: 'profile', label: 'Login Details', description: 'These details let you come back anytime and access your dashboard later.' },
+  { key: 'brand', label: 'Business & Brand', description: 'Share what you can — best guesses are totally fine.' },
+  {
+    key: 'services',
+    label: 'Services to Promote',
+    description: 'This helps us prioritize content and tracking. You can change this later.'
+  }
 ];
 
 const ACCESS_STEP_CONFIG = [
-  { key: 'website_access', label: 'Website Access', description: 'Confirm access to your website platform/hosting/DNS.' },
-  { key: 'ga4', label: 'Google Analytics (GA4)', description: 'Confirm Analytics access so we can configure tracking and reporting.' },
-  { key: 'google_ads', label: 'Google Ads', description: 'Confirm Google Ads access so we can manage campaigns and conversions.' },
+  { key: 'website_access', label: 'Website Info & Access', description: 'If someone else manages this, you can loop them in later.' },
+  { key: 'ga4', label: 'Google Analytics (GA4)', description: 'If you’re unsure, choose “Not sure”.' },
+  { key: 'google_ads', label: 'Google Ads (If Applicable)', description: 'Only complete this if you run or plan to run Google Ads.' },
   {
     key: 'meta',
-    label: 'Facebook Business Manager',
-    description: 'Confirm Meta access so we can manage ads, pixels, and page connections.'
+    label: 'Facebook & Instagram (Meta)',
+    description: 'If you advertise (or plan to), this helps connect tracking and campaigns.'
   },
   {
     key: 'forms',
-    label: 'Website Forms & Integrations',
-    description: 'Tell us how your website forms are set up so we can ensure tracking and compliance.'
+    label: 'Contact & Lead Forms',
+    description: 'These are the forms visitors use to contact you, book, or request info.'
   }
 ];
 
@@ -145,6 +149,7 @@ export default function ClientOnboardingPage() {
     google_ads_access_status: '',
     google_ads_access_provided: false,
     google_ads_access_understood: false,
+    google_ads_account_id: '',
     meta_access_status: '',
     meta_access_provided: false,
     meta_access_understood: false,
@@ -216,6 +221,7 @@ export default function ClientOnboardingPage() {
         const presetBrand = {
           business_name: payload.brand?.business_name || '',
           business_description: payload.brand?.business_description || '',
+          primary_brand_colors: payload.brand?.primary_brand_colors || '',
           brand_notes: payload.brand?.brand_notes || '',
           website_url: payload.brand?.website_url || ''
         };
@@ -275,6 +281,7 @@ export default function ClientOnboardingPage() {
           google_ads_access_status: payload.profile?.google_ads_access_status || '',
           google_ads_access_provided: payload.profile?.google_ads_access_provided || false,
           google_ads_access_understood: payload.profile?.google_ads_access_understood || false,
+          google_ads_account_id: payload.profile?.google_ads_account_id || '',
           meta_access_status: payload.profile?.meta_access_status || '',
           meta_access_provided: payload.profile?.meta_access_provided || false,
           meta_access_understood: payload.profile?.meta_access_understood || false,
@@ -695,7 +702,7 @@ export default function ClientOnboardingPage() {
 
   const renderGa4Step = () => <Ga4Step access={access} setAccessStatus={setAccessStatus} />;
 
-  const renderGoogleAdsStep = () => <GoogleAdsStep access={access} setAccessStatus={setAccessStatus} />;
+  const renderGoogleAdsStep = () => <GoogleAdsStep access={access} setAccess={setAccess} setAccessStatus={setAccessStatus} />;
 
   const renderMetaStep = () => <MetaStep access={access} setAccessStatus={setAccessStatus} />;
 

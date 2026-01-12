@@ -26,9 +26,11 @@ export default function BrandStep({
 }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Brand Assets</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        Business and brand details
+      </Typography>
       <Typography variant="body2" color="text.secondary">
-        Upload logo/style guide files and share your business basics so we can build consistent creative and tracking.
+        This helps us match your website and marketing to your existing look and messaging. If something isn’t finalized, your best guess is fine.
       </Typography>
       <Stack spacing={2}>
         <TextField
@@ -52,17 +54,24 @@ export default function BrandStep({
           onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, website_url: e.target.value } }))}
         />
         <TextField
-          label="Brand Notes"
+          label="Brand notes (optional)"
           multiline
           minRows={3}
           fullWidth
           value={form.brand.brand_notes || ''}
           onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, brand_notes: e.target.value } }))}
         />
+        <TextField
+          label="Primary brand colors (if known)"
+          fullWidth
+          value={form.brand.primary_brand_colors || ''}
+          onChange={(e) => setForm((prev) => ({ ...prev, brand: { ...prev.brand, primary_brand_colors: e.target.value } }))}
+          placeholder="e.g., Navy (#0B1F3B), Teal (#00A7A7)"
+        />
         <Stack spacing={2}>
           <FileUploadList
-            title="Logos"
-            description="Upload one or more logo files (PNG/JPG/WebP/SVG)."
+            title="Logo (optional)"
+            description="If available, upload a logo file (PNG/JPG/WebP/SVG). You can upload more than one."
             accept="image/*"
             multiple
             disabled={submitting}
@@ -106,7 +115,7 @@ export default function BrandStep({
 
           <FileUploadList
             title="Style Guides"
-            description="Upload style guides or brand docs (PDF/DOC/DOCX). You can upload multiple."
+            description="If available, upload style guides or brand docs (PDF/DOC/DOCX). You can upload multiple."
             accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             disabled={submitting}
