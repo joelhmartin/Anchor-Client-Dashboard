@@ -4,7 +4,7 @@ import CheckboxRadio from './CheckboxRadio';
 export default function MetaStep({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Facebook and Instagram (Meta)
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -33,7 +33,11 @@ export default function MetaStep({ access, setAccessStatus }) {
         }
       >
         <FormControlLabel value="not_sure" control={<CheckboxRadio />} label="Not sure" />
-        <FormControlLabel value="no_social_accounts" control={<CheckboxRadio />} label="I do not have a Facebook page or Instagram account" />
+        <FormControlLabel
+          value="no_social_accounts"
+          control={<CheckboxRadio />}
+          label="I do not have a Facebook page or Instagram account"
+        />
         <FormControlLabel value="no_meta_ads_history" control={<CheckboxRadio />} label="I have not run Meta Ads before" />
         <FormControlLabel
           value="agency_owns_ad_account"
@@ -46,11 +50,7 @@ export default function MetaStep({ access, setAccessStatus }) {
           control={<CheckboxRadio />}
           label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
         />
-        <FormControlLabel
-          value="not_running_meta"
-          control={<CheckboxRadio />}
-          label="No — not using Meta ads right now"
-        />
+        <FormControlLabel value="not_running_meta" control={<CheckboxRadio />} label="No — not using Meta ads right now" />
         <FormControlLabel
           value="need_help"
           control={<CheckboxRadio />}
@@ -60,5 +60,3 @@ export default function MetaStep({ access, setAccessStatus }) {
     </Stack>
   );
 }
-
-

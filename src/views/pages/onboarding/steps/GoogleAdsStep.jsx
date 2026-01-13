@@ -4,11 +4,12 @@ import CheckboxRadio from './CheckboxRadio';
 export default function GoogleAdsStep({ access, setAccess, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Google Ads account (if applicable)
       </Typography>
       <Typography variant="body2" color="text.secondary">
-        Only complete this if you currently run or plan to run Google Ads. Otherwise, you can skip this step for now by selecting “Not applicable”.
+        Only complete this if you currently run or plan to run Google Ads. Otherwise, you can skip this step for now by selecting “Not
+        applicable”.
       </Typography>
       <TextField
         label="Google Ads account ID (if available)"
@@ -63,5 +64,3 @@ export default function GoogleAdsStep({ access, setAccess, setAccessStatus }) {
     </Stack>
   );
 }
-
-

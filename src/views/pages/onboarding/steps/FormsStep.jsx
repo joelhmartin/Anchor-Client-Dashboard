@@ -4,7 +4,7 @@ import CheckboxRadio from './CheckboxRadio';
 export default function FormsStep({ access, setAccess, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Contact and lead forms
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -44,7 +44,12 @@ export default function FormsStep({ access, setAccess, setAccessStatus }) {
             label="Forms connected to a CRM or practice management system"
           />
           <FormControlLabel
-            control={<Checkbox checked={access.website_forms_custom} onChange={(e) => setAccess((p) => ({ ...p, website_forms_custom: e.target.checked }))} />}
+            control={
+              <Checkbox
+                checked={access.website_forms_custom}
+                onChange={(e) => setAccess((p) => ({ ...p, website_forms_custom: e.target.checked }))}
+              />
+            }
             label="Custom-built or developer-managed forms"
           />
         </Stack>
@@ -67,7 +72,11 @@ export default function FormsStep({ access, setAccess, setAccessStatus }) {
           }))
         }
       >
-        <FormControlLabel value="provided" control={<CheckboxRadio />} label="I have provided details about my website form setup and integrations" />
+        <FormControlLabel
+          value="provided"
+          control={<CheckboxRadio />}
+          label="I have provided details about my website form setup and integrations"
+        />
         <FormControlLabel
           value="will_provide"
           control={<CheckboxRadio />}
@@ -82,5 +91,3 @@ export default function FormsStep({ access, setAccess, setAccessStatus }) {
     </Stack>
   );
 }
-
-

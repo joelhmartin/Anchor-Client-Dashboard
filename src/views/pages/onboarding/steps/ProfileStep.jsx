@@ -38,7 +38,7 @@ export default function ProfileStep({
 }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Create your login details
       </Typography>
       <Typography variant="body2" color="text.secondary">

@@ -4,7 +4,7 @@ import CheckboxRadio from './CheckboxRadio';
 export default function Ga4Step({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Google Analytics (GA4)
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -50,14 +50,8 @@ export default function Ga4Step({ access, setAccessStatus }) {
           control={<CheckboxRadio />}
           label="Not applicable / we’re not prioritizing GA4 right now"
         />
-        <FormControlLabel
-          value="need_help"
-          control={<CheckboxRadio />}
-          label="Not sure"
-        />
+        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Not sure" />
       </RadioGroup>
     </Stack>
   );
 }
-
-

@@ -26,7 +26,7 @@ export default function BrandStep({
 }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Business and brand details
       </Typography>
       <Typography variant="body2" color="text.secondary">

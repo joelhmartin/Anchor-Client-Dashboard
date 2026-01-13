@@ -4,7 +4,7 @@ import CheckboxRadio from './CheckboxRadio';
 export default function WebsiteAccessStep({ access, setAccessStatus }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+      <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
         Website information and access
       </Typography>
       <Typography variant="body2" color="text.secondary">
@@ -56,14 +56,8 @@ export default function WebsiteAccessStep({ access, setAccessStatus }) {
           control={<CheckboxRadio />}
           label="I have access and will be providing to Anchor Corps as soon as possible to ensure a smooth onboarding"
         />
-        <FormControlLabel
-          value="need_help"
-          control={<CheckboxRadio />}
-          label="Not sure / I need help figuring out what you need"
-        />
+        <FormControlLabel value="need_help" control={<CheckboxRadio />} label="Not sure / I need help figuring out what you need" />
       </RadioGroup>
     </Stack>
   );
 }
-
-

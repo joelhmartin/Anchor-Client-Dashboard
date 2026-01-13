@@ -16,7 +16,7 @@ export default function ServicesStep({
   return (
     <Stack spacing={2}>
       <Box>
-        <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
+        <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: -0.4 }}>
           Services you want to promote
         </Typography>
         <Typography variant="body2" color="text.secondary">
@@ -74,7 +74,7 @@ export default function ServicesStep({
         serviceList.map((service, index) => (
           <Paper key={service.id || `${service.name}-${index}`} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid item xs={12} sx={{ flex: 1 }}>
                 <TextField
                   label="Service Name"
                   fullWidth
