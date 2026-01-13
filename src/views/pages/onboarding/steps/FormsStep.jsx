@@ -54,11 +54,11 @@ export default function FormsStep({ access, setAccess, setAccessStatus }) {
           />
         </Stack>
         <TextField
-          label="Notes"
+          label="Notes (optional)"
           fullWidth
           multiline
           minRows={3}
-          value={access.website_forms_notes}
+          value={access.website_forms_notes || ''}
           onChange={(e) => setAccess((p) => ({ ...p, website_forms_notes: e.target.value }))}
           sx={{ mt: 1 }}
         />

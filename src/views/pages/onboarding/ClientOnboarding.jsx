@@ -695,6 +695,8 @@ export default function ClientOnboardingPage() {
       serviceList={serviceList}
       handleServiceChange={handleServiceChange}
       handleRemoveService={handleRemoveService}
+      clientType={data?.profile?.client_type}
+      clientSubtype={data?.profile?.client_subtype}
     />
   );
 
