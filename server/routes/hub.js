@@ -476,6 +476,27 @@ function publicUrl(filePath) {
   return `/uploads/${rel}`.replace(/\\/g, '/');
 }
 
+// Avatar GET endpoint is PUBLIC (before requireAuth) so avatars load during onboarding
+// and in any context where the image needs to be displayed. Avatars are not sensitive data.
+router.get('/users/:id/avatar', async (req, res) => {
+  try {
+    const targetUserId = String(req.params.id || '').trim();
+    if (!targetUserId) return res.status(400).send('Missing user id');
+
+    const { rows } = await query('SELECT content_type, bytes FROM user_avatars WHERE user_id = $1 LIMIT 1', [targetUserId]);
+    if (!rows.length) return res.status(404).send('Not found');
+
+    const row = rows[0];
+    res.setHeader('Content-Type', row.content_type || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Public cache since avatars are public
+    res.send(row.bytes);
+  } catch (err) {
+    console.error('[hub:avatar:get]', err);
+    res.status(500).send('Failed to load avatar');
+  }
+});
+
+// All routes below require authentication
 router.use(requireAuth);
 
 async function upsertUserAvatarFromUpload({ userId, file }) {
@@ -496,29 +517,6 @@ async function upsertUserAvatarFromUpload({ userId, file }) {
   await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, userId]);
   return url;
 }
-
-router.get('/users/:id/avatar', async (req, res) => {
-  try {
-    const targetUserId = String(req.params.id || '').trim();
-    if (!targetUserId) return res.status(400).send('Missing user id');
-
-    const role = req.user?.effective_role || req.user?.role;
-    const isSelf = req.user?.id === targetUserId;
-    const canView = isSelf || role === 'admin' || role === 'superadmin' || role === 'team';
-    if (!canView) return res.status(403).send('Forbidden');
-
-    const { rows } = await query('SELECT content_type, bytes FROM user_avatars WHERE user_id = $1 LIMIT 1', [targetUserId]);
-    if (!rows.length) return res.status(404).send('Not found');
-
-    const row = rows[0];
-    res.setHeader('Content-Type', row.content_type || 'image/jpeg');
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    res.send(row.bytes);
-  } catch (err) {
-    console.error('[hub:avatar:get]', err);
-    res.status(500).send('Failed to load avatar');
-  }
-});
 
 async function resolveAccountManagerContact(userId, options = {}) {
   if (!userId) return null;
@@ -2150,16 +2148,24 @@ router.get('/requests', async (req, res) => {
   }
 });
 
+// GET /calls - Returns cached calls immediately. Use ?sync=true or POST /calls/sync to fetch from CTM.
 router.get('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
+  const shouldSync = req.query.sync === 'true';
+  
+  // Always start with cached data for fast initial load
   const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
   let cachedCalls = buildCallsFromCache(cached.rows);
   cachedCalls = await attachJourneyMetaToCalls(targetUserId, cachedCalls);
 
-  const respondWithCache = (extra = {}) => res.json({ calls: cachedCalls, ...extra });
+  // If sync not requested, return cache immediately
+  if (!shouldSync) {
+    return res.json({ calls: cachedCalls, cached: true });
+  }
 
+  // Sync requested - fetch from CTM
   const profileRes = await query(
-    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
     [targetUserId]
   );
   const profile = profileRes.rows[0] || {};
@@ -2170,29 +2176,22 @@ router.get('/calls', async (req, res) => {
   };
 
   if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
-    logEvent('calls:list', 'CTM credentials missing for client', {
-      userId: targetUserId,
-      hasAccount: !!credentials.accountId,
-      hasKey: !!credentials.apiKey,
-      hasSecret: !!credentials.apiSecret
-    });
-    return respondWithCache({ message: 'CallTrackingMetrics credentials not configured for this client.' });
+    logEvent('calls:list', 'CTM credentials missing for client', { userId: targetUserId });
+    return res.json({ calls: cachedCalls, cached: true, message: 'CTM credentials not configured.' });
   }
 
   try {
-    logEvent('calls:list', 'Pulling calls from CTM', {
-      userId: targetUserId,
-      promptLength: (profile.ai_prompt || DEFAULT_AI_PROMPT)?.length || 0
-    });
+    logEvent('calls:sync', 'Syncing calls from CTM', { userId: targetUserId });
     const freshCalls = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
       existingRows: cached.rows,
-      autoStarEnabled: profile.auto_star_enabled || false
+      autoStarEnabled: profile.auto_star_enabled || false,
+      syncRatings: true // Also sync rating changes from CTM
     });
 
     if (freshCalls.length) {
-      // Save calls to database
+      // Save new/updated calls to database
       await Promise.all(
         freshCalls.map(({ call, meta }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
@@ -2229,11 +2228,7 @@ router.get('/calls', async (req, res) => {
         await Promise.all(
           autoStarredCalls.map(async ({ call }) => {
             try {
-              await postSaleToCTM(credentials, call.id, {
-                score: call.score,
-                conversion: 1,
-                value: 0
-              });
+              await postSaleToCTM(credentials, call.id, { score: call.score, conversion: 1, value: 0 });
             } catch (err) {
               console.error('[calls:auto-star] Failed to post score to CTM', { callId: call.id, error: err.message });
             }
@@ -2241,6 +2236,7 @@ router.get('/calls', async (req, res) => {
         );
       }
 
+      // Send notifications for voicemails needing attention
       const attentionCalls = freshCalls.filter((item) => item.notifyNeedsAttention);
       if (attentionCalls.length) {
         await Promise.all(
@@ -2248,29 +2244,125 @@ router.get('/calls', async (req, res) => {
             createNotification({
               userId: targetUserId,
               title: 'Voicemail needs attention',
-              body: `${call.caller_name || call.caller_number || 'A caller'} left a voicemail requesting services. Summary: ${
+              body: `${call.caller_name || call.caller_number || 'A caller'} left a voicemail. Summary: ${
                 call.classification_summary || 'Review the voicemail details.'
               }`,
               linkUrl: '/portal?tab=leads',
-              meta: {
-                call_id: call.id,
-                caller_name: call.caller_name,
-                caller_number: call.caller_number,
-                category: call.category
-              }
+              meta: { call_id: call.id, caller_name: call.caller_name, caller_number: call.caller_number, category: call.category }
             })
           )
         );
       }
     }
 
+    // Return refreshed data from database
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
-    return res.json({ calls: shaped });
+    return res.json({ calls: shaped, synced: true, newCalls: freshCalls.length });
   } catch (err) {
-    console.error('[calls:list]', err);
-    return respondWithCache({ stale: true, message: 'Unable to fetch latest calls. Showing cached data.' });
+    console.error('[calls:sync]', err);
+    return res.json({ calls: cachedCalls, cached: true, stale: true, message: 'Sync failed. Showing cached data.' });
+  }
+});
+
+// POST /calls/sync - Explicitly sync with CTM (for background refresh)
+router.post('/calls/sync', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  
+  const profileRes = await query(
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    [targetUserId]
+  );
+  const profile = profileRes.rows[0] || {};
+  const credentials = {
+    accountId: profile.ctm_account_number,
+    apiKey: profile.ctm_api_key,
+    apiSecret: profile.ctm_api_secret
+  };
+
+  if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
+    return res.status(400).json({ message: 'CTM credentials not configured.' });
+  }
+
+  const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+
+  try {
+    logEvent('calls:sync', 'Background sync with CTM', { userId: targetUserId });
+    const freshCalls = await pullCallsFromCtm({
+      credentials,
+      prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
+      existingRows: cached.rows,
+      autoStarEnabled: profile.auto_star_enabled || false,
+      syncRatings: true
+    });
+
+    let updatedCount = 0;
+    let newCount = 0;
+
+    if (freshCalls.length) {
+      await Promise.all(
+        freshCalls.map(async ({ call, meta, isRatingUpdate }) => {
+          const startedAt = call.started_at ? new Date(call.started_at) : null;
+          const result = await query(
+            `INSERT INTO call_logs (user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT (call_id) DO UPDATE SET
+               direction=EXCLUDED.direction,
+               from_number=EXCLUDED.from_number,
+               to_number=EXCLUDED.to_number,
+               started_at=EXCLUDED.started_at,
+               duration_sec=EXCLUDED.duration_sec,
+               score=EXCLUDED.score,
+               meta=EXCLUDED.meta
+             RETURNING (xmax = 0) AS inserted`,
+            [
+              targetUserId,
+              call.id,
+              call.direction || null,
+              call.caller_number || null,
+              call.to_number || null,
+              startedAt,
+              call.duration_sec || null,
+              call.score || 0,
+              JSON.stringify(meta || {})
+            ]
+          );
+          if (result.rows[0]?.inserted) newCount++;
+          else updatedCount++;
+        })
+      );
+
+      // Auto-star new calls
+      const autoStarredCalls = freshCalls.filter(({ shouldPostScore }) => shouldPostScore);
+      if (autoStarredCalls.length > 0) {
+        await Promise.all(
+          autoStarredCalls.map(async ({ call }) => {
+            try {
+              await postSaleToCTM(credentials, call.id, { score: call.score, conversion: 1, value: 0 });
+            } catch (err) {
+              console.error('[calls:auto-star]', err.message);
+            }
+          })
+        );
+      }
+    }
+
+    // Return updated data
+    const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+    let shaped = buildCallsFromCache(refreshed.rows);
+    shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
+    
+    return res.json({
+      calls: shaped,
+      synced: true,
+      newCalls: newCount,
+      updatedCalls: updatedCount,
+      message: newCount || updatedCount ? `Synced ${newCount} new, ${updatedCount} updated` : 'Already up to date'
+    });
+  } catch (err) {
+    console.error('[calls:sync]', err);
+    return res.status(500).json({ message: 'Sync failed: ' + (err.message || 'Unknown error') });
   }
 });
 

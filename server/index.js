@@ -39,44 +39,47 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-const CSP_ALLOW_UNSAFE_EVAL = String(process.env.CSP_ALLOW_UNSAFE_EVAL || '').toLowerCase() === 'true';
-const CSP_ALLOW_UNSAFE_INLINE_SCRIPTS = String(process.env.CSP_ALLOW_UNSAFE_INLINE_SCRIPTS || '').toLowerCase() === 'true';
+// CSP environment configuration
 const CSP_FRAME_SRC = (process.env.CSP_FRAME_SRC || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const CSP_IMG_SRC = (process.env.CSP_IMG_SRC || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
+// Base CSP directives - secure by default (no unsafe-inline/eval)
+// Monaco-specific routes will get a relaxed policy applied via middleware
 const baseCspDirectives = {
   'default-src': ["'self'"],
-  // Monaco requires 'unsafe-eval' for parsing and its CDN for loading. Keep unsafe-eval behind an env flag.
-  'script-src': [
-    "'self'",
-    'https://cdn.jsdelivr.net', // Monaco CDN
-    ...(CSP_ALLOW_UNSAFE_INLINE_SCRIPTS ? ["'unsafe-inline'"] : []),
-    ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
-  ],
-  // Some browsers report violations against script-src-elem (and fall back to script-src if not set).
-  // Explicitly set it so our intent is unambiguous.
-  'script-src-elem': [
-    "'self'",
-    'https://cdn.jsdelivr.net', // Monaco CDN
-    ...(CSP_ALLOW_UNSAFE_INLINE_SCRIPTS ? ["'unsafe-inline'"] : []),
-    ...(CSP_ALLOW_UNSAFE_EVAL ? ["'unsafe-eval'"] : [])
-  ],
-  // Monaco loads CSS from its CDN.
+  'script-src': ["'self'", 'https://cdn.jsdelivr.net'],
+  'script-src-elem': ["'self'", 'https://cdn.jsdelivr.net'],
   'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://cdn.jsdelivr.net'],
   'style-src-elem': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://cdn.jsdelivr.net'],
   'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
-  'img-src': ["'self'", 'data:'],
-  // Monaco fetches files (themes, language configs) from CDN
+  // Allow blob: for local previews, data: for base64, plus any additional sources from env
+  'img-src': ["'self'", 'data:', 'blob:', ...CSP_IMG_SRC],
   'connect-src': ["'self'", 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://cdn.jsdelivr.net'],
-  // Monaco uses web workers (often via blob: URLs). Without this, the editor can fail to load in production.
   'worker-src': ["'self'", 'blob:', 'https://cdn.jsdelivr.net'],
-  // Some browsers still consult child-src for workers if worker-src isn't applied consistently.
   'child-src': ["'self'", 'blob:'],
-  // Allow embedding trusted third-party dashboards (ex: Looker Studio) via env.
   'frame-src': ["'self'", ...CSP_FRAME_SRC]
 };
+
+// Relaxed CSP for Monaco Editor routes (Forms Manager)
+// Monaco requires unsafe-inline and unsafe-eval to function
+const monacoCspDirectives = {
+  ...baseCspDirectives,
+  'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.jsdelivr.net'],
+  'script-src-elem': ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.jsdelivr.net']
+};
+
+// Helper to build CSP header string from directives object
+function buildCspHeader(directives) {
+  return Object.entries(directives)
+    .map(([key, values]) => `${key} ${values.join(' ')}`)
+    .join('; ');
+}
 
 function normalizeOrigin(raw) {
   const s = String(raw || '').trim();
@@ -86,7 +89,10 @@ function normalizeOrigin(raw) {
 
 const allowedOrigins = (() => {
   const defaults = ['http://localhost:3000', 'http://localhost:4173'];
-  const fromEnv = (process.env.CORS_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean);
+  const fromEnv = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   const appBase = [process.env.APP_BASE_URL, process.env.CLIENT_APP_URL].filter(Boolean);
   const all = [...defaults, ...fromEnv, ...appBase].map(normalizeOrigin).filter(Boolean);
   return new Set(all);
@@ -123,7 +129,18 @@ app.use('/api/auth', authRouter);
 app.use('/api/hub', hubRouter);
 app.use('/api/onboarding', onboardingRouter);
 app.use('/api/tasks', tasksRouter);
-app.use('/api/forms', formsRouter);
+
+// Forms Manager uses Monaco Editor which requires unsafe-inline/eval
+// Apply relaxed CSP only to this route to keep other routes secure
+app.use(
+  '/api/forms',
+  (req, res, next) => {
+    res.setHeader('Content-Security-Policy', buildCspHeader(monacoCspDirectives));
+    next();
+  },
+  formsRouter
+);
+
 app.use('/embed', formsPublicRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
 app.use('/email-assets', express.static(EMAIL_ASSETS_DIR));
@@ -135,6 +152,13 @@ if (NODE_ENV === 'production') {
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
 
 if (NODE_ENV === 'production') {
+  // Forms Manager page needs relaxed CSP for Monaco Editor
+  app.get('/forms*', (req, res) => {
+    res.setHeader('Content-Security-Policy', buildCspHeader(monacoCspDirectives));
+    res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
+  });
+
+  // All other client routes use the secure default CSP (set by helmet)
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
@@ -256,19 +280,16 @@ cron.schedule(
 );
 
 // Process form submission jobs (CTM, emails) every 30 seconds
-cron.schedule(
-  '*/30 * * * * *',
-  async () => {
-    try {
-      const result = await processSubmissionJobs();
-      if (result?.processed) {
-        console.log(`[cron:form-jobs] processed ${result.processed} job(s)`);
-      }
-    } catch (err) {
-      console.error('[cron:form-jobs] failed', err.message);
+cron.schedule('*/30 * * * * *', async () => {
+  try {
+    const result = await processSubmissionJobs();
+    if (result?.processed) {
+      console.log(`[cron:form-jobs] processed ${result.processed} job(s)`);
     }
+  } catch (err) {
+    console.error('[cron:form-jobs] failed', err.message);
   }
-);
+});
 
 maybeRunMigrations()
   .then(maybeRunFormsMigration)

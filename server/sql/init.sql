@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS brand_assets (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   business_name TEXT,
   business_description TEXT,
+  primary_brand_colors TEXT,
   logos JSONB NOT NULL DEFAULT '[]',
   style_guides JSONB NOT NULL DEFAULT '[]',
   brand_notes TEXT,
@@ -98,6 +99,8 @@ CREATE TABLE IF NOT EXISTS brand_assets (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_brand_assets_user ON brand_assets(user_id);
+
+ALTER TABLE brand_assets ADD COLUMN IF NOT EXISTS primary_brand_colors TEXT;
 
 -- Ensure 1 brand_assets row per user when possible.
 -- IMPORTANT: Only create the UNIQUE index if no duplicates already exist, to avoid crashing startup migrations in prod.
@@ -557,6 +560,7 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS form_email_recipients TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_status TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_account_id TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_status TEXT;
 -- Access steps enabled/disabled (admin-configured)

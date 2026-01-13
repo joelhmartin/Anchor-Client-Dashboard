@@ -50,6 +50,32 @@ function getAutoStarRating(category) {
   }
 }
 
+/**
+ * Maps star rating (from CTM) to category for display/organization
+ * This is the reverse of getAutoStarRating - used when leads already have ratings
+ * 1 = Spam
+ * 2 = Not a fit (negative)
+ * 3 = Solid lead (very_good)
+ * 4 = Great lead (very_good)
+ * 5 = Booked appointment (applicant/converted)
+ */
+function getCategoryFromRating(score) {
+  switch (score) {
+    case 1:
+      return 'spam';
+    case 2:
+      return 'negative';
+    case 3:
+      return 'very_good';
+    case 4:
+      return 'very_good';
+    case 5:
+      return 'applicant'; // Booked/converted
+    default:
+      return null; // No rating - use AI classification
+  }
+}
+
 const dateFormatter = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium',
   timeStyle: 'short'
@@ -391,7 +417,7 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
   return calls;
 }
 
-export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT, existingRows = [], autoStarEnabled = false }) {
+export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT, existingRows = [], autoStarEnabled = false, syncRatings = false }) {
   const existingMap = new Map();
   existingRows.forEach((row) => {
     if (row && row.call_id) existingMap.set(row.call_id, row);
@@ -415,8 +441,15 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     const existing = existingMap.get(stringId);
     const prevMeta = existing?.meta || {};
     
-    // Get existing score from CTM or database
-    const existingScore = existing?.score || raw.sale?.score || raw.score || 0;
+    // Get score from CTM (this is the authoritative source for two-way sync)
+    const ctmScore = raw.sale?.score || raw.score || 0;
+    const dbScore = existing?.score || 0;
+    
+    // Check if CTM rating changed (for two-way sync)
+    const ratingChangedInCtm = syncRatings && existing && ctmScore !== dbScore && ctmScore > 0;
+    
+    // Use CTM score as authoritative when syncing ratings
+    const existingScore = syncRatings ? ctmScore : (dbScore || ctmScore);
     
     const transcript = getTranscript(raw);
     const message = buildMessage(raw);
@@ -432,39 +465,61 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     let category = prevMeta.category || 'unreviewed';
     let shouldAutoStar = false;
     
+    // Check if lead already has a rating from CTM
+    const hasExistingCtmRating = ctmScore > 0;
+    const categoryFromRating = getCategoryFromRating(ctmScore);
+    
     if (unansweredLikely && !hasConversation) {
       classification = 'unanswered';
       summary = 'Call was unanswered with no voicemail.';
-      category = 'unanswered';
+      category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : 'unanswered';
     } else if (stubMessage && !transcript) {
       classification = 'neutral';
       summary = 'Call logged from CTM metadata.';
-      category = 'neutral';
-    } else if ((!classification || !summary) && hasConversation) {
-      if (classified < CLASSIFY_LIMIT) {
+      category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : 'neutral';
+    } else if (hasConversation) {
+      // Run AI classification if we don't have a summary yet (even if lead has a rating)
+      if (!summary && classified < CLASSIFY_LIMIT) {
         const ai = await classifyContent(prompt, transcript, message);
         classification = ai.classification;
         summary = ai.summary;
-        category = ai.category;
+        // Only use AI category if there's no existing CTM rating
+        // If CTM has a rating, use that to determine category (user/manager already rated it)
+        if (hasExistingCtmRating && categoryFromRating) {
+          category = categoryFromRating;
+        } else {
+          category = ai.category;
+          shouldAutoStar = true; // Only eligible for auto-star if no existing rating
+        }
         classified += 1;
-        shouldAutoStar = true; // New AI classification, eligible for auto-star
       } else if (!classification) {
         classification = 'unreviewed';
         summary = summary || 'AI classification skipped.';
-        category = category || 'unreviewed';
+        category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : (category || 'unreviewed');
+      } else if (hasExistingCtmRating && categoryFromRating) {
+        // Has existing classification but CTM rating takes precedence for category
+        category = categoryFromRating;
       }
+    } else if (hasExistingCtmRating && categoryFromRating) {
+      // No conversation but has CTM rating - use rating for category
+      category = categoryFromRating;
     }
 
-    // If voicemail but AI says this is a good/applicant lead, elevate to needs_attention and tag voicemail
+    // If voicemail but this is a good/applicant lead, elevate to needs_attention
     const goodLead = category === 'warm' || category === 'very_good' || category === 'applicant';
-    if (voicemailFlag && goodLead) {
+    if (voicemailFlag && goodLead && !hasExistingCtmRating) {
+      // Only elevate to needs_attention if not already rated
       category = 'needs_attention';
     }
     
-    // Determine final score
+    // Determine final score - NEVER overwrite existing CTM ratings
     let finalScore = existingScore;
-    if (autoStarEnabled && shouldAutoStar && existingScore === 0) {
-      // Only auto-star if there's no existing score and auto-star is enabled
+    if (autoStarEnabled && shouldAutoStar && !hasExistingCtmRating && existingScore === 0) {
+      // Only auto-star if:
+      // 1. Auto-star is enabled
+      // 2. We just ran AI classification (shouldAutoStar)
+      // 3. CTM doesn't already have a rating
+      // 4. Our local DB doesn't have a rating either
       finalScore = getAutoStarRating(category);
     }
     
@@ -502,8 +557,12 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     results.push({
       call: callData,
       meta: { ...callData },
-      shouldPostScore: autoStarEnabled && shouldAutoStar && finalScore > 0,
-      notifyNeedsAttention: needsAttention && shouldAutoStar
+      // Only post score to CTM if we auto-starred AND CTM doesn't already have a rating
+      shouldPostScore: autoStarEnabled && shouldAutoStar && finalScore > 0 && !hasExistingCtmRating,
+      notifyNeedsAttention: needsAttention && shouldAutoStar && !hasExistingCtmRating,
+      isRatingUpdate: ratingChangedInCtm,
+      isNew: !existing,
+      hadExistingRating: hasExistingCtmRating
     });
   }
   return results;

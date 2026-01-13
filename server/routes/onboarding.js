@@ -243,6 +243,7 @@ async function getOnboardingPayloadForUser(userId) {
       website_access_status: profile.website_access_status || '',
       ga4_access_status: profile.ga4_access_status || '',
       google_ads_access_status: profile.google_ads_access_status || '',
+      google_ads_account_id: profile.google_ads_account_id || '',
       meta_access_status: profile.meta_access_status || '',
       website_forms_details_status: profile.website_forms_details_status || '',
       ai_prompt: profile.ai_prompt || '',
@@ -343,6 +344,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
       website_access_status,
       ga4_access_status,
       google_ads_access_status,
+      google_ads_account_id,
       meta_access_status,
       website_forms_details_status,
       website_access_provided,
@@ -399,6 +401,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
       website_access_status !== undefined ||
       ga4_access_status !== undefined ||
       google_ads_access_status !== undefined ||
+      google_ads_account_id !== undefined ||
       meta_access_status !== undefined ||
       website_forms_details_status !== undefined ||
       website_access_provided !== undefined ||
@@ -431,6 +434,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
            website_access_status,
            ga4_access_status,
            google_ads_access_status,
+           google_ads_account_id,
            meta_access_status,
            website_forms_details_status,
            website_access_provided,
@@ -462,6 +466,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
            website_access_status = EXCLUDED.website_access_status,
            ga4_access_status = EXCLUDED.ga4_access_status,
            google_ads_access_status = EXCLUDED.google_ads_access_status,
+           google_ads_account_id = EXCLUDED.google_ads_account_id,
            meta_access_status = EXCLUDED.meta_access_status,
            website_forms_details_status = EXCLUDED.website_forms_details_status,
            website_access_provided = EXCLUDED.website_access_provided,
@@ -493,6 +498,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
           website_access_status ? String(website_access_status) : null,
           ga4_access_status ? String(ga4_access_status) : null,
           google_ads_access_status ? String(google_ads_access_status) : null,
+          google_ads_account_id ? String(google_ads_account_id) : null,
           meta_access_status ? String(meta_access_status) : null,
           website_forms_details_status ? String(website_forms_details_status) : null,
           Boolean(website_access_provided),
@@ -519,6 +525,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
       const payload = {
         business_name: brand.business_name || existing.rows[0]?.business_name || '',
         business_description: brand.business_description || existing.rows[0]?.business_description || '',
+        primary_brand_colors: brand.primary_brand_colors || existing.rows[0]?.primary_brand_colors || '',
         brand_notes: brand.brand_notes || existing.rows[0]?.brand_notes || '',
         website_url: brand.website_url || existing.rows[0]?.website_url || ''
       };
@@ -526,15 +533,15 @@ router.post('/me/submit', requireAuth, async (req, res) => {
       if (existing.rows.length) {
         await query(
           `UPDATE brand_assets
-           SET business_name=$1, business_description=$2, brand_notes=$3, website_url=$4, updated_at=NOW()
-           WHERE user_id=$5`,
-          [payload.business_name, payload.business_description, payload.brand_notes, payload.website_url, userId]
+           SET business_name=$1, business_description=$2, primary_brand_colors=$3, brand_notes=$4, website_url=$5, updated_at=NOW()
+           WHERE user_id=$6`,
+          [payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url, userId]
         );
       } else {
         await query(
-          `INSERT INTO brand_assets (user_id, business_name, business_description, brand_notes, website_url)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [userId, payload.business_name, payload.business_description, payload.brand_notes, payload.website_url]
+          `INSERT INTO brand_assets (user_id, business_name, business_description, primary_brand_colors, brand_notes, website_url)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [userId, payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url]
         );
       }
     }
@@ -705,6 +712,7 @@ router.post('/:token', async (req, res) => {
       website_access_status,
       ga4_access_status,
       google_ads_access_status,
+      google_ads_account_id,
       meta_access_status,
       website_forms_details_status,
       website_access_provided,
@@ -761,6 +769,7 @@ router.post('/:token', async (req, res) => {
       website_access_status !== undefined ||
       ga4_access_status !== undefined ||
       google_ads_access_status !== undefined ||
+      google_ads_account_id !== undefined ||
       meta_access_status !== undefined ||
       website_forms_details_status !== undefined ||
       website_access_provided !== undefined ||
@@ -793,6 +802,7 @@ router.post('/:token', async (req, res) => {
            website_access_status,
            ga4_access_status,
            google_ads_access_status,
+           google_ads_account_id,
            meta_access_status,
            website_forms_details_status,
            website_access_provided,
@@ -811,7 +821,7 @@ router.post('/:token', async (req, res) => {
            website_forms_custom,
            website_forms_notes
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
          ON CONFLICT (user_id) DO UPDATE SET
            monthly_revenue_goal = EXCLUDED.monthly_revenue_goal,
            client_identifier_value = EXCLUDED.client_identifier_value,
@@ -824,6 +834,7 @@ router.post('/:token', async (req, res) => {
            website_access_status = EXCLUDED.website_access_status,
            ga4_access_status = EXCLUDED.ga4_access_status,
            google_ads_access_status = EXCLUDED.google_ads_access_status,
+           google_ads_account_id = EXCLUDED.google_ads_account_id,
            meta_access_status = EXCLUDED.meta_access_status,
            website_forms_details_status = EXCLUDED.website_forms_details_status,
            website_access_provided = EXCLUDED.website_access_provided,
@@ -855,6 +866,7 @@ router.post('/:token', async (req, res) => {
           website_access_status ? String(website_access_status) : null,
           ga4_access_status ? String(ga4_access_status) : null,
           google_ads_access_status ? String(google_ads_access_status) : null,
+          google_ads_account_id ? String(google_ads_account_id) : null,
           meta_access_status ? String(meta_access_status) : null,
           website_forms_details_status ? String(website_forms_details_status) : null,
           Boolean(website_access_provided),
@@ -881,23 +893,23 @@ router.post('/:token', async (req, res) => {
       const payload = {
         business_name: brand.business_name || existing.rows[0]?.business_name || '',
         business_description: brand.business_description || existing.rows[0]?.business_description || '',
+        primary_brand_colors: brand.primary_brand_colors || existing.rows[0]?.primary_brand_colors || '',
         brand_notes: brand.brand_notes || existing.rows[0]?.brand_notes || '',
-        website_url: brand.website_url || existing.rows[0]?.website_url || '',
         website_url: brand.website_url || existing.rows[0]?.website_url || ''
       };
 
       if (existing.rows.length) {
         await query(
           `UPDATE brand_assets
-           SET business_name=$1, business_description=$2, brand_notes=$3, website_url=$4, updated_at=NOW()
-           WHERE user_id=$5`,
-          [payload.business_name, payload.business_description, payload.brand_notes, payload.website_url, record.user_id]
+           SET business_name=$1, business_description=$2, primary_brand_colors=$3, brand_notes=$4, website_url=$5, updated_at=NOW()
+           WHERE user_id=$6`,
+          [payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url, record.user_id]
         );
       } else {
         await query(
-          `INSERT INTO brand_assets (user_id, business_name, business_description, brand_notes, website_url)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [record.user_id, payload.business_name, payload.business_description, payload.brand_notes, payload.website_url]
+          `INSERT INTO brand_assets (user_id, business_name, business_description, primary_brand_colors, brand_notes, website_url)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [record.user_id, payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url]
         );
       }
     }
@@ -959,6 +971,30 @@ router.post('/:token', async (req, res) => {
   }
 });
 
+// POST /api/onboarding/me/avatar - upload avatar for authenticated onboarding flow
+// NOTE: /me/... routes MUST come before /:token/... routes so Express doesn't treat "me" as a token parameter.
+router.post('/me/avatar', requireAuth, uploadAvatar.single('avatar'), async (req, res) => {
+  try {
+    const userId = req.portalUserId;
+    if (!req.file) return res.status(400).json({ message: 'Avatar file is required' });
+    const bytes = await fsPromises.readFile(req.file.path);
+    const contentType = String(req.file.mimetype || 'image/jpeg');
+    await query(
+      `INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, updated_at = NOW()`,
+      [userId, contentType, bytes]
+    );
+    await fsPromises.unlink(req.file.path).catch(() => {});
+    const url = `/api/hub/users/${userId}/avatar?v=${Date.now()}`;
+    await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, userId]);
+    res.json({ avatar_url: url });
+  } catch (err) {
+    console.error('[onboarding:me:avatar]', err);
+    res.status(500).json({ message: 'Unable to upload avatar' });
+  }
+});
+
 router.post('/:token/avatar', uploadAvatar.single('avatar'), async (req, res) => {
   try {
     const record = await getTokenRecord(req.params.token);
@@ -982,28 +1018,49 @@ router.post('/:token/avatar', uploadAvatar.single('avatar'), async (req, res) =>
   }
 });
 
-// POST /api/onboarding/me/avatar - upload avatar for authenticated onboarding flow
-router.post('/me/avatar', requireAuth, uploadAvatar.single('avatar'), async (req, res) => {
-  try {
-    const userId = req.portalUserId;
-    if (!req.file) return res.status(400).json({ message: 'Avatar file is required' });
-    const bytes = await fsPromises.readFile(req.file.path);
-    const contentType = String(req.file.mimetype || 'image/jpeg');
-    await query(
-      `INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, bytes = EXCLUDED.bytes, updated_at = NOW()`,
-      [userId, contentType, bytes]
-    );
-    await fsPromises.unlink(req.file.path).catch(() => {});
-    const url = `/api/hub/users/${userId}/avatar?v=${Date.now()}`;
-    await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [url, userId]);
-    res.json({ avatar_url: url });
-  } catch (err) {
-    console.error('[onboarding:me:avatar]', err);
-    res.status(500).json({ message: 'Unable to upload avatar' });
+router.post(
+  '/me/brand-assets',
+  requireAuth,
+  uploadBrandAsset.fields([
+    { name: 'brand_assets', maxCount: 15 },
+    { name: 'brand_asset', maxCount: 1 }
+  ]),
+  async (req, res) => {
+    try {
+      const userId = req.portalUserId;
+      const kindRaw = String(req.body?.asset_kind || '').trim();
+      const kind = kindRaw === 'style_guide' ? 'style_guide' : 'logo';
+
+      const files = [...((req.files && req.files.brand_assets) || []), ...((req.files && req.files.brand_asset) || [])];
+      if (!files.length) return res.status(400).json({ message: 'Brand file is required' });
+
+      const newAssets = files.map((f) => ({
+        id: uuidv4(),
+        kind,
+        name: f.originalname || f.filename,
+        url: `/uploads/brand/${f.filename}`,
+        mime: f.mimetype || '',
+        size: f.size || null,
+        uploaded_at: new Date().toISOString()
+      }));
+      const existing = await query('SELECT logos FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
+      let logos = existing.rows[0]?.logos || [];
+      if (typeof logos === 'string') {
+        try {
+          logos = JSON.parse(logos);
+        } catch {
+          logos = [];
+        }
+      }
+      const nextLogos = Array.isArray(logos) ? [...logos, ...newAssets] : [...newAssets];
+      await upsertBrandAssetsLogos({ userId, nextLogos });
+      res.json({ logos: nextLogos, assets: nextLogos });
+    } catch (err) {
+      console.error('[onboarding:me:brand-asset]', err);
+      res.status(500).json({ message: err.message || 'Unable to upload brand asset' });
+    }
   }
-});
+);
 
 router.post(
   '/:token/brand-assets',
@@ -1051,49 +1108,28 @@ router.post(
   }
 );
 
-router.post(
-  '/me/brand-assets',
-  requireAuth,
-  uploadBrandAsset.fields([
-    { name: 'brand_assets', maxCount: 15 },
-    { name: 'brand_asset', maxCount: 1 }
-  ]),
-  async (req, res) => {
-    try {
-      const userId = req.portalUserId;
-      const kindRaw = String(req.body?.asset_kind || '').trim();
-      const kind = kindRaw === 'style_guide' ? 'style_guide' : 'logo';
-
-      const files = [...((req.files && req.files.brand_assets) || []), ...((req.files && req.files.brand_asset) || [])];
-      if (!files.length) return res.status(400).json({ message: 'Brand file is required' });
-
-      const newAssets = files.map((f) => ({
-        id: uuidv4(),
-        kind,
-        name: f.originalname || f.filename,
-        url: `/uploads/brand/${f.filename}`,
-        mime: f.mimetype || '',
-        size: f.size || null,
-        uploaded_at: new Date().toISOString()
-      }));
-      const existing = await query('SELECT logos FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
-      let logos = existing.rows[0]?.logos || [];
-      if (typeof logos === 'string') {
-        try {
-          logos = JSON.parse(logos);
-        } catch {
-          logos = [];
-        }
+router.delete('/me/brand-assets/:assetId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.portalUserId;
+    const { assetId } = req.params;
+    const existing = await query('SELECT logos FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
+    let logos = existing.rows[0]?.logos || [];
+    if (typeof logos === 'string') {
+      try {
+        logos = JSON.parse(logos);
+      } catch {
+        logos = [];
       }
-      const nextLogos = Array.isArray(logos) ? [...logos, ...newAssets] : [...newAssets];
-      await upsertBrandAssetsLogos({ userId, nextLogos });
-      res.json({ logos: nextLogos, assets: nextLogos });
-    } catch (err) {
-      console.error('[onboarding:me:brand-asset]', err);
-      res.status(500).json({ message: err.message || 'Unable to upload brand asset' });
     }
+    const list = Array.isArray(logos) ? logos : [];
+    const next = list.filter((asset) => asset?.id !== assetId);
+    await upsertBrandAssetsLogos({ userId, nextLogos: next });
+    res.json({ logos: next, assets: next });
+  } catch (err) {
+    console.error('[onboarding:me:brand-asset:delete]', err);
+    res.status(500).json({ message: err.message || 'Unable to delete brand asset' });
   }
-);
+});
 
 router.delete('/:token/brand-assets/:assetId', async (req, res) => {
   try {
@@ -1130,29 +1166,6 @@ router.delete('/:token/brand-assets/:assetId', async (req, res) => {
     res.json({ logos: next, assets: next });
   } catch (err) {
     console.error('[onboarding:brand-asset-delete]', err);
-    res.status(500).json({ message: err.message || 'Unable to delete brand asset' });
-  }
-});
-
-router.delete('/me/brand-assets/:assetId', requireAuth, async (req, res) => {
-  try {
-    const userId = req.portalUserId;
-    const { assetId } = req.params;
-    const existing = await query('SELECT logos FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
-    let logos = existing.rows[0]?.logos || [];
-    if (typeof logos === 'string') {
-      try {
-        logos = JSON.parse(logos);
-      } catch {
-        logos = [];
-      }
-    }
-    const list = Array.isArray(logos) ? logos : [];
-    const next = list.filter((asset) => asset?.id !== assetId);
-    await upsertBrandAssetsLogos({ userId, nextLogos: next });
-    res.json({ logos: next, assets: next });
-  } catch (err) {
-    console.error('[onboarding:me:brand-asset:delete]', err);
     res.status(500).json({ message: err.message || 'Unable to delete brand asset' });
   }
 });
