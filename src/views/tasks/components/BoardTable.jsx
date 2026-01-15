@@ -1,14 +1,10 @@
+import { useMemo, useRef, useState } from 'react';
 import {
-useMemo,
-  useRef,
-  useState,
-  from,
-  react,
-  import,
   Avatar,
   Box,
-  Chip,
+  Button,
   Checkbox,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -21,11 +17,10 @@ useMemo,
   Paper,
   Popper,
   Select,
-  Stack,
   Slider,
+  Stack,
   TextField,
-  Typography,
-  Button,
+  Typography
 } from '@mui/material';
 import { IconChevronDown, IconChevronRight, IconMessageCircle, IconClock, IconTrash } from '@tabler/icons-react';
 

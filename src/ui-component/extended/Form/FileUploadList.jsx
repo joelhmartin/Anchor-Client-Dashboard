@@ -1,18 +1,13 @@
+import { useEffect, useMemo, useRef } from 'react';
 import {
-useEffect,
-  useMemo,
-  useRef,
-  from,
-  react,
-  import,
+  Avatar,
   Box,
+  Button,
+  Chip,
   CircularProgress,
   IconButton,
   Stack,
-  Typography,
-  Avatar,
-  Chip,
-  Button,
+  Typography
 } from '@mui/material';
 import { IconUpload, IconX, IconFileText, IconFile } from '@tabler/icons-react';
 import { useToast } from 'contexts/ToastContext';

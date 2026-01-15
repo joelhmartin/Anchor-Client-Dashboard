@@ -1,21 +1,16 @@
+import { useEffect, useMemo, useState } from 'react';
 import {
-useEffect,
-  useMemo,
-  useState,
-  from,
-  react,
-  import,
   Alert,
   Autocomplete,
   Box,
+  Button,
   CircularProgress,
   Divider,
   MenuItem,
   Select,
   Stack,
   TextField,
-  Typography,
-  Button,
+  Typography
 } from '@mui/material';
 import {
   fetchTaskBoardsAll,
@@ -382,7 +377,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       {r.trigger_type} → {r.action_type} {r.is_active ? '(active)' : '(inactive)'}
-                    </Typography>
+      </Typography>
                   </Stack>
                   <Stack direction="row" spacing={0.5}>
                     <Button size="small" variant="outlined" onClick={() => toggleActive(r)}>
@@ -407,7 +402,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
           ) : (
             <Stack spacing={0.75}>
               {!runs.length && (
-                <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" color="text.secondary">
                   No runs yet.
                 </Typography>
               )}
@@ -419,7 +414,7 @@ export default function AutomationsPane({ activeBoardId = '', boardStatusLabels 
                   {r.error ? (
                     <Typography variant="body2" color="error" sx={{ mt: 0.25 }}>
                       {r.error}
-                    </Typography>
+      </Typography>
                   ) : null}
                 </Box>
               ))}

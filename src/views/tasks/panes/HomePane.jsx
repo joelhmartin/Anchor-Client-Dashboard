@@ -1,12 +1,8 @@
+import { useEffect, useRef, useState } from 'react';
 import {
-useEffect,
-  useRef,
-  useState,
-  from,
-  react,
-  import,
   Avatar,
   Box,
+  Button,
   Card,
   CardContent,
   Chip,
@@ -19,8 +15,7 @@ useEffect,
   Paper,
   Skeleton,
   Stack,
-  Typography,
-  Button,
+  Typography
 } from '@mui/material';
 import {
   IconAlertTriangle,
@@ -179,7 +174,7 @@ export default function HomePane() {
               <Stack>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
                   Today at a Glance
-                </Typography>
+      </Typography>
                 <Typography variant="body1">{todayAtAGlance}</Typography>
               </Stack>
             </Stack>
@@ -198,7 +193,7 @@ export default function HomePane() {
             </Stack>
 
             {topPriorities.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" color="text.secondary">
                 No priority items identified for today. Great job staying on top of things!
               </Typography>
             ) : (
@@ -350,7 +345,7 @@ export default function HomePane() {
           <IconSparkles size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
           AI-powered daily overview • Last updated:{' '}
           {overview?.generated_at ? new Date(overview.generated_at).toLocaleTimeString() : 'just now'}
-        </Typography>
+      </Typography>
       </Stack>
     </Box>
   );

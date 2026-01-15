@@ -1,12 +1,8 @@
+import { useEffect, useMemo, useState } from 'react';
 import {
-useEffect,
-  useMemo,
-  useState,
-  from,
-  react,
-  import,
   Autocomplete,
   Box,
+  Button,
   Checkbox,
   CircularProgress,
   Collapse,
@@ -24,8 +20,7 @@ useEffect,
   TableHead,
   TableRow,
   TextField,
-  Typography,
-  Button,
+  Typography
 } from '@mui/material';
 import {
   IconChevronDown,
