@@ -1,11 +1,4 @@
-import {
-Box,
-  Container,
-  Paper,
-  Stack,
-  Typography,,
-  Button,
-} from '@mui/material';
+import { Box, Container, Paper, Stack, Typography, Button } from '@mui/material';
 import { useLocation, Link as RouterLink } from 'react-router-dom';
 import FireworksCanvas from 'ui-component/FireworksCanvas';
 

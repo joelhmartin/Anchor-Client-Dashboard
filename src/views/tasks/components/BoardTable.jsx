@@ -24,7 +24,7 @@ useMemo,
   Stack,
   Slider,
   TextField,
-  Typography,,
+  Typography,
   Button,
 } from '@mui/material';
 import { IconChevronDown, IconChevronRight, IconMessageCircle, IconClock, IconTrash } from '@tabler/icons-react';

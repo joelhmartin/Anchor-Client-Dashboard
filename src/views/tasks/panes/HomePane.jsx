@@ -19,7 +19,7 @@ useEffect,
   Paper,
   Skeleton,
   Stack,
-  Typography,,
+  Typography,
   Button,
 } from '@mui/material';
 import {

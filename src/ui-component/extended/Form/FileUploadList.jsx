@@ -11,7 +11,7 @@ useEffect,
   Stack,
   Typography,
   Avatar,
-  Chip,,
+  Chip,
   Button,
 } from '@mui/material';
 import { IconUpload, IconX, IconFileText, IconFile } from '@tabler/icons-react';

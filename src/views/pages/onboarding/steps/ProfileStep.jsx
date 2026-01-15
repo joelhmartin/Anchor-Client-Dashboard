@@ -9,7 +9,7 @@ Alert,
   OutlinedInput,
   Stack,
   TextField,
-  Typography,,
+  Typography,
   Button,
 } from '@mui/material';
 import { IconUser } from '@tabler/icons-react';

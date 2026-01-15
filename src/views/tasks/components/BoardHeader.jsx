@@ -16,7 +16,7 @@ useEffect,
   Select,
   Stack,
   TextField,
-  Typography,,
+  Typography,
   Button,
 } from '@mui/material';
 import { IconAdjustments, IconRobot, IconSearch, IconSortAscending, IconInfoCircle, IconDotsVertical } from '@tabler/icons-react';

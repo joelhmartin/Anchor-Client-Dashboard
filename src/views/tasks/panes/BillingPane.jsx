@@ -24,7 +24,7 @@ useEffect,
   TableHead,
   TableRow,
   TextField,
-  Typography,,
+  Typography,
   Button,
 } from '@mui/material';
 import {
