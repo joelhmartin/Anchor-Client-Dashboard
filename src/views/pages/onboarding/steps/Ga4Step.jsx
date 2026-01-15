@@ -1,4 +1,11 @@
-import { FormControlLabel, Link, Paper, RadioGroup, Stack, Typography } from '@mui/material';
+import {
+  FormControlLabel,
+  Link,
+  Paper,
+  RadioGroup,
+  Stack,
+  Typography,
+} from '@mui/material';
 import CheckboxRadio from './CheckboxRadio';
 
 export default function Ga4Step({ access, setAccessStatus }) {

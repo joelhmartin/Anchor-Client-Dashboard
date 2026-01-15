@@ -1,4 +1,14 @@
-import { FormControlLabel, Link, List, ListItem, ListItemText, Paper, RadioGroup, Stack, Typography } from '@mui/material';
+import {
+  FormControlLabel,
+  Link,
+  List,
+  ListItem,
+  ListItemText,
+  Paper,
+  RadioGroup,
+  Stack,
+  Typography,
+} from '@mui/material';
 import CheckboxRadio from './CheckboxRadio';
 
 export default function WebsiteAccessStep({ access, setAccessStatus }) {

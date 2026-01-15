@@ -1,4 +1,12 @@
-import { Checkbox, FormControlLabel, Paper, RadioGroup, Stack, TextField, Typography } from '@mui/material';
+import {
+  Checkbox,
+  FormControlLabel,
+  Paper,
+  RadioGroup,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import CheckboxRadio from './CheckboxRadio';
 
 export default function FormsStep({ access, setAccess, setAccessStatus }) {

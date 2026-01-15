@@ -3,7 +3,6 @@ import { Navigate, useNavigate } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import Drawer from '@mui/material/Drawer';
 import Autocomplete from '@mui/material/Autocomplete';
@@ -56,6 +55,7 @@ import { fetchClientServices, saveClientServices } from 'api/services';
 import { useToast } from 'contexts/ToastContext';
 import { getErrorMessage } from 'utils/errors';
 import AnchorStepIcon from 'ui-component/extended/AnchorStepIcon';
+import Button from '@mui/material/Button';
 
 const EMPTY_SERVICE_LIST = Object.freeze([]);
 const CLIENT_PACKAGE_OPTIONS = ['Essentials', 'Growth', 'Accelerate', 'Custom'];
@@ -1472,7 +1472,7 @@ export default function AdminHub() {
         anchor="right"
         open={Boolean(editing) && !onboardingWizardOpen}
         onClose={() => setEditing(null)}
-        sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: 640, md: 760 }, p: 2 } }}
+        sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: '40vw' }, p: 2 } }}
       >
         {editing && (
           <Stack spacing={2} sx={{ height: '100%' }}>

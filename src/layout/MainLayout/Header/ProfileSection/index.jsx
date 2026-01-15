@@ -168,9 +168,9 @@ export default function ProfileSection() {
                           const canSeeTasks = role === 'superadmin' || role === 'admin' || role === 'team';
                           const canSeeHub = role === 'superadmin' || role === 'admin';
                           const canSeeForms = role === 'superadmin' || role === 'admin' || role === 'team';
-                          
+
                           const items = [];
-                          
+
                           // Task Manager / Client Hub toggle
                           const showTaskHub = inTasks ? canSeeHub : canSeeTasks;
                           if (showTaskHub && !inForms) {
@@ -192,7 +192,7 @@ export default function ProfileSection() {
                               </ListItemButton>
                             );
                           }
-                          
+
                           // Forms link (visible when not in /forms)
                           if (canSeeForms && !inForms) {
                             items.push(
@@ -211,7 +211,7 @@ export default function ProfileSection() {
                               </ListItemButton>
                             );
                           }
-                          
+
                           // Back links when in Forms
                           if (inForms) {
                             if (canSeeTasks) {
@@ -249,14 +249,20 @@ export default function ProfileSection() {
                               );
                             }
                           }
-                          
+
                           return items;
                         })()}
-                        <ListItemButton sx={{ borderRadius: `${borderRadius}px` }}>
+                        <ListItemButton
+                          sx={{ borderRadius: `${borderRadius}px` }}
+                          onClick={(e) => {
+                            navigate('/portal?tab=profile');
+                            handleClose(e);
+                          }}
+                        >
                           <ListItemIcon>
                             <IconSettings stroke={1.5} size="20px" />
                           </ListItemIcon>
-                          <ListItemText primary={<Typography variant="body2">Account Settings</Typography>} />
+                          <ListItemText primary={<Typography variant="body2">Profile Settings</Typography>} />
                         </ListItemButton>
                         <ListItemButton sx={{ borderRadius: `${borderRadius}px` }}>
                           <ListItemIcon>
@@ -265,7 +271,9 @@ export default function ProfileSection() {
                           <ListItemText
                             primary={
                               <Stack direction="column" sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                                <Typography  sx={{ fontWeight: 'bold' }} variant="body2">{user ? `${user.first_name} ${user.last_name}` : 'Profile'}</Typography>
+                                <Typography sx={{ fontWeight: 'bold' }} variant="body2">
+                                  {user ? `${user.first_name} ${user.last_name}` : 'Profile'}
+                                </Typography>
                                 <Chip
                                   slotProps={{
                                     label: { sx: { mt: 0.25 } }

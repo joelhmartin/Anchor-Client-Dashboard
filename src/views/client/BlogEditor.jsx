@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
@@ -28,15 +27,17 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { CKEditor } from '@ckeditor/ckeditor5-react';
 import ClassicEditor from '@ckeditor/ckeditor5-build-classic';
 
+import Button from '@mui/material/Button';
 import MainCard from 'ui-component/cards/MainCard';
-import { 
-  fetchBlogPosts, 
-  fetchBlogPost, 
-  createBlogPost, 
-  updateBlogPost, 
+import {
+  fetchBlogPosts,
+  fetchBlogPost,
+  createBlogPost,
+  updateBlogPost,
   deleteBlogPost,
   generateBlogIdeas,
-  generateBlogDraft
+  generateBlogDraft,
+  generateBlogImage
 } from 'api/blogs';
 
 export default function BlogEditor() {
@@ -183,8 +184,20 @@ export default function BlogEditor() {
     setGeneratingDraft(true);
     try {
       const draftContent = await generateBlogDraft(ideaTitle);
+      // Generate a hero image (Imagen) and prepend it as a real <img> (no placeholders)
+      try {
+        const image = await generateBlogImage(ideaTitle, { aspectRatio: '16:9' });
+        if (image?.dataUrl) {
+          const heroHtml = `<figure style="margin:0 0 16px 0;"><img src="${image.dataUrl}" alt="${ideaTitle}" style="width:100%;height:auto;border-radius:12px;display:block;" /></figure>`;
+          setContent(heroHtml + draftContent);
+        } else {
+          setContent(draftContent);
+        }
+      } catch {
+        // Non-fatal: still use the draft if image generation fails.
+        setContent(draftContent);
+      }
       setTitle(ideaTitle);
-      setContent(draftContent);
       triggerMessage('success', 'Draft generated! You can now edit and save it.');
     } catch (err) {
       triggerMessage('error', err.message || 'Unable to generate draft');
@@ -200,41 +213,29 @@ export default function BlogEditor() {
         <Grid item xs={12} md={8}>
           <Stack spacing={2}>
             {message.text && <Alert severity={message.type === 'error' ? 'error' : 'success'}>{message.text}</Alert>}
-            
+
             {loading && <LinearProgress />}
 
             <Stack direction="row" spacing={2} alignItems="center">
               <Button variant="outlined" onClick={handleNewPost}>
                 New Post
               </Button>
-              <Button 
-                variant="contained" 
+              <Button
+                variant="contained"
+                color="secondary"
                 startIcon={<SaveIcon />}
                 onClick={() => handleSave()}
                 disabled={saving || loading}
               >
                 {saving ? 'Saving...' : 'Save Draft'}
               </Button>
-              <Button 
-                variant="contained" 
-                color="success"
-                onClick={handlePublish}
-                disabled={saving || loading}
-              >
+              <Button variant="contained" color="secondary" onClick={handlePublish} disabled={saving || loading}>
                 {status === 'published' ? 'Update & Publish' : 'Publish'}
               </Button>
-              {status === 'published' && (
-                <Chip label="Published" color="success" size="small" />
-              )}
+              {status === 'published' && <Chip label="Published" color="success" size="small" />}
             </Stack>
 
-            <TextField
-              label="Blog Post Title"
-              fullWidth
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={loading}
-            />
+            <TextField label="Blog Post Title" fullWidth value={title} onChange={(e) => setTitle(e.target.value)} disabled={loading} />
 
             <Box
               sx={{
@@ -288,13 +289,8 @@ export default function BlogEditor() {
                     <AutoAwesomeIcon color="primary" />
                     <Typography variant="h6">AI Assistant</Typography>
                   </Stack>
-                  
-                  <Button 
-                    variant="contained" 
-                    fullWidth
-                    onClick={handleGenerateIdeas}
-                    disabled={loadingIdeas}
-                  >
+
+                  <Button variant="contained" fullWidth onClick={handleGenerateIdeas} disabled={loadingIdeas}>
                     {loadingIdeas ? 'Generating...' : 'Suggest Content'}
                   </Button>
 
@@ -317,17 +313,14 @@ export default function BlogEditor() {
                             key={index}
                             onClick={() => handleWriteDraft(idea)}
                             disabled={generatingDraft}
-                            sx={{ 
+                            sx={{
                               border: '1px solid',
                               borderColor: 'divider',
                               borderRadius: 1,
                               mb: 1
                             }}
                           >
-                            <ListItemText 
-                              primary={idea}
-                              secondary="Click to write draft"
-                            />
+                            <ListItemText primary={idea} secondary="Click to write draft" />
                           </ListItemButton>
                         ))}
                       </List>
@@ -340,14 +333,16 @@ export default function BlogEditor() {
             {/* Blog Posts List */}
             <Card variant="outlined">
               <CardContent>
-                <Typography variant="h6" sx={{ mb: 2 }}>Your Blog Posts</Typography>
+                <Typography variant="h6" sx={{ mb: 2 }}>
+                  Your Blog Posts
+                </Typography>
                 {loadingPosts && <LinearProgress />}
                 <List dense>
                   {blogPosts.map((post) => (
-                    <Card 
-                      key={post.id} 
-                      variant="outlined" 
-                      sx={{ 
+                    <Card
+                      key={post.id}
+                      variant="outlined"
+                      sx={{
                         mb: 1,
                         bgcolor: editingId === post.id ? 'action.selected' : 'transparent'
                       }}
@@ -358,26 +353,16 @@ export default function BlogEditor() {
                             <Typography variant="subtitle2" sx={{ flex: 1 }}>
                               {post.title}
                             </Typography>
-                            <Chip 
-                              label={post.status} 
-                              size="small"
-                              color={post.status === 'published' ? 'success' : 'default'}
-                            />
+                            <Chip label={post.status} size="small" color={post.status === 'published' ? 'success' : 'default'} />
                           </Stack>
                           <Typography variant="caption" color="text.secondary">
                             {new Date(post.updated_at).toLocaleDateString()}
                           </Typography>
                           <Stack direction="row" spacing={1}>
-                            <IconButton 
-                              size="small"
-                              onClick={() => navigate(`/blogs?id=${post.id}`)}
-                            >
+                            <IconButton size="small" onClick={() => navigate(`/blogs?id=${post.id}`)}>
                               <EditIcon fontSize="small" />
                             </IconButton>
-                            <IconButton 
-                              size="small"
-                              onClick={() => setDeleteDialog({ open: true, post })}
-                            >
+                            <IconButton size="small" onClick={() => setDeleteDialog({ open: true, post })}>
                               <DeleteOutlineIcon fontSize="small" />
                             </IconButton>
                           </Stack>
@@ -401,9 +386,7 @@ export default function BlogEditor() {
       <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, post: null })}>
         <DialogTitle>Delete Blog Post?</DialogTitle>
         <DialogContent>
-          <Typography>
-            Are you sure you want to delete "{deleteDialog.post?.title}"? This action cannot be undone.
-          </Typography>
+          <Typography>Are you sure you want to delete "{deleteDialog.post?.title}"? This action cannot be undone.</Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteDialog({ open: false, post: null })}>Cancel</Button>

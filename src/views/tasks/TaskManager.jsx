@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-
 import {
   Alert,
   Avatar,
@@ -1537,7 +1536,7 @@ export default function TaskManager() {
           anchor="right"
           open={automationsDrawerOpen}
           onClose={() => setAutomationsDrawerOpen(false)}
-          PaperProps={{ sx: { width: { xs: '100%', sm: 460 } } }}
+          PaperProps={{ sx: { width: { xs: '100%', sm: '40vw' } } }}
         >
           <Box sx={{ p: 2 }}>
             <Stack spacing={1.25}>
@@ -1801,7 +1800,7 @@ export default function TaskManager() {
         </DialogActions>
       </Dialog>
 
-      <Drawer anchor="right" open={itemDrawerOpen} onClose={closeItemDrawer} PaperProps={{ sx: { width: { xs: '100%', sm: 420 } } }}>
+      <Drawer anchor="right" open={itemDrawerOpen} onClose={closeItemDrawer} PaperProps={{ sx: { width: { xs: '100%', sm: '40vw' } } }}>
         <Box sx={{ p: 2 }}>
           <Stack spacing={1.5}>
             <Typography variant="h3">{activeItem?.name || 'Item'}</Typography>

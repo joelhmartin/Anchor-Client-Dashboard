@@ -25,14 +25,9 @@ import {
   changeColumnValue,
   uploadFileToColumn
 } from '../services/monday.js';
-import {
-  DEFAULT_AI_PROMPT,
-  pullCallsFromCtm,
-  buildCallsFromCache,
-  postSaleToCTM,
-  fetchPhoneInteractionSources
-} from '../services/ctm.js';
+import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache, postSaleToCTM, fetchPhoneInteractionSources } from '../services/ctm.js';
 import { generateAiResponse } from '../services/ai.js';
+import { generateImagenImage } from '../services/imagen.js';
 import { sendMailgunMessage, isMailgunConfigured } from '../services/mailgun.js';
 import {
   createNotification,
@@ -87,52 +82,57 @@ const CLIENT_PACKAGE_OPTIONS = ['Essentials', 'Growth', 'Accelerate', 'Custom'];
 
 const DEFAULT_JOURNEY_TEMPLATE = [
   {
-    id: 'week-2-follow-up',
-    label: 'Week 2 Call + Text/Email',
+    id: 'week-0-first-touch',
+    label: 'Initial Outreach (Same Day)',
     channel: 'call,text,email',
+    offset_weeks: 0,
+    message:
+      'Introduce yourself, confirm what they’re looking for, and propose next steps. Aim to schedule a short discovery call or request the key details needed to qualify.',
+    tone: 'friendly'
+  },
+  {
+    id: 'week-1-qualify',
+    label: 'Week 1 Follow-Up (Qualify + Confirm Fit)',
+    channel: 'call,text,email',
+    offset_weeks: 1,
+    message:
+      'Confirm timeline, budget (if relevant), decision makers, and primary goals. Share a quick summary of how you can help and the easiest next action to move forward.',
+    tone: 'professional'
+  },
+  {
+    id: 'week-2-value',
+    label: 'Week 2 Follow-Up (Share Value + Proof)',
+    channel: 'email,text,call',
     offset_weeks: 2,
     message:
-      'First follow-up after consult. Encourage the exam, highlight diagnosis, treatment plan, and financing options.',
-    tone: 'supportive'
+      'Share a relevant example/case study, a short checklist, or a quick win recommendation. Ask a single clear question to keep momentum and propose a meeting time.',
+    tone: 'helpful'
   },
   {
-    id: 'week-4-follow-up',
-    label: 'Week 4 Call + Text/Email',
-    channel: 'call,text,email',
+    id: 'week-4-proposal',
+    label: 'Week 4 Follow-Up (Proposal / Next Steps)',
+    channel: 'email,call',
     offset_weeks: 4,
-    message: 'Second follow-up. Remind them the exam is 2 hours, $450, includes full diagnosis & plan.',
-    tone: 'educational'
+    message:
+      'Offer a straightforward plan: scope, timeline, and what you need from them to start. If they’re not ready, ask when to follow up and what’s blocking progress.',
+    tone: 'direct'
   },
   {
-    id: 'week-6-follow-up',
-    label: 'Week 6 Call + Text/Email',
-    channel: 'call,text,email',
+    id: 'week-6-nurture',
+    label: 'Week 6 Follow-Up (Nurture)',
+    channel: 'email,text',
     offset_weeks: 6,
-    message: 'Third follow-up. Offer clarity on treatment, emphasize payment flexibility.',
-    tone: 'encouraging'
+    message:
+      'Send a light touch: a helpful resource, an update, or a reminder. Keep the message short and easy to reply to (yes/no or a single option).',
+    tone: 'low_pressure'
   },
   {
-    id: 'week-8-follow-up',
-    label: 'Week 8 Call + Text/Email',
-    channel: 'call,text,email',
+    id: 'week-8-close-loop',
+    label: 'Week 8 Close the Loop',
+    channel: 'email,call',
     offset_weeks: 8,
-    message: 'Fourth follow-up. Reinforce importance of exam to understand concerns.',
-    tone: 'empathetic'
-  },
-  {
-    id: 'week-10-follow-up',
-    label: 'Week 10 Call + Text/Email',
-    channel: 'call,text,email',
-    offset_weeks: 10,
-    message: 'Fifth follow-up. Keep the door open, invite questions about timing or financing.',
-    tone: 'reassuring'
-  },
-  {
-    id: 'week-12-follow-up',
-    label: 'Week 12 Final Follow-Up',
-    channel: 'call,text,email',
-    offset_weeks: 12,
-    message: 'Final touchpoint inviting them to schedule when ready, remind of value of exam.',
+    message:
+      'Close the loop respectfully. Ask if they want to: (1) move forward, (2) pause until a specific date, or (3) close out for now. Make it easy for them to choose.',
     tone: 'open'
   }
 ];
@@ -206,9 +206,7 @@ async function seedJourneySteps(journeyId, ownerId) {
   await Promise.all(
     templateSteps.map((step, index) => {
       const offsetWeeks = Number.isFinite(step.offset_weeks) ? step.offset_weeks : 0;
-      const dueAt = offsetWeeks
-        ? new Date(now + offsetWeeks * 7 * 24 * 60 * 60 * 1000)
-        : null;
+      const dueAt = offsetWeeks ? new Date(now + offsetWeeks * 7 * 24 * 60 * 60 * 1000) : null;
       return query(
         `INSERT INTO client_journey_steps (journey_id, position, label, channel, message, offset_weeks, due_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -286,10 +284,7 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
   const noteMap = new Map();
   notesRes.rows.forEach((note) => {
     if (!noteMap.has(note.journey_id)) noteMap.set(note.journey_id, []);
-    const authorName =
-      [note.first_name, note.last_name].filter(Boolean).join(' ').trim() ||
-      note.email ||
-      'Unknown';
+    const authorName = [note.first_name, note.last_name].filter(Boolean).join(' ').trim() || note.email || 'Unknown';
     noteMap.get(note.journey_id).push({
       id: note.id,
       author_id: note.author_id,
@@ -536,10 +531,7 @@ async function resolveAccountManagerContact(userId, options = {}) {
   const client = rows[0];
   if (!client) return null;
   const clientName =
-    client.display_name ||
-    [client.first_name, client.last_name].filter(Boolean).join(' ').trim() ||
-    client.email ||
-    'Client';
+    client.display_name || [client.first_name, client.last_name].filter(Boolean).join(' ').trim() || client.email || 'Client';
 
   let managerEmail = null;
   let managerName = null;
@@ -553,9 +545,7 @@ async function resolveAccountManagerContact(userId, options = {}) {
         managerEmail = person.email || null;
         managerName = person.name || null;
         if (managerEmail) {
-          const { rows: accountManagers } = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [
-            managerEmail
-          ]);
+          const { rows: accountManagers } = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [managerEmail]);
           if (accountManagers.length) {
             notificationUserId = accountManagers[0].id;
           }
@@ -574,8 +564,7 @@ async function resolveAccountManagerContact(userId, options = {}) {
       if (!managerEmail) managerEmail = adminRows[0].email;
       if (!notificationUserId) notificationUserId = adminRows[0].id;
       if (!managerName) {
-        managerName =
-          [adminRows[0].first_name, adminRows[0].last_name].filter(Boolean).join(' ').trim() || 'Admin Team';
+        managerName = [adminRows[0].first_name, adminRows[0].last_name].filter(Boolean).join(' ').trim() || 'Admin Team';
       }
     }
   }
@@ -777,7 +766,7 @@ router.put('/profile', async (req, res) => {
       params.push(userId);
       await query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
     }
-    
+
     // Update client_profiles fields (monthly goal + onboarding access confirmations)
     if (hasClientProfileUpdate) {
       await query(
@@ -840,7 +829,7 @@ router.put('/profile', async (req, res) => {
         ]
       );
     }
-    
+
     const refreshed = await query(
       `SELECT u.*, cp.monthly_revenue_goal, cp.client_type, cp.client_subtype, cp.client_package,
               cp.website_access_provided, cp.website_access_understood,
@@ -879,28 +868,26 @@ router.post('/profile/avatar', uploadAvatar.single('avatar'), async (req, res) =
 router.get('/brand', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { rows } = await query('SELECT * FROM brand_assets WHERE user_id = $1 LIMIT 1', [targetUserId]);
-  const brand =
-    rows[0] || {
-      business_name: '',
-      business_description: '',
-      logos: [],
-      style_guides: [],
-      brand_notes: '',
-      website_url: ''
-    };
+  const brand = rows[0] || {
+    business_name: '',
+    business_description: '',
+    logos: [],
+    style_guides: [],
+    brand_notes: '',
+    website_url: ''
+  };
   res.json({ brand });
 });
 
 router.get('/brand/admin/:userId', isAdminOrEditor, async (req, res) => {
   const target = req.params.userId;
   const { rows } = await query('SELECT * FROM brand_assets WHERE user_id = $1 LIMIT 1', [target]);
-  const brand =
-    rows[0] || {
-      logos: [],
-      style_guides: [],
-      brand_notes: '',
-      website_url: ''
-    };
+  const brand = rows[0] || {
+    logos: [],
+    style_guides: [],
+    brand_notes: '',
+    website_url: ''
+  };
   res.json({ brand });
 });
 
@@ -925,25 +912,13 @@ router.put('/brand/admin/:userId', uploadBrand.none(), isAdminOrEditor, async (r
         `UPDATE brand_assets
          SET logos=$1, style_guides=$2, brand_notes=$3, website_url=$4, updated_at=NOW()
          WHERE user_id=$5`,
-        [
-          JSON.stringify(payload.logos),
-          JSON.stringify(payload.style_guides),
-          payload.brand_notes,
-          payload.website_url,
-          target
-        ]
+        [JSON.stringify(payload.logos), JSON.stringify(payload.style_guides), payload.brand_notes, payload.website_url, target]
       );
     } else {
       await query(
         `INSERT INTO brand_assets (user_id, logos, style_guides, brand_notes, website_url)
          VALUES ($1,$2,$3,$4,$5)`,
-        [
-          target,
-          JSON.stringify(payload.logos),
-          JSON.stringify(payload.style_guides),
-          payload.brand_notes,
-          payload.website_url
-        ]
+        [target, JSON.stringify(payload.logos), JSON.stringify(payload.style_guides), payload.brand_notes, payload.website_url]
       );
     }
 
@@ -1171,10 +1146,13 @@ router.post('/docs/admin/review', requireAdmin, async (req, res) => {
   const { user_id, doc_id, review_action } = req.body;
   if (!user_id || !doc_id) return res.status(400).json({ message: 'Missing client or document' });
   const status = review_action === 'pending' ? 'pending' : 'none';
-  await query(
-    'UPDATE documents SET review_status=$1, review_requested_at=$2 WHERE id=$3 AND user_id=$4 AND type != $5',
-    [status, status === 'pending' ? new Date() : null, doc_id, user_id, 'default']
-  );
+  await query('UPDATE documents SET review_status=$1, review_requested_at=$2 WHERE id=$3 AND user_id=$4 AND type != $5', [
+    status,
+    status === 'pending' ? new Date() : null,
+    doc_id,
+    user_id,
+    'default'
+  ]);
 
   if (status === 'pending') {
     const [{ rows: docRows }, { rows: userRows }] = await Promise.all([
@@ -1184,7 +1162,7 @@ router.post('/docs/admin/review', requireAdmin, async (req, res) => {
     const docInfo = docRows[0] || {};
     const clientInfo = userRows[0] || {};
     const docLabel = docInfo.label || docInfo.name || 'Document';
-  const portalLink = `${resolveBaseUrl(req)}/portal?tab=documents`;
+    const portalLink = `${resolveBaseUrl(req)}/portal?tab=documents`;
     await createNotification({
       userId: user_id,
       title: 'Document ready for review',
@@ -1216,6 +1194,115 @@ router.delete('/docs/admin/:docId', isAdminOrEditor, async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED DOCUMENTS (admin-managed, visible to all clients under "Helpful Documents")
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Client-facing: fetch shared docs
+router.get('/shared-docs', async (req, res) => {
+  try {
+    const { rows } = await query(
+      'SELECT id, label, name, url, description, sort_order, created_at FROM shared_documents ORDER BY sort_order ASC, created_at DESC'
+    );
+    res.json({ shared_docs: rows });
+  } catch (err) {
+    console.error('[hub:shared-docs:get]', err);
+    res.status(500).json({ message: 'Failed to load shared documents' });
+  }
+});
+
+// Admin: list shared docs with creator info
+router.get('/shared-docs/admin', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT sd.*, u.first_name AS creator_first_name, u.last_name AS creator_last_name, u.email AS creator_email
+      FROM shared_documents sd
+      LEFT JOIN users u ON sd.created_by = u.id
+      ORDER BY sd.sort_order ASC, sd.created_at DESC
+    `);
+    res.json({ shared_docs: rows });
+  } catch (err) {
+    console.error('[hub:shared-docs:admin:get]', err);
+    res.status(500).json({ message: 'Failed to load shared documents' });
+  }
+});
+
+// Admin: upload new shared document(s)
+router.post('/shared-docs/admin', requireAdmin, uploadDocs.array('shared_doc', 10), async (req, res) => {
+  try {
+    if (!req.files?.length) return res.status(400).json({ message: 'No file uploaded' });
+    const labels = req.body.labels ? (Array.isArray(req.body.labels) ? req.body.labels : [req.body.labels]) : [];
+    const descriptions = req.body.descriptions
+      ? Array.isArray(req.body.descriptions)
+        ? req.body.descriptions
+        : [req.body.descriptions]
+      : [];
+    const uploaded = [];
+    for (let i = 0; i < req.files.length; i++) {
+      const file = req.files[i];
+      const url = publicUrl(file.path);
+      const label = labels[i] || file.originalname;
+      const description = descriptions[i] || null;
+      const { rows } = await query(
+        `INSERT INTO shared_documents (label, name, url, description, created_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [label, file.originalname, url, description, req.user.id]
+      );
+      uploaded.push(rows[0]);
+    }
+    res.json({ message: 'Uploaded', shared_docs: uploaded });
+  } catch (err) {
+    console.error('[hub:shared-docs:admin:post]', err);
+    res.status(500).json({ message: 'Failed to upload shared document' });
+  }
+});
+
+// Admin: update shared document details (label, description, sort_order)
+router.put('/shared-docs/admin/:id', requireAdmin, async (req, res) => {
+  try {
+    const { label, description, sort_order } = req.body;
+    const { rows } = await query(
+      `UPDATE shared_documents SET label = COALESCE($1, label), description = $2, sort_order = COALESCE($3, sort_order), updated_at = NOW()
+       WHERE id = $4 RETURNING *`,
+      [label, description, sort_order, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Document not found' });
+    res.json({ shared_doc: rows[0] });
+  } catch (err) {
+    console.error('[hub:shared-docs:admin:put]', err);
+    res.status(500).json({ message: 'Failed to update shared document' });
+  }
+});
+
+// Admin: delete shared document
+router.delete('/shared-docs/admin/:id', requireAdmin, async (req, res) => {
+  try {
+    const result = await query('DELETE FROM shared_documents WHERE id = $1', [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ message: 'Document not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    console.error('[hub:shared-docs:admin:delete]', err);
+    res.status(500).json({ message: 'Failed to delete shared document' });
+  }
+});
+
+// Admin: reorder shared documents
+router.post('/shared-docs/admin/reorder', requireAdmin, async (req, res) => {
+  try {
+    const { order } = req.body; // array of { id, sort_order }
+    if (!Array.isArray(order)) return res.status(400).json({ message: 'Invalid order array' });
+    for (const item of order) {
+      if (item.id && typeof item.sort_order === 'number') {
+        await query('UPDATE shared_documents SET sort_order = $1, updated_at = NOW() WHERE id = $2', [item.sort_order, item.id]);
+      }
+    }
+    res.json({ message: 'Reordered' });
+  } catch (err) {
+    console.error('[hub:shared-docs:admin:reorder]', err);
+    res.status(500).json({ message: 'Failed to reorder documents' });
+  }
+});
+
 router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) => {
   if (!isMailgunConfigured()) {
     return res.status(400).json({ message: 'Mailgun is not configured' });
@@ -1229,10 +1316,7 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   }
 
   // If onboarding is already completed, don't keep issuing links.
-  const { rows: profileRows } = await query(
-    'SELECT onboarding_completed_at FROM client_profiles WHERE user_id = $1 LIMIT 1',
-    [clientId]
-  );
+  const { rows: profileRows } = await query('SELECT onboarding_completed_at FROM client_profiles WHERE user_id = $1 LIMIT 1', [clientId]);
   if (profileRows[0]?.onboarding_completed_at) {
     return res.status(400).json({ message: 'Client onboarding is already completed.' });
   }
@@ -1241,10 +1325,9 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
   // Revoke any previously-issued (still valid) links so only the newest link works.
-  await query(
-    'UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL',
-    [clientId]
-  );
+  await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL', [
+    clientId
+  ]);
   await query(
     `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
      VALUES ($1,$2,$3,$4)`,
@@ -1254,9 +1337,7 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   const baseUrl = resolveBaseUrl(req);
   const onboardingUrl = `${baseUrl}/onboarding/${token}`;
   const subject = 'Anchor Client Onboarding';
-  const greeting = clientUser.first_name
-    ? `Hi ${clientUser.first_name},`
-    : 'Hi there,';
+  const greeting = clientUser.first_name ? `Hi ${clientUser.first_name},` : 'Hi there,';
   const text = `${greeting}
 
 We created your Anchor account. Click the link below to finish onboarding, set your password, confirm services, and share brand details.
@@ -1576,19 +1657,17 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
           return res.status(400).json({ message: 'Selected task workspace is invalid' });
         }
 
-        const { rows: profileRows } = await query(
-          'SELECT task_board_id FROM client_profiles WHERE user_id = $1 LIMIT 1',
-          [clientId]
-        );
+        const { rows: profileRows } = await query('SELECT task_board_id FROM client_profiles WHERE user_id = $1 LIMIT 1', [clientId]);
         const existingBoardId = profileRows[0]?.task_board_id;
 
         if (existingBoardId) {
           // Keep board name/prefix in sync with latest onboarding values.
           await query('UPDATE task_boards SET name = $1, board_prefix = $2 WHERE id = $3', [name, prefix || null, existingBoardId]);
-          await query(
-            'UPDATE client_profiles SET board_prefix = $1, task_workspace_id = $2, updated_at = NOW() WHERE user_id = $3',
-            [prefix || null, task_workspace_id, clientId]
-          );
+          await query('UPDATE client_profiles SET board_prefix = $1, task_workspace_id = $2, updated_at = NOW() WHERE user_id = $3', [
+            prefix || null,
+            task_workspace_id,
+            clientId
+          ]);
         } else {
           const { rows: boardRows } = await query(
             `INSERT INTO task_boards (workspace_id, name, description, created_by, board_prefix)
@@ -1622,9 +1701,10 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
     res.json({ client: rows[0] });
   } catch (err) {
     console.error('[clients:update]', err);
-    const msg = err?.code === '42703'
-      ? `Database schema is out of date: ${err.message}. Run migrations (init.sql) to add missing columns.`
-      : (err?.message || 'Unable to update client');
+    const msg =
+      err?.code === '42703'
+        ? `Database schema is out of date: ${err.message}. Run migrations (init.sql) to add missing columns.`
+        : err?.message || 'Unable to update client';
     res.status(500).json({ message: msg, code: err?.code || null });
   }
 });
@@ -1657,10 +1737,7 @@ router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
     }
 
     // Check if client has an associated task board
-    const { rows: profileRows } = await query(
-      'SELECT task_board_id FROM client_profiles WHERE user_id = $1',
-      [clientId]
-    );
+    const { rows: profileRows } = await query('SELECT task_board_id FROM client_profiles WHERE user_id = $1', [clientId]);
     const taskBoardId = profileRows[0]?.task_board_id;
 
     // Delete the associated task board if requested
@@ -1703,10 +1780,12 @@ router.post('/clients/:id/service-presets', isAdminOrEditor, async (req, res) =>
     const toInsert = normalized.filter((name) => !existingSet.has(name.toLowerCase()));
     const created = [];
     for (const name of toInsert) {
-      const inserted = await query(
-        'INSERT INTO services (user_id, name, description, base_price) VALUES ($1,$2,$3,$4) RETURNING *',
-        [targetClientId, name, '', 0]
-      );
+      const inserted = await query('INSERT INTO services (user_id, name, description, base_price) VALUES ($1,$2,$3,$4) RETURNING *', [
+        targetClientId,
+        name,
+        '',
+        0
+      ]);
       created.push(inserted.rows[0]);
       logEvent('clients:service-presets', 'Preset service added', { clientId: targetClientId, serviceName: name });
     }
@@ -1843,12 +1922,7 @@ router.post('/requests', uploadRequestAttachment.single('attachment'), async (re
   try {
     const settings = await getMondaySettings();
     const targetUserId = req.portalUserId || req.user.id;
-    const profile = (
-      await query(
-        `SELECT * FROM client_profiles WHERE user_id = $1`,
-        [targetUserId]
-      )
-    ).rows[0] || {};
+    const profile = (await query(`SELECT * FROM client_profiles WHERE user_id = $1`, [targetUserId])).rows[0] || {};
 
     logEvent('requests:create', 'incoming submission', {
       user: targetUserId,
@@ -1902,9 +1976,7 @@ router.post('/requests', uploadRequestAttachment.single('attachment'), async (re
         }
 
         if (settings.monday_status_column_id) {
-          const statusLabel = isRush
-            ? settings.monday_rush_status_label || 'Rush Job'
-            : settings.monday_status_label || 'Assigned';
+          const statusLabel = isRush ? settings.monday_rush_status_label || 'Rush Job' : settings.monday_status_label || 'Assigned';
           try {
             await changeColumnValue({
               boardId: profile.monday_board_id,
@@ -1981,7 +2053,11 @@ router.post('/requests', uploadRequestAttachment.single('attachment'), async (re
       ]
     );
     const savedRequest = rows[0];
-    logEvent('requests:create', 'request stored', { user: targetUserId, requestId: savedRequest?.id, mondayItemId: mondayItem?.id || null });
+    logEvent('requests:create', 'request stored', {
+      user: targetUserId,
+      requestId: savedRequest?.id,
+      mondayItemId: mondayItem?.id || null
+    });
 
     if (isRush) {
       try {
@@ -1989,9 +2065,7 @@ router.post('/requests', uploadRequestAttachment.single('attachment'), async (re
         if (contact && (contact.managerEmail || contact.notificationUserId)) {
           const mondayBaseUrl = (settings?.monday_account_url || 'https://app.monday.com').replace(/\/$/, '');
           const mondayLink =
-            mondayItem?.id && profile.monday_board_id
-              ? `${mondayBaseUrl}/boards/${profile.monday_board_id}/pulses/${mondayItem.id}`
-              : null;
+            mondayItem?.id && profile.monday_board_id ? `${mondayBaseUrl}/boards/${profile.monday_board_id}/pulses/${mondayItem.id}` : null;
           const requestTitle = title || 'Untitled Request';
           const dueLabel = dueDate || 'Not provided';
           const descriptionText = description?.trim() ? description.trim() : 'No description provided.';
@@ -2056,7 +2130,7 @@ router.get('/requests', async (req, res) => {
     const local = (await query('SELECT * FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [targetUserId])).rows;
 
     const hasMondayToken = process.env.MONDAY_API_TOKEN || settings.monday_token;
-    
+
     logEvent('requests:list', 'Fetching tasks', {
       user: targetUserId,
       hasMondayToken: !!hasMondayToken,
@@ -2067,28 +2141,26 @@ router.get('/requests', async (req, res) => {
 
     if (hasMondayToken && profile.monday_board_id) {
       const groupIds = [profile.monday_active_group_id, profile.monday_completed_group_id].filter(Boolean);
-      
+
       if (groupIds.length === 0) {
         logEvent('requests:list', 'No group IDs configured', { user: targetUserId, boardId: profile.monday_board_id });
       }
-      
+
       const groups = await listItemsByGroups({
         boardId: profile.monday_board_id,
         groupIds,
         settings,
-        columnIds: [
-          settings.monday_status_column_id,
-          settings.monday_due_date_column_id,
-          settings.monday_client_files_column_id
-        ].filter(Boolean)
+        columnIds: [settings.monday_status_column_id, settings.monday_due_date_column_id, settings.monday_client_files_column_id].filter(
+          Boolean
+        )
       });
-      
+
       logEvent('requests:list', 'Monday groups fetched', {
         user: targetUserId,
         groupCount: groups.length,
-        groupIds: groups.map(g => ({ id: g.id, title: g.title, itemCount: g.items?.length || 0 }))
+        groupIds: groups.map((g) => ({ id: g.id, title: g.title, itemCount: g.items?.length || 0 }))
       });
-      
+
       const tasks = [];
       groups.forEach((g) => {
         (g.items || []).forEach((item) => {
@@ -2108,7 +2180,7 @@ router.get('/requests', async (req, res) => {
           });
         });
       });
-      
+
       logEvent('requests:list', 'Tasks processed', {
         user: targetUserId,
         totalTasks: tasks.length,
@@ -2117,7 +2189,7 @@ router.get('/requests', async (req, res) => {
           return acc;
         }, {})
       });
-      
+
       return res.json({
         requests: local,
         tasks,
@@ -2152,7 +2224,7 @@ router.get('/requests', async (req, res) => {
 router.get('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const shouldSync = req.query.sync === 'true';
-  
+
   // Always start with cached data for fast initial load
   const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
   let cachedCalls = buildCallsFromCache(cached.rows);
@@ -2269,7 +2341,7 @@ router.get('/calls', async (req, res) => {
 // POST /calls/sync - Explicitly sync with CTM (for background refresh)
 router.post('/calls/sync', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
-  
+
   const profileRes = await query(
     'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
     [targetUserId]
@@ -2352,7 +2424,7 @@ router.post('/calls/sync', async (req, res) => {
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
-    
+
     return res.json({
       calls: shaped,
       synced: true,
@@ -2370,28 +2442,27 @@ router.post('/calls/:id/score', async (req, res) => {
   const score = Number(req.body.score);
   const targetUserId = req.portalUserId || req.user.id;
   const callId = req.params.id;
-  
+
   if (!score || score < 1 || score > 5) {
     return res.status(400).json({ message: 'Invalid score. Must be between 1 and 5.' });
   }
-  
+
   try {
     // Save score locally
     await query('UPDATE call_logs SET score=$1 WHERE call_id=$2 AND user_id=$3', [score, callId, targetUserId]);
     logEvent('calls:score', 'Score saved locally', { user: targetUserId, callId, score });
-    
+
     // Get CTM credentials to post back to CallTrackingMetrics
-    const profileRes = await query(
-      'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
-      [targetUserId]
-    );
+    const profileRes = await query('SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1', [
+      targetUserId
+    ]);
     const profile = profileRes.rows[0] || {};
     const credentials = {
       accountId: profile.ctm_account_number,
       apiKey: profile.ctm_api_key,
       apiSecret: profile.ctm_api_secret
     };
-    
+
     // Post score to CTM if credentials are configured
     if (credentials.accountId && credentials.apiKey && credentials.apiSecret) {
       try {
@@ -2405,10 +2476,10 @@ router.post('/calls/:id/score', async (req, res) => {
       } catch (ctmErr) {
         logEvent('calls:score', 'CTM sync failed', { user: targetUserId, callId, error: ctmErr.message });
         // Don't fail the request if CTM sync fails - score is still saved locally
-        res.json({ 
-          message: 'Score saved locally. Warning: Could not sync to CallTrackingMetrics.', 
+        res.json({
+          message: 'Score saved locally. Warning: Could not sync to CallTrackingMetrics.',
           rating: score,
-          warning: ctmErr.message 
+          warning: ctmErr.message
         });
       }
     } else {
@@ -2425,24 +2496,23 @@ router.post('/calls/:id/score', async (req, res) => {
 router.delete('/calls/:id/score', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const callId = req.params.id;
-  
+
   try {
     // Clear score locally
     await query('UPDATE call_logs SET score=NULL WHERE call_id=$1 AND user_id=$2', [callId, targetUserId]);
     logEvent('calls:score', 'Score cleared locally', { user: targetUserId, callId });
-    
+
     // Get CTM credentials to clear score in CallTrackingMetrics
-    const profileRes = await query(
-      'SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1',
-      [targetUserId]
-    );
+    const profileRes = await query('SELECT ctm_account_number, ctm_api_key, ctm_api_secret FROM client_profiles WHERE user_id=$1 LIMIT 1', [
+      targetUserId
+    ]);
     const profile = profileRes.rows[0] || {};
     const credentials = {
       accountId: profile.ctm_account_number,
       apiKey: profile.ctm_api_key,
       apiSecret: profile.ctm_api_secret
     };
-    
+
     // Clear score in CTM if credentials are configured
     if (credentials.accountId && credentials.apiKey && credentials.apiSecret) {
       try {
@@ -2456,9 +2526,9 @@ router.delete('/calls/:id/score', async (req, res) => {
       } catch (ctmErr) {
         logEvent('calls:score', 'CTM clear failed', { user: targetUserId, callId, error: ctmErr.message });
         // Don't fail the request if CTM sync fails - score is still cleared locally
-        res.json({ 
+        res.json({
           message: 'Score cleared locally. Warning: Could not sync to CallTrackingMetrics.',
-          warning: ctmErr.message 
+          warning: ctmErr.message
         });
       }
     } else {
@@ -2559,12 +2629,12 @@ router.get('/monday/people', isAdminOrEditor, async (_req, res) => {
 // Clear all calls and reload from CTM
 router.delete('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
-  
+
   try {
     // Delete all cached calls for this user
     const { rowCount } = await query('DELETE FROM call_logs WHERE user_id=$1', [targetUserId]);
     logEvent('calls:clear-all', 'All calls cleared', { user: targetUserId, deletedCount: rowCount });
-    
+
     // Now fetch fresh calls from CTM (same logic as GET /calls)
     const profileRes = await query(
       'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
@@ -2576,14 +2646,14 @@ router.delete('/calls', async (req, res) => {
       apiKey: profile.ctm_api_key,
       apiSecret: profile.ctm_api_secret
     };
-    
+
     if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
-      return res.json({ 
+      return res.json({
         message: 'All calls cleared. CallTrackingMetrics credentials not configured.',
         calls: []
       });
     }
-    
+
     // Fetch fresh calls
     const freshCalls = await pullCallsFromCtm({
       credentials,
@@ -2591,7 +2661,7 @@ router.delete('/calls', async (req, res) => {
       existingRows: [], // Empty since we just cleared everything
       autoStarEnabled: profile.auto_star_enabled || false
     });
-    
+
     // Save fresh calls
     if (freshCalls.length) {
       await Promise.all(
@@ -2622,7 +2692,7 @@ router.delete('/calls', async (req, res) => {
           );
         })
       );
-      
+
       // Post auto-starred scores back to CTM
       const autoStarredCalls = freshCalls.filter(({ shouldPostScore }) => shouldPostScore);
       if (autoStarredCalls.length > 0) {
@@ -2641,14 +2711,14 @@ router.delete('/calls', async (req, res) => {
         );
       }
     }
-    
+
     const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
     logEvent('calls:clear-all', 'Calls reloaded', { user: targetUserId, newCount: refreshed.rows.length });
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
-    res.json({ 
+    res.json({
       message: `Successfully cleared and reloaded ${freshCalls.length} call(s)`,
-      calls: shaped 
+      calls: shaped
     });
   } catch (err) {
     console.error('[calls:clear-all]', err);
@@ -2746,17 +2816,17 @@ router.post('/journeys', async (req, res) => {
 
   const findExisting = async (callKey) => {
     if (callKey) {
-      const { rows } = await query(
-        'SELECT id FROM client_journeys WHERE owner_user_id = $1 AND lead_call_key = $2 LIMIT 1',
-        [ownerId, callKey]
-      );
+      const { rows } = await query('SELECT id FROM client_journeys WHERE owner_user_id = $1 AND lead_call_key = $2 LIMIT 1', [
+        ownerId,
+        callKey
+      ]);
       if (rows.length) return rows[0].id;
     }
     if (active_client_id) {
-      const { rows } = await query(
-        'SELECT id FROM client_journeys WHERE owner_user_id = $1 AND active_client_id = $2 LIMIT 1',
-        [ownerId, active_client_id]
-      );
+      const { rows } = await query('SELECT id FROM client_journeys WHERE owner_user_id = $1 AND active_client_id = $2 LIMIT 1', [
+        ownerId,
+        active_client_id
+      ]);
       if (rows.length) return rows[0].id;
     }
     return null;
@@ -2943,9 +3013,7 @@ router.post('/journeys/:id/unarchive', async (req, res) => {
   const { id } = req.params;
   const desiredStatus = req.body?.status;
   const statusUpdate =
-    desiredStatus && JOURNEY_STATUS_OPTIONS.includes(desiredStatus) && desiredStatus !== 'archived'
-      ? desiredStatus
-      : null;
+    desiredStatus && JOURNEY_STATUS_OPTIONS.includes(desiredStatus) && desiredStatus !== 'archived' ? desiredStatus : null;
   try {
     await ensureJourneyTables();
     const params = [id, ownerId];
@@ -2974,10 +3042,7 @@ router.post('/journeys/:id/unarchive', async (req, res) => {
 
 async function ensureJourneyOwnership(journeyId, ownerId) {
   await ensureJourneyTables();
-  const { rows } = await query('SELECT id FROM client_journeys WHERE id = $1 AND owner_user_id = $2 LIMIT 1', [
-    journeyId,
-    ownerId
-  ]);
+  const { rows } = await query('SELECT id FROM client_journeys WHERE id = $1 AND owner_user_id = $2 LIMIT 1', [journeyId, ownerId]);
   return rows.length > 0;
 }
 
@@ -3126,11 +3191,7 @@ router.post('/journeys/:id/notes', async (req, res) => {
   }
   try {
     await ensureJourneyTables();
-    await query('INSERT INTO client_journey_notes (journey_id, author_id, body) VALUES ($1,$2,$3)', [
-      id,
-      authorId,
-      body.trim()
-    ]);
+    await query('INSERT INTO client_journey_notes (journey_id, author_id, body) VALUES ($1,$2,$3)', [id, authorId, body.trim()]);
     const journey = await fetchJourneyForOwner(ownerId, id);
     res.json({ journey });
   } catch (err) {
@@ -3186,10 +3247,12 @@ router.post('/services', async (req, res) => {
     return res.status(400).json({ message: 'Service name is required' });
   }
   try {
-    const { rows } = await query(
-      'INSERT INTO services (user_id, name, description, base_price) VALUES ($1, $2, $3, $4) RETURNING *',
-      [userId, name, description || null, base_price || null]
-    );
+    const { rows } = await query('INSERT INTO services (user_id, name, description, base_price) VALUES ($1, $2, $3, $4) RETURNING *', [
+      userId,
+      name,
+      description || null,
+      base_price || null
+    ]);
     logEvent('services:create', 'Service created', { serviceId: rows[0].id, name, userId });
     res.json({ service: rows[0] });
   } catch (err) {
@@ -3417,10 +3480,10 @@ router.post('/clients/:leadId/agree-to-service', async (req, res) => {
     let activeClientId;
     let existingSourceValue = null;
     if (clientPhone) {
-      const existingClient = await query(
-        'SELECT id, source FROM active_clients WHERE owner_user_id = $1 AND client_phone = $2',
-        [userId, clientPhone]
-      );
+      const existingClient = await query('SELECT id, source FROM active_clients WHERE owner_user_id = $1 AND client_phone = $2', [
+        userId,
+        clientPhone
+      ]);
       if (existingClient.rows.length > 0) {
         activeClientId = existingClient.rows[0].id;
         existingSourceValue = existingClient.rows[0].source || null;
@@ -3519,7 +3582,8 @@ router.post('/active-clients/redact-services', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   try {
     // Only redact services for this user's active clients
-    const { rows } = await query(`
+    const { rows } = await query(
+      `
       UPDATE client_services 
       SET redacted_at = NOW()
       WHERE redacted_at IS NULL 
@@ -3528,7 +3592,9 @@ router.post('/active-clients/redact-services', async (req, res) => {
           SELECT id FROM active_clients WHERE owner_user_id = $1
         )
       RETURNING id
-    `, [userId]);
+    `,
+      [userId]
+    );
     const { rowCount: journeyRedacted } = await query(
       `UPDATE client_journeys
        SET symptoms = '[]'::jsonb,
@@ -3555,10 +3621,7 @@ router.post('/active-clients/redact-services', async (req, res) => {
 router.get('/blog-posts', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   try {
-    const { rows } = await query(
-      'SELECT * FROM blog_posts WHERE user_id = $1 ORDER BY updated_at DESC',
-      [userId]
-    );
+    const { rows } = await query('SELECT * FROM blog_posts WHERE user_id = $1 ORDER BY updated_at DESC', [userId]);
     res.json({ blog_posts: rows });
   } catch (err) {
     logEvent('blog:list', 'Error fetching blog posts', { error: err.message, userId });
@@ -3571,10 +3634,7 @@ router.get('/blog-posts/:id', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { id } = req.params;
   try {
-    const { rows } = await query(
-      'SELECT * FROM blog_posts WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
+    const { rows } = await query('SELECT * FROM blog_posts WHERE id = $1 AND user_id = $2', [id, userId]);
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Blog post not found' });
     }
@@ -3621,18 +3681,18 @@ router.put('/blog-posts/:id', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { id } = req.params;
   const { title, content, status } = req.body;
-  
+
   try {
     // Check if the blog post belongs to the user
     const check = await query('SELECT id FROM blog_posts WHERE id = $1 AND user_id = $2', [id, userId]);
     if (check.rows.length === 0) {
       return res.status(404).json({ message: 'Blog post not found' });
     }
-    
+
     const updates = [];
     const params = [id, userId];
     let paramIndex = 3;
-    
+
     if (title !== undefined) {
       updates.push(`title = $${paramIndex++}`);
       params.push(title);
@@ -3644,19 +3704,16 @@ router.put('/blog-posts/:id', async (req, res) => {
     if (status !== undefined) {
       updates.push(`status = $${paramIndex++}`);
       params.push(status);
-      
+
       if (status === 'published') {
         updates.push(`published_at = COALESCE(published_at, NOW())`);
       }
     }
-    
+
     updates.push('updated_at = NOW()');
-    
-    const { rows } = await query(
-      `UPDATE blog_posts SET ${updates.join(', ')} WHERE id = $1 AND user_id = $2 RETURNING *`,
-      params
-    );
-    
+
+    const { rows } = await query(`UPDATE blog_posts SET ${updates.join(', ')} WHERE id = $1 AND user_id = $2 RETURNING *`, params);
+
     logEvent('blog:update', 'Blog post updated', { userId, id });
     res.json({ blog_post: rows[0] });
   } catch (err) {
@@ -3669,17 +3726,14 @@ router.put('/blog-posts/:id', async (req, res) => {
 router.delete('/blog-posts/:id', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { id } = req.params;
-  
+
   try {
-    const { rowCount } = await query(
-      'DELETE FROM blog_posts WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
-    
+    const { rowCount } = await query('DELETE FROM blog_posts WHERE id = $1 AND user_id = $2', [id, userId]);
+
     if (rowCount === 0) {
       return res.status(404).json({ message: 'Blog post not found' });
     }
-    
+
     logEvent('blog:delete', 'Blog post deleted', { userId, id });
     res.json({ success: true });
   } catch (err) {
@@ -3691,20 +3745,28 @@ router.delete('/blog-posts/:id', async (req, res) => {
 // AI: Generate blog post ideas
 router.post('/blog-posts/ai/ideas', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
-  
+
   try {
     // Get user's business info and services
-    const brandResult = await query('SELECT business_name, business_description, website_url FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
-    const servicesResult = await query('SELECT COALESCE(name, \'\') AS name, COALESCE(description, \'\') AS description FROM services WHERE user_id = $1 AND active = true', [userId]);
-    
+    const brandResult = await query(
+      'SELECT business_name, business_description, website_url FROM brand_assets WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
+    const servicesResult = await query(
+      "SELECT COALESCE(name, '') AS name, COALESCE(description, '') AS description FROM services WHERE user_id = $1 AND active = true",
+      [userId]
+    );
+
     const businessName = brandResult.rows[0]?.business_name?.trim() || 'Your Business';
     const businessDescription = brandResult.rows[0]?.business_description?.trim() || 'A growing service provider.';
     const websiteUrl = brandResult.rows[0]?.website_url?.trim() || 'https://example.com';
     const servicesList = servicesResult.rows
-      .map((s) => s.name ? `${s.name}${s.description ? ` - ${s.description}` : ''}` : '')
+      .map((s) => (s.name ? `${s.name}${s.description ? ` - ${s.description}` : ''}` : ''))
       .filter(Boolean);
-    const servicesText = servicesList.length ? servicesList.map((line, idx) => `${idx + 1}. ${line}`).join('\n') : 'No services have been configured yet.';
-    
+    const servicesText = servicesList.length
+      ? servicesList.map((line, idx) => `${idx + 1}. ${line}`).join('\n')
+      : 'No services have been configured yet.';
+
     const prompt = `You are an experienced marketing copywriter.
 Business Name: ${businessName}
 Business Description: ${businessDescription}
@@ -3714,7 +3776,7 @@ ${servicesText}
 
 Generate 10 SEO-friendly blog post title ideas that would be valuable for this exact business and its services. 
 Return the titles only, one per line, without numbering or bullet characters.`;
-    
+
     logEvent('blog:ai:ideas', 'Prompt built', { userId, prompt });
     const responseText = await generateAiResponse({
       prompt,
@@ -3722,9 +3784,12 @@ Return the titles only, one per line, without numbering or bullet characters.`;
       temperature: 0.65,
       maxTokens: 400
     });
-    
-    const ideas = responseText.split('\n').map((line) => line.replace(/^\d+[\).\s-]+/, '').trim()).filter(Boolean);
-    
+
+    const ideas = responseText
+      .split('\n')
+      .map((line) => line.replace(/^\d+[\).\s-]+/, '').trim())
+      .filter(Boolean);
+
     logEvent('blog:ai:ideas', 'Generated blog ideas', { userId, count: ideas.length });
     res.json({ ideas });
   } catch (err) {
@@ -3737,24 +3802,32 @@ Return the titles only, one per line, without numbering or bullet characters.`;
 router.post('/blog-posts/ai/draft', async (req, res) => {
   const userId = req.portalUserId || req.user.id;
   const { title } = req.body;
-  
+
   if (!title) {
     return res.status(400).json({ message: 'Title is required' });
   }
-  
+
   try {
     // Get user's business info
-    const brandResult = await query('SELECT business_name, business_description, website_url FROM brand_assets WHERE user_id = $1 LIMIT 1', [userId]);
-    const servicesResult = await query('SELECT COALESCE(name, \'\') AS name, COALESCE(description, \'\') AS description FROM services WHERE user_id = $1 AND active = true', [userId]);
-    
+    const brandResult = await query(
+      'SELECT business_name, business_description, website_url FROM brand_assets WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
+    const servicesResult = await query(
+      "SELECT COALESCE(name, '') AS name, COALESCE(description, '') AS description FROM services WHERE user_id = $1 AND active = true",
+      [userId]
+    );
+
     const businessName = brandResult.rows[0]?.business_name?.trim() || 'Your Business';
     const businessDescription = brandResult.rows[0]?.business_description?.trim() || 'A growing service provider.';
     const websiteUrl = brandResult.rows[0]?.website_url?.trim() || 'https://example.com';
     const servicesList = servicesResult.rows
-      .map((s) => s.name ? `${s.name}${s.description ? ` - ${s.description}` : ''}` : '')
+      .map((s) => (s.name ? `${s.name}${s.description ? ` - ${s.description}` : ''}` : ''))
       .filter(Boolean);
-    const servicesText = servicesList.length ? servicesList.map((line, idx) => `${idx + 1}. ${line}`).join('\n') : 'No services have been configured yet.';
-    
+    const servicesText = servicesList.length
+      ? servicesList.map((line, idx) => `${idx + 1}. ${line}`).join('\n')
+      : 'No services have been configured yet.';
+
     const prompt = `Write a comprehensive, SEO-optimized blog post with the following specifications:
 
 Title: ${title}
@@ -3773,24 +3846,70 @@ Requirements:
 4. Optimize for SEO with natural keyword placement
 5. Include a compelling introduction and conclusion
 6. Use paragraphs (<p> tags) for readability
-7. Add relevant internal linking opportunities (use placeholder URLs like #service-name)
-8. Make it engaging and valuable to readers
+7. Do NOT include internal links (no placeholder URLs, no assumed sitemap). If you add links, they must be outbound and only if you are confident they are real, evergreen URLs; otherwise omit links entirely.
+8. Do NOT include image placeholders (no "Image:", "Illustration:", "Insert image here", etc.). If you want to suggest imagery, add an HTML comment at the end like: <!-- Image suggestion: ... -->.
+9. Make it engaging and valuable to readers
 
 Write the complete blog post content in HTML:`;
-    
-    logEvent('blog:ai:draft', 'Prompt built', { userId, prompt });
+
+    const maxTokens = Number.parseInt(process.env.BLOG_DRAFT_MAX_TOKENS || '4096', 10);
+    logEvent('blog:ai:draft', 'Prompt built', { userId, promptLength: prompt.length, maxTokens });
     const content = await generateAiResponse({
       prompt,
       systemPrompt: 'You are an expert marketing copywriter who produces long-form, SEO optimized HTML blog posts.',
       temperature: 0.55,
-      maxTokens: 1500
+      // 1500 was too small and could truncate mid-sentence; keep this configurable via env.
+      maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096
     });
-    
+
     logEvent('blog:ai:draft', 'Generated blog draft', { userId, title });
     res.json({ content });
   } catch (err) {
     logEvent('blog:ai:draft', 'Error generating draft', { error: err.message, userId });
     res.status(500).json({ message: 'Unable to generate blog draft' });
+  }
+});
+
+// AI: Generate a hero image for a blog post (Imagen)
+router.post('/blog-posts/ai/image', async (req, res) => {
+  const userId = req.portalUserId || req.user.id;
+  const { title, style = 'clean, modern, professional', aspectRatio = '16:9' } = req.body || {};
+
+  if (!title) return res.status(400).json({ message: 'Title is required' });
+
+  try {
+    const brandResult = await query(
+      'SELECT business_name, business_description, website_url FROM brand_assets WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
+    const businessName = brandResult.rows[0]?.business_name?.trim() || 'Your Business';
+    const businessDescription = brandResult.rows[0]?.business_description?.trim() || '';
+
+    const prompt = `Create a high-quality blog hero image.
+
+Topic: ${title}
+Brand/Business: ${businessName}
+Context: ${businessDescription}
+
+Style: ${style}
+
+Constraints:
+- No text in the image.
+- No logos or brand marks.
+- Photorealistic or tasteful illustration is fine.
+- Suitable as a website hero/banner image.`;
+
+    const { mimeType, bytesBase64Encoded } = await generateImagenImage({
+      prompt,
+      aspectRatio: String(aspectRatio || '16:9'),
+      sampleCount: 1
+    });
+
+    const dataUrl = `data:${mimeType};base64,${bytesBase64Encoded}`;
+    res.json({ dataUrl, mimeType });
+  } catch (err) {
+    console.error('[blog:ai:image]', err);
+    res.status(500).json({ message: err.message || 'Unable to generate image' });
   }
 });
 

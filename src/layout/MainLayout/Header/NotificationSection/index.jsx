@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import Avatar from '@mui/material/Avatar';
-import Button from '@mui/material/Button';
 import CardActions from '@mui/material/CardActions';
 import Chip from '@mui/material/Chip';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
@@ -25,6 +24,7 @@ import { fetchNotifications, markNotificationRead, markAllNotificationsRead } fr
 
 // assets
 import { IconBell } from '@tabler/icons-react';
+import Button from '@mui/material/Button';
 
 // notification status options
 const status = [

@@ -133,6 +133,20 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 
+-- Shared Documents (admin-uploaded, visible to ALL clients under "Helpful Documents")
+CREATE TABLE IF NOT EXISTS shared_documents (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  label TEXT NOT NULL,
+  name TEXT,
+  url TEXT NOT NULL,
+  description TEXT,
+  sort_order INT DEFAULT 0,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_shared_documents_sort ON shared_documents(sort_order, created_at DESC);
+
 -- Notifications
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

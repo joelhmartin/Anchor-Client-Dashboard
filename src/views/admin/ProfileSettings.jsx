@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import InputAdornment from '@mui/material/InputAdornment';
 import LinearProgress from '@mui/material/LinearProgress';
 import Stack from '@mui/material/Stack';
@@ -13,6 +12,7 @@ import Typography from '@mui/material/Typography';
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
+import Button from '@mui/material/Button';
 
 export default function ProfileSettings() {
   const { user, refreshUser } = useAuth();

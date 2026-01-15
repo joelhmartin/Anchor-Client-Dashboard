@@ -1,10 +1,16 @@
 // ==============================|| OVERRIDES - BUTTON ||============================== //
 
-export default function Button(theme) {
+export default function Button() {
   return {
     MuiButton: {
       styleOverrides: {
-        root: {}
+        root: {
+          // Base shared styling for all buttons
+          textTransform: 'none',
+          fontWeight: 600,
+          borderRadius: 10,
+          whiteSpace: 'nowrap'
+        }
       }
     }
   };

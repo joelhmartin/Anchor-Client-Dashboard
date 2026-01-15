@@ -1,8 +1,7 @@
 import {
-  Alert,
+Alert,
   Avatar,
   Box,
-  Button,
   FormControl,
   IconButton,
   InputAdornment,
@@ -10,7 +9,8 @@ import {
   OutlinedInput,
   Stack,
   TextField,
-  Typography
+  Typography,,
+  Button,
 } from '@mui/material';
 import { IconUser } from '@tabler/icons-react';
 import Visibility from '@mui/icons-material/Visibility';
@@ -45,6 +45,9 @@ export default function ProfileStep({
         These details let you return to onboarding anytime and access your dashboard later.
       </Typography>
       <Stack spacing={2}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>
+          Profile
+        </Typography>
         <Stack direction="row" spacing={2} alignItems="center">
           <Avatar
             src={avatarPreviewUrl || form.avatar_url || ''}
@@ -85,47 +88,10 @@ export default function ProfileStep({
           onChange={(e) => setForm((prev) => ({ ...prev, display_name: e.target.value }))}
         />
         <TextField label="Email" fullWidth value={data.user.email} InputProps={{ readOnly: true }} />
-        <TextField
-          label="Call Tracking Main Phone Number"
-          fullWidth
-          value={form.call_tracking_main_number}
-          onChange={(e) => setForm((prev) => ({ ...prev, call_tracking_main_number: e.target.value }))}
-          placeholder="e.g., (555) 123-4567"
-        />
-        <TextField
-          label="Front Desk Email(s)"
-          fullWidth
-          value={form.front_desk_emails}
-          onChange={(e) => setForm((prev) => ({ ...prev, front_desk_emails: e.target.value }))}
-          placeholder="e.g., frontdesk@practice.com, scheduling@practice.com"
-          helperText="Comma-separated if multiple."
-        />
-        <TextField
-          label="Office Admin (Name)"
-          fullWidth
-          value={form.office_admin_name}
-          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_name: e.target.value }))}
-        />
-        <TextField
-          label="Office Admin (Email)"
-          fullWidth
-          value={form.office_admin_email}
-          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_email: e.target.value }))}
-        />
-        <TextField
-          label="Office Admin (Phone)"
-          fullWidth
-          value={form.office_admin_phone}
-          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_phone: e.target.value }))}
-        />
-        <TextField
-          label="Form Submission Recipient Email(s)"
-          fullWidth
-          value={form.form_email_recipients}
-          onChange={(e) => setForm((prev) => ({ ...prev, form_email_recipients: e.target.value }))}
-          placeholder="e.g., leads@practice.com"
-          helperText="Where should website form submission emails go? Comma-separated if multiple."
-        />
+
+        <Typography variant="h5" sx={{ fontWeight: 700, mt: 1 }}>
+          Password
+        </Typography>
         {token || !data?.user?.has_password ? (
           <>
             <FormControl fullWidth variant="outlined">
@@ -190,6 +156,56 @@ export default function ProfileStep({
             Your account is active. You can save and continue at any time. When you log back in, you’ll resume where you left off.
           </Alert>
         )}
+
+        <Typography variant="h5" sx={{ fontWeight: 700, mt: 1 }}>
+          Business Communication
+        </Typography>
+        <TextField
+          label="Main Business Phone Number"
+          fullWidth
+          value={form.call_tracking_main_number}
+          onChange={(e) => setForm((prev) => ({ ...prev, call_tracking_main_number: e.target.value }))}
+          placeholder="e.g., (555) 123-4567"
+          helperText="Where should leads call you?"
+        />
+        <TextField
+          label="Form Submission Recipient Email(s)"
+          fullWidth
+          value={form.form_email_recipients}
+          onChange={(e) => setForm((prev) => ({ ...prev, form_email_recipients: e.target.value }))}
+          placeholder="e.g., leads@practice.com"
+          helperText="Where should website form submission emails go? Comma-separated if multiple."
+        />
+
+        <Typography variant="h5" sx={{ fontWeight: 700, mt: 1 }}>
+          Internal Communication
+        </Typography>
+        <TextField
+          label="Front Desk Email(s)"
+          fullWidth
+          value={form.front_desk_emails}
+          onChange={(e) => setForm((prev) => ({ ...prev, front_desk_emails: e.target.value }))}
+          placeholder="e.g., frontdesk@practice.com, scheduling@practice.com"
+          helperText="Comma-separated if multiple."
+        />
+        <TextField
+          label="Office Admin (Name)"
+          fullWidth
+          value={form.office_admin_name}
+          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_name: e.target.value }))}
+        />
+        <TextField
+          label="Office Admin (Email)"
+          fullWidth
+          value={form.office_admin_email}
+          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_email: e.target.value }))}
+        />
+        <TextField
+          label="Office Admin (Phone)"
+          fullWidth
+          value={form.office_admin_phone}
+          onChange={(e) => setForm((prev) => ({ ...prev, office_admin_phone: e.target.value }))}
+        />
       </Stack>
     </Stack>
   );

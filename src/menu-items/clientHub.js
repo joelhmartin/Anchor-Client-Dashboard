@@ -1,4 +1,4 @@
-import { IconUser, IconChartArcs, IconSettings, IconBriefcase, IconUsers } from '@tabler/icons-react';
+import { IconUser, IconChartArcs, IconSettings, IconBriefcase, IconUsers, IconFiles } from '@tabler/icons-react';
 
 export const adminNavGroup = {
   id: 'admin-nav-group',
@@ -11,6 +11,13 @@ export const adminNavGroup = {
       type: 'item',
       url: '/client-hub',
       icon: IconUser
+    },
+    {
+      id: 'shared-documents',
+      title: 'Shared Documents',
+      type: 'item',
+      url: '/shared-documents',
+      icon: IconFiles
     },
     {
       id: 'jump-client',

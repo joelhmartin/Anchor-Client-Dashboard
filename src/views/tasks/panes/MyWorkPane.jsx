@@ -1,4 +1,9 @@
-import { Box, CircularProgress, Stack, Typography } from '@mui/material';
+import {
+  Box,
+  CircularProgress,
+  Stack,
+  Typography,
+} from '@mui/material';
 import BoardTable from '../components/BoardTable';
 
 // Default status labels for My Work (since items come from multiple boards)

@@ -1,4 +1,12 @@
-import { FormControlLabel, Link, Paper, RadioGroup, Stack, TextField, Typography } from '@mui/material';
+import {
+  FormControlLabel,
+  Link,
+  Paper,
+  RadioGroup,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import CheckboxRadio from './CheckboxRadio';
 
 export default function GoogleAdsStep({ access, setAccess, setAccessStatus }) {

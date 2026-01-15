@@ -28,3 +28,9 @@ export function generateBlogDraft(title) {
   return client.post('/hub/blog-posts/ai/draft', { title }).then((res) => res.data.content);
 }
 
+export function generateBlogImage(title, options = {}) {
+  return client
+    .post('/hub/blog-posts/ai/image', { title, ...options })
+    .then((res) => res.data);
+}
+

@@ -3,7 +3,6 @@ import React from 'react';
 
 // material-ui
 import Avatar from '@mui/material/Avatar';
-import Button from '@mui/material/Button';
 import CardActions from '@mui/material/CardActions';
 import CardContent from '@mui/material/CardContent';
 import Divider from '@mui/material/Divider';
@@ -25,6 +24,7 @@ import ChevronRightOutlinedIcon from '@mui/icons-material/ChevronRightOutlined';
 import MoreHorizOutlinedIcon from '@mui/icons-material/MoreHorizOutlined';
 import KeyboardArrowUpOutlinedIcon from '@mui/icons-material/KeyboardArrowUpOutlined';
 import KeyboardArrowDownOutlinedIcon from '@mui/icons-material/KeyboardArrowDownOutlined';
+import Button from '@mui/material/Button';
 
 export default function PopularCard({ isLoading }) {
   const [anchorEl, setAnchorEl] = React.useState(null);

@@ -5,7 +5,6 @@ import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
 import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Checkbox from '@mui/material/Checkbox';
@@ -57,7 +56,7 @@ import useAuth from 'hooks/useAuth';
 import { fetchAnalyticsUrl } from 'api/analytics';
 import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
 import { fetchBrand, saveBrand } from 'api/brand';
-import { deleteDocument, fetchDocuments, markDocumentViewed, uploadDocuments } from 'api/documents';
+import { deleteDocument, fetchDocuments, fetchSharedDocuments, markDocumentViewed, uploadDocuments } from 'api/documents';
 import { fetchTasksAndRequests, submitRequest } from 'api/requests';
 import { fetchCalls, syncCalls, scoreCall, clearCallScore, clearAndReloadCalls } from 'api/calls';
 import { fetchServices, agreeToService, fetchActiveClients, restoreActiveClient } from 'api/services';
@@ -76,6 +75,7 @@ import {
   restoreJourney
 } from 'api/journeys';
 import { CLIENT_CONCERN_PRESETS } from 'constants/clientPresets';
+import Button from '@mui/material/Button';
 
 const SECTION_CONFIG = [
   { value: 'profile', label: 'Profile' },
@@ -168,6 +168,7 @@ export default function ClientPortal() {
   const [brandSaving, setBrandSaving] = useState(false);
 
   const [documents, setDocuments] = useState(null);
+  const [sharedDocuments, setSharedDocuments] = useState(null);
   const [docUploads, setDocUploads] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
 
@@ -304,13 +305,18 @@ export default function ClientPortal() {
       .catch((err) => triggerMessage('error', err.message || 'Unable to load brand profile'));
   }, []);
 
-  const loadDocuments = useCallback(() => {
+  const loadDocuments = useCallback(async () => {
     setDocsLoading(true);
-    fetchDocuments()
-      .then((docs) => setDocuments(docs))
-      .catch((err) => triggerMessage('error', err.message || 'Unable to load documents'))
-      .finally(() => setDocsLoading(false));
-  }, []);
+    try {
+      const [docs, shared] = await Promise.all([fetchDocuments(), fetchSharedDocuments()]);
+      setDocuments(docs);
+      setSharedDocuments(shared);
+    } catch (err) {
+      triggerMessage('error', err.message || 'Unable to load documents');
+    } finally {
+      setDocsLoading(false);
+    }
+  }, [triggerMessage]);
 
   const loadRequests = useCallback(() => {
     setTasksLoading(true);
@@ -1420,8 +1426,36 @@ export default function ClientPortal() {
         )}
 
         {activeTab === 'documents' && (
-          <Stack spacing={2}>
-            <Typography variant="subtitle1">Your Documents</Typography>
+          <Stack spacing={3}>
+            {/* Helpful Documents (shared by admin with all clients) */}
+            {sharedDocuments && sharedDocuments.length > 0 && (
+              <>
+                <Typography variant="h5" sx={{ fontWeight: 600 }}>Helpful Documents</Typography>
+                <Stack spacing={1}>
+                  {sharedDocuments.map((doc) => (
+                    <Card key={doc.id} variant="outlined" sx={{ bgcolor: 'primary.lighter' }}>
+                      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+                          <Box sx={{ flex: 1 }}>
+                            <Typography variant="subtitle1" fontWeight={500}>{doc.label || doc.name}</Typography>
+                            {doc.description && (
+                              <Typography variant="body2" color="text.secondary">{doc.description}</Typography>
+                            )}
+                          </Box>
+                          <Button variant="contained" href={doc.url} target="_blank" rel="noreferrer" size="small">
+                            View
+                          </Button>
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </Stack>
+                <Divider />
+              </>
+            )}
+
+            {/* Your Documents section */}
+            <Typography variant="h5" sx={{ fontWeight: 600 }}>Your Documents</Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
               <Button variant="outlined" component="label" startIcon={<UploadFileIcon />}>
                 Select Files to Upload
@@ -1434,13 +1468,12 @@ export default function ClientPortal() {
                 Upload
               </Button>
             </Stack>
-            <Divider />
-            <Typography variant="subtitle1">Shared Documents</Typography>
+            
             {docsLoading && <LinearProgress />}
             <Stack spacing={1}>
               {documents?.map((doc) => (
                 <Card key={doc.id} variant="outlined">
-                  <CardContent>
+                  <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
                       <Box sx={{ flex: 1 }}>
                         <Typography variant="subtitle1">{doc.label || doc.name}</Typography>
@@ -1451,21 +1484,21 @@ export default function ClientPortal() {
                             size="small"
                           />
                           {doc.origin === 'admin' && (
-                            <Chip label="Shared" size="small" variant="outlined" color="info" sx={{ textTransform: 'capitalize' }} />
+                            <Chip label="From Admin" size="small" variant="outlined" color="info" />
                           )}
                         </Stack>
                       </Box>
                       <Stack direction="row" spacing={1}>
-                        <Button variant="outlined" href={doc.url} target="_blank" rel="noreferrer">
+                        <Button variant="outlined" href={doc.url} target="_blank" rel="noreferrer" size="small">
                           View
                         </Button>
                         {doc.origin === 'client' && (
-                          <IconButton color="error" onClick={() => handleDocDelete(doc.id)}>
+                          <IconButton color="error" onClick={() => handleDocDelete(doc.id)} size="small">
                             <DeleteOutlineIcon />
                           </IconButton>
                         )}
                         {doc.review_status !== 'viewed' && (
-                          <Button variant="text" onClick={() => handleMarkViewed(doc.id)}>
+                          <Button variant="text" onClick={() => handleMarkViewed(doc.id)} size="small">
                             Mark Viewed
                           </Button>
                         )}
@@ -1476,7 +1509,7 @@ export default function ClientPortal() {
               ))}
               {!documents?.length && !docsLoading && (
                 <Typography variant="body2" color="text.secondary">
-                  No documents yet.
+                  No documents uploaded yet.
                 </Typography>
               )}
             </Stack>
@@ -1648,7 +1681,7 @@ export default function ClientPortal() {
                             <Button 
                               variant="contained" 
                               size="small" 
-                              color="success"
+                              color="secondary"
                               onClick={() => handleOpenServiceDialog(call)}
                             >
                               Agreed to Service
@@ -2520,7 +2553,7 @@ export default function ClientPortal() {
         open={journeyDrawer.open}
         onClose={handleCloseJourneyDrawer}
         PaperProps={{
-          sx: { width: { xs: '100%', sm: 480, md: 560 }, p: 0 }
+          sx: { width: { xs: '100%', sm: '40vw' }, p: 0 }
         }}
       >
         {journeyDrawer.journey && (() => {
@@ -2693,9 +2726,9 @@ export default function ClientPortal() {
                                 onClick={() => handleToggleStepComplete(journey.id, step)}
                               >
                                 {isComplete ? (
-                                  <CheckCircleIcon sx={{ fontSize: 20 }} />
+                                  <CheckCircleIcon sx={{ fontSize: 20, color: 'inherit' }} />
                                 ) : (
-                                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'inherit' }}>
                                     {index + 1}
                                   </Typography>
                                 )}
@@ -2749,7 +2782,7 @@ export default function ClientPortal() {
                                       <Button
                                         size="small"
                                         variant={isComplete ? 'outlined' : 'contained'}
-                                        color={isComplete ? 'inherit' : 'success'}
+                                        color={isComplete ? 'inherit' : 'secondary'}
                                         onClick={() => handleToggleStepComplete(journey.id, step)}
                                       >
                                         {isComplete ? 'Mark Incomplete' : 'Mark Complete'}
@@ -2793,7 +2826,7 @@ export default function ClientPortal() {
                   {currentStep && (
                     <Button
                       variant="contained"
-                      color="success"
+                      color="secondary"
                       startIcon={<CheckCircleIcon />}
                       onClick={() => handleMarkCurrentStepComplete(journey)}
                       sx={{ flex: 1 }}
@@ -2805,7 +2838,6 @@ export default function ClientPortal() {
                     variant="outlined"
                     startIcon={<AddIcon />}
                     onClick={() => handleOpenStepDialog(journey)}
-                    sx={{ flex: currentStep ? 0 : 1 }}
                   >
                     Add Step
                   </Button>

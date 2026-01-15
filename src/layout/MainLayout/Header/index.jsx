@@ -3,11 +3,8 @@ import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-
 // project imports
 import LogoSection from '../LogoSection';
-import SearchSection from './SearchSection';
 import ProfileSection from './ProfileSection';
 import NotificationSection from './NotificationSection';
 
@@ -17,6 +14,7 @@ import { handlerDrawerOpen, useGetMenuMaster } from 'api/menu';
 import { IconMenu2 } from '@tabler/icons-react';
 import useAuth from 'hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
+import Button from '@mui/material/Button';
 
 // ==============================|| MAIN NAVBAR / HEADER ||============================== //
 
@@ -62,7 +60,7 @@ export default function Header() {
       </Box>
 
       {/* header search */}
-      <SearchSection />
+      {/* Disabled for now (currently no-op). Re-enable when wired to real search behavior. */}
       <Box sx={{ flexGrow: 1 }} />
       <Box sx={{ flexGrow: 1 }} />
 

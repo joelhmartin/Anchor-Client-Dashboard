@@ -1,5 +1,4 @@
 // material-ui
-import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Link from '@mui/material/Link';
@@ -8,6 +7,7 @@ import Typography from '@mui/material/Typography';
 
 // project imports
 import AnimateButton from 'ui-component/extended/AnimateButton';
+import Button from '@mui/material/Button';
 
 // ==============================|| PROFILE MENU - UPGRADE PLAN CARD ||============================== //
 

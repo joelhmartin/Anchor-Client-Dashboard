@@ -32,13 +32,6 @@ const portalGroup = {
       icon: IconChartInfographic
     },
     {
-      id: 'portal-tasks',
-      title: 'Tasks',
-      type: 'item',
-      url: '/portal?tab=tasks',
-      icon: IconStack2
-    },
-    {
       id: 'portal-brand',
       title: 'Brand Assets',
       type: 'item',

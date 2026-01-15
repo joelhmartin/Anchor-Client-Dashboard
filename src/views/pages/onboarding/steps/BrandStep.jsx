@@ -1,4 +1,8 @@
-import { Stack, TextField, Typography } from '@mui/material';
+import {
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import FileUploadList from 'ui-component/extended/Form/FileUploadList';
 
 export default function BrandStep({

@@ -3,7 +3,6 @@ import { Navigate, useNavigate } from 'react-router-dom';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
@@ -15,6 +14,7 @@ import useAuth from 'hooks/useAuth';
 import { fetchClients } from 'api/clients';
 import { useToast } from 'contexts/ToastContext';
 import { getErrorMessage } from 'utils/errors';
+import Button from '@mui/material/Button';
 
 export default function ClientView() {
   const { user, initializing, setActingClient, clearActingClient, actingClientId } = useAuth();

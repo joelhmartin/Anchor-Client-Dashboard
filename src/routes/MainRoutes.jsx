@@ -14,6 +14,7 @@ const ClientView = Loadable(lazy(() => import('views/admin/ClientView')));
 const ProfileSettings = Loadable(lazy(() => import('views/admin/ProfileSettings')));
 const ServicesManagement = Loadable(lazy(() => import('views/admin/ServicesManagement')));
 const ActiveClients = Loadable(lazy(() => import('views/admin/ActiveClients')));
+const SharedDocuments = Loadable(lazy(() => import('views/admin/SharedDocuments')));
 const ClientPortal = Loadable(lazy(() => import('views/client/ClientPortal')));
 const BlogEditor = Loadable(lazy(() => import('views/client/BlogEditor')));
 const TaskManager = Loadable(lazy(() => import('views/tasks/TaskManager')));
@@ -115,6 +116,14 @@ const MainRoutes = {
       element: (
         <AdminRoute>
           <ProfileSettings />
+        </AdminRoute>
+      )
+    },
+    {
+      path: 'shared-documents',
+      element: (
+        <AdminRoute>
+          <SharedDocuments />
         </AdminRoute>
       )
     },

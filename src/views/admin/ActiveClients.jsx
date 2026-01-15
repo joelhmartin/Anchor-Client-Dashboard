@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import LinearProgress from '@mui/material/LinearProgress';
 import Stack from '@mui/material/Stack';
@@ -20,6 +19,7 @@ import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 import MainCard from 'ui-component/cards/MainCard';
 import { archiveActiveClient, fetchActiveClients, redactOldServices } from 'api/services';
 import { fetchProfile } from 'api/profile';
+import Button from '@mui/material/Button';
 
 function ActiveClientRow({ client, onArchive }) {
   const [open, setOpen] = useState(false);

@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import Button from '@mui/material/Button';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
@@ -26,6 +25,7 @@ import { IconForms, IconPlus, IconTrash, IconFileText, IconHeartHandshake } from
 
 import { fetchForms, createForm, deleteForm } from 'api/forms';
 import { useToast } from 'contexts/ToastContext';
+import Button from '@mui/material/Button';
 
 export default function FormsSidebarPanel() {
   const [searchParams, setSearchParams] = useSearchParams();

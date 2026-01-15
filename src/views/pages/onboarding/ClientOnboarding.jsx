@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-
-import { Alert, Box, Button, CircularProgress, Container, Paper, Stack, Step, StepLabel, Stepper, Typography } from '@mui/material';
+import {
+Alert, Box, CircularProgress, Container, Paper, Stack, Step, StepLabel, Stepper, Typography,
+  Button,
+} from '@mui/material';
 
 import {
   fetchOnboarding,

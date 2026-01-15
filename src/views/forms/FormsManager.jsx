@@ -14,7 +14,6 @@ import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Divider from '@mui/material/Divider';
-import Button from '@mui/material/Button';
 import Grid from '@mui/material/Grid';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -2099,7 +2098,7 @@ function BuilderPane({ formId, forms }) {
                   <Button variant="outlined" onClick={discardAiChanges}>
                     Discard
                   </Button>
-                  <Button variant="contained" color="success" onClick={applyAiChanges}>
+                  <Button variant="contained" color="secondary" onClick={applyAiChanges}>
                     Apply Changes
                   </Button>
                 </Stack>

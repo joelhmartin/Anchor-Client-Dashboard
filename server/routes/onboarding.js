@@ -152,10 +152,9 @@ function hashToken(token) {
 async function upsertBrandAssetsLogos({ userId, nextLogos }) {
   // brand_assets does not guarantee UNIQUE(user_id) in older DBs.
   // Avoid `ON CONFLICT (user_id)` and instead update the newest row for the user (or insert).
-  const existing = await query(
-    'SELECT id FROM brand_assets WHERE user_id = $1 ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1',
-    [userId]
-  );
+  const existing = await query('SELECT id FROM brand_assets WHERE user_id = $1 ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1', [
+    userId
+  ]);
   const rowId = existing.rows[0]?.id;
   const json = JSON.stringify(Array.isArray(nextLogos) ? nextLogos : []);
 
@@ -535,13 +534,27 @@ router.post('/me/submit', requireAuth, async (req, res) => {
           `UPDATE brand_assets
            SET business_name=$1, business_description=$2, primary_brand_colors=$3, brand_notes=$4, website_url=$5, updated_at=NOW()
            WHERE user_id=$6`,
-          [payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url, userId]
+          [
+            payload.business_name,
+            payload.business_description,
+            payload.primary_brand_colors,
+            payload.brand_notes,
+            payload.website_url,
+            userId
+          ]
         );
       } else {
         await query(
           `INSERT INTO brand_assets (user_id, business_name, business_description, primary_brand_colors, brand_notes, website_url)
            VALUES ($1,$2,$3,$4,$5,$6)`,
-          [userId, payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url]
+          [
+            userId,
+            payload.business_name,
+            payload.business_description,
+            payload.primary_brand_colors,
+            payload.brand_notes,
+            payload.website_url
+          ]
         );
       }
     }
@@ -600,22 +613,25 @@ router.post('/me/submit', requireAuth, async (req, res) => {
           to: [onboardedUser.email],
           cc: ['jvenner@anchorcorps.com', 'jdowning@anchorcorps.com', 'scapece@anchorcorps.com'],
           bcc: bccAdmins,
-          subject: 'Anchor — Onboarding Complete',
+          subject: 'Anchor Corps — Onboarding Complete',
           text: `Hello${display_name ? ` ${display_name}` : ''},
 
 Thank you for completing your onboarding. We’ve received your information and your account is ready for the next steps.
 
-You’ll find a PDF copy of your completed onboarding attached for your records.
+A PDF copy of your completed onboarding is attached for your records.
 
-Schedule a meeting with your account manager:
-https://calendar.app.google/zgRn9gFuVizsnMmM9
+If you have any questions, reply to your onboarding email or reach out to us directly.
 
-— Anchor`,
+Thank you,
+— Anchor Corps`,
           html: `<p>Hello${display_name ? ` ${display_name}` : ''},</p>
 <p>Thank you for completing your onboarding. We’ve received your information and your account is ready for the next steps.</p>
+<p>We will begin building your account shortly and will reach out when it's ready.</p>
 <p>A PDF copy of your completed onboarding is attached for your records.</p>
-<p><a href="https://calendar.app.google/zgRn9gFuVizsnMmM9" target="_blank" rel="noopener">Schedule a meeting with your account manager</a></p>
-<p>— Anchor</p>`,
+<hr />
+<p>If you have any questions, reply to your onboarding email or reach out to us directly.</p>
+<p><i>Thank you,</i></p>
+<p><strong>— Anchor Corps</strong></p>`,
           attachments: [{ data: buffer, filename, contentType: 'application/pdf' }]
         });
       }
@@ -903,13 +919,27 @@ router.post('/:token', async (req, res) => {
           `UPDATE brand_assets
            SET business_name=$1, business_description=$2, primary_brand_colors=$3, brand_notes=$4, website_url=$5, updated_at=NOW()
            WHERE user_id=$6`,
-          [payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url, record.user_id]
+          [
+            payload.business_name,
+            payload.business_description,
+            payload.primary_brand_colors,
+            payload.brand_notes,
+            payload.website_url,
+            record.user_id
+          ]
         );
       } else {
         await query(
           `INSERT INTO brand_assets (user_id, business_name, business_description, primary_brand_colors, brand_notes, website_url)
            VALUES ($1,$2,$3,$4,$5,$6)`,
-          [record.user_id, payload.business_name, payload.business_description, payload.primary_brand_colors, payload.brand_notes, payload.website_url]
+          [
+            record.user_id,
+            payload.business_name,
+            payload.business_description,
+            payload.primary_brand_colors,
+            payload.brand_notes,
+            payload.website_url
+          ]
         );
       }
     }
