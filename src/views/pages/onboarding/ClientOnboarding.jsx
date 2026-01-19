@@ -539,18 +539,19 @@ export default function ClientOnboardingPage() {
     if (!validateStep()) return;
     const key = stepConfig[activeStep]?.key;
 
-    // Step 1 completion: activate account immediately and disable onboarding links.
+    // Step 1 completion: activate account immediately (no redirect, stay on same page).
     if (key === 'profile' && token) {
       try {
         setSubmitting(true);
-        // Save draft first so we can land back on step 2 after login.
+        // Save draft first so we can land back on step 2 if they return later.
         await saveOnboardingDraft(token, { ...buildDraft(), activeStep: Math.min(activeStep + 1, stepConfig.length - 1) });
         await activateOnboardingFromToken(token, { display_name: form.display_name.trim(), password: form.password });
         await authLogin({ email: data.user.email, password: form.password });
-        navigate('/onboarding', { replace: true });
-        return;
+        // No redirect - continue to next step on same page
       } catch (err) {
         toast.error(getErrorMessage(err, 'Unable to activate your account'));
+        setSubmitting(false);
+        return;
       } finally {
         setSubmitting(false);
       }

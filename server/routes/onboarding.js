@@ -452,7 +452,7 @@ router.post('/me/submit', requireAuth, async (req, res) => {
            website_forms_custom,
            website_forms_notes
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
          ON CONFLICT (user_id) DO UPDATE SET
            monthly_revenue_goal = EXCLUDED.monthly_revenue_goal,
            client_identifier_value = EXCLUDED.client_identifier_value,
