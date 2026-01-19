@@ -563,6 +563,7 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_api_key TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_api_secret TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ai_prompt TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS auto_star_enabled BOOLEAN DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS monthly_revenue_goal DECIMAL(10, 2);
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS call_tracking_main_number TEXT;

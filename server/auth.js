@@ -23,6 +23,7 @@ const userSchema = z.object({
   role: z.string().default('client'),
   avatar_url: z.string().optional().nullable(),
   onboarding_completed_at: z.preprocess(dateToString, z.string().optional().nullable()),
+  activated_at: z.preprocess(dateToString, z.string().optional().nullable()),
   created_at: z.preprocess(dateToString, z.string())
 });
 
@@ -196,7 +197,7 @@ If you did not request this, you can safely ignore this email.`,
 
 async function findUserByEmail(email) {
   const { rows } = await query(
-    `SELECT u.*, cp.onboarding_completed_at
+    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
      WHERE u.email = $1
@@ -208,7 +209,7 @@ async function findUserByEmail(email) {
 
 async function findUserById(id) {
   const { rows } = await query(
-    `SELECT u.*, cp.onboarding_completed_at
+    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
      WHERE u.id = $1
@@ -270,6 +271,14 @@ router.post('/login', async (req, res) => {
     const passwordHash = passwordRow.rows[0]?.password_hash;
     const isValid = passwordHash && (await bcrypt.compare(payload.password, passwordHash));
     if (!isValid) return res.status(401).json({ message: 'Invalid email or password' });
+
+    // Check if client account is activated (only applies to clients who completed onboarding)
+    if (user.role === 'client' && user.onboarding_completed_at && !user.activated_at) {
+      return res.status(403).json({
+        message: 'Your account is currently being set up by our team. We will notify you when it is ready to access. Thank you for your patience!',
+        code: 'ACCOUNT_PENDING_ACTIVATION'
+      });
+    }
 
     const token = signToken(user.id);
     setAuthCookie(res, token);

@@ -1760,6 +1760,68 @@ router.delete('/clients/:id', isAdminOrEditor, async (req, res) => {
   }
 });
 
+// Activate a client account (allows them to log in after onboarding completion)
+router.post('/clients/:id/activate', isAdminOrEditor, async (req, res) => {
+  const clientId = req.params.id;
+  try {
+    const { rows: userRows } = await query('SELECT id, email, first_name, role FROM users WHERE id = $1 LIMIT 1', [clientId]);
+    if (!userRows.length) return res.status(404).json({ message: 'Client not found' });
+
+    const user = userRows[0];
+    if (user.role !== 'client') {
+      return res.status(400).json({ message: 'Only client accounts can be activated' });
+    }
+
+    // Check if already activated
+    const { rows: profileRows } = await query('SELECT activated_at, onboarding_completed_at FROM client_profiles WHERE user_id = $1', [clientId]);
+    if (profileRows[0]?.activated_at) {
+      return res.status(400).json({ message: 'Account is already activated' });
+    }
+
+    // Set activated_at timestamp
+    await query(
+      `INSERT INTO client_profiles (user_id, activated_at)
+       VALUES ($1, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET activated_at = NOW(), updated_at = NOW()`,
+      [clientId]
+    );
+
+    logEvent('clients:activate', 'Client account activated', { clientId, activatedBy: req.user.id });
+
+    // Optionally send activation email to client
+    if (isMailgunConfigured() && user.email) {
+      const appBaseUrl = resolveAppBaseUrl(req);
+      const loginUrl = `${appBaseUrl}/pages/login`;
+      try {
+        await sendMailgunMessage({
+          to: [user.email],
+          subject: 'Your Anchor Dashboard is Ready!',
+          text: `Hello${user.first_name ? ` ${user.first_name}` : ''},\n\nGreat news! Your Anchor dashboard is now ready. You can log in and start exploring.\n\nLog in here: ${loginUrl}\n\nIf you have any questions, please reach out to your account manager.\n\n— Anchor`,
+          html: `<p>Hello${user.first_name ? ` ${user.first_name}` : ''},</p>
+<p>Great news! Your Anchor dashboard is now ready. You can log in and start exploring.</p>
+<p><a href="${loginUrl}" style="display:inline-block;padding:12px 24px;background:#667eea;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">Log In to Your Dashboard</a></p>
+<p>If you have any questions, please reach out to your account manager.</p>
+<p>— Anchor</p>`
+        });
+      } catch (emailErr) {
+        console.error('[clients:activate:email]', emailErr);
+        // Don't fail the activation if email fails
+      }
+    }
+
+    // Return updated client data
+    const { rows } = await query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.role, cp.*
+       FROM users u LEFT JOIN client_profiles cp ON cp.user_id = u.id WHERE u.id=$1`,
+      [clientId]
+    );
+    res.json({ client: rows[0], message: 'Account activated successfully' });
+  } catch (err) {
+    console.error('[clients:activate]', err);
+    res.status(500).json({ message: 'Unable to activate account' });
+  }
+});
+
 router.post('/clients/:id/service-presets', isAdminOrEditor, async (req, res) => {
   const targetClientId = req.params.id;
   const { services } = req.body || {};

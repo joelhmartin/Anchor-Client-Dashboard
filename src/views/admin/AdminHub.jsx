@@ -45,7 +45,7 @@ import Stepper from '@mui/material/Stepper';
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import useTableSearch from 'hooks/useTableSearch';
-import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail } from 'api/clients';
+import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail, activateClient } from 'api/clients';
 import { requestPasswordReset } from 'api/auth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
@@ -139,6 +139,7 @@ export default function AdminHub() {
   const [sendOnboardingEmailFlag, setSendOnboardingEmailFlag] = useState(true);
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
   const [sendingOnboardingForId, setSendingOnboardingForId] = useState('');
+  const [activatingClientId, setActivatingClientId] = useState('');
   const [taskWorkspaces, setTaskWorkspaces] = useState([]);
   const [taskWorkspacesLoading, setTaskWorkspacesLoading] = useState(false);
 
@@ -403,7 +404,7 @@ export default function AdminHub() {
       });
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
-        await startOnboardingFlow(res.client.id);
+      await startOnboardingFlow(res.client.id);
       } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
@@ -769,6 +770,27 @@ export default function AdminHub() {
     }
   };
 
+  const handleActivateClient = async (clientId) => {
+    if (!clientId) return;
+    setActivatingClientId(clientId);
+    setError('');
+    setSuccess('');
+    try {
+      const result = await activateClient(clientId);
+      setSuccess(result.message || 'Account activated successfully');
+      // Update the client in the list with the new activated_at
+      setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, activated_at: new Date().toISOString() } : c)));
+      // Also update editing if this client is being edited
+      if (editing?.id === clientId) {
+        setEditing((prev) => ({ ...prev, activated_at: new Date().toISOString() }));
+      }
+    } catch (err) {
+      setError(err.message || 'Unable to activate account');
+    } finally {
+      setActivatingClientId('');
+    }
+  };
+ 
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
@@ -791,7 +813,7 @@ export default function AdminHub() {
           >
             <MenuItem value="">
               <em>Not set</em>
-            </MenuItem>
+              </MenuItem>
             {CLIENT_PACKAGE_OPTIONS.map((pkg) => (
               <MenuItem key={pkg} value={pkg}>
                 {pkg}
@@ -1307,9 +1329,9 @@ export default function AdminHub() {
               alignItems={{ xs: 'stretch', sm: 'center' }}
               justifyContent="space-between"
             >
-              <Typography variant="h5">Clients</Typography>
+            <Typography variant="h5">Clients</Typography>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
-                {loading && <CircularProgress size={20} />}
+            {loading && <CircularProgress size={20} />}
                 <TextField
                   size="small"
                   placeholder="Search clients…"
@@ -1378,7 +1400,7 @@ export default function AdminHub() {
               </TableHead>
               <TableBody>
                 {filteredClients.map((c) => (
-                  <TableRow key={c.id} hover>
+                    <TableRow key={c.id} hover>
                     <TableCell padding="checkbox">
                       <Checkbox
                         size="small"
@@ -1387,30 +1409,40 @@ export default function AdminHub() {
                         disabled={!isAdmin}
                       />
                     </TableCell>
-                    <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                    <TableCell>{c.email}</TableCell>
+                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                      <TableCell>{c.email}</TableCell>
                     <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                    <TableCell>
+                      <TableCell>
                       {c.role === 'client' ? (
                         c.onboarding_completed_at ? (
-                          <Typography
-                            variant="caption"
-                            sx={{ fontWeight: 600, color: 'success.main' }}
-                            title={`Completed: ${new Date(c.onboarding_completed_at).toLocaleString()}`}
-                          >
-                            Complete
-                          </Typography>
+                          c.activated_at ? (
+                            <Typography
+                              variant="caption"
+                              sx={{ fontWeight: 600, color: 'success.main' }}
+                              title={`Activated: ${new Date(c.activated_at).toLocaleString()}`}
+                            >
+                              Active
+                            </Typography>
+                          ) : (
+                            <Typography
+                              variant="caption"
+                              sx={{ fontWeight: 600, color: 'info.main' }}
+                              title={`Onboarding completed: ${new Date(c.onboarding_completed_at).toLocaleString()}`}
+                            >
+                              Pending Activation
+                            </Typography>
+                          )
                         ) : (
                           <Typography variant="caption" sx={{ fontWeight: 600, color: 'warning.main' }}>
-                            Pending
+                            Onboarding
                           </Typography>
                         )
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
                           —
-                        </Typography>
-                      )}
-                    </TableCell>
+                          </Typography>
+                        )}
+                      </TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
                         <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
@@ -1426,6 +1458,17 @@ export default function AdminHub() {
                             {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
                           </Button>
                         )}
+                        {c.role === 'client' && c.onboarding_completed_at && !c.activated_at && (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="secondary"
+                            onClick={() => handleActivateClient(c.id)}
+                            disabled={activatingClientId === c.id}
+                          >
+                            {activatingClientId === c.id ? 'Activating…' : 'Activate'}
+                          </Button>
+                        )}
                         {isAdmin && (
                           <Button
                             size="small"
@@ -1438,18 +1481,18 @@ export default function AdminHub() {
                           </Button>
                         )}
                         {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            disableElevation
-                            onClick={() => {
+                        <Button
+                          size="small"
+                          variant="contained"
+                          disableElevation
+                          onClick={() => {
                               if (c.role === 'client' && !c.onboarding_completed_at) return;
-                              setActingClient(c.id);
-                              navigate('/portal');
-                            }}
-                          >
-                            Jump to View
-                          </Button>
+                            setActingClient(c.id);
+                            navigate('/portal');
+                          }}
+                        >
+                          Jump to View
+                        </Button>
                         )}
                       </Stack>
                     </TableCell>
@@ -1503,6 +1546,16 @@ export default function AdminHub() {
                   disabled={sendingOnboardingForId === editing.id}
                 >
                   {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
+                </Button>
+              )}
+              {editing?.role === 'client' && editing?.onboarding_completed_at && !editing?.activated_at && (
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={() => handleActivateClient(editing.id)}
+                  disabled={activatingClientId === editing.id}
+                >
+                  {activatingClientId === editing.id ? 'Activating…' : 'Activate Account'}
                 </Button>
               )}
               <Button onClick={() => setEditing(null)} color="secondary">
@@ -1633,8 +1686,8 @@ export default function AdminHub() {
                     <Grid container spacing={1}>
                       {ACCESS_STEP_OPTIONS.map((option) => (
                         <Grid item xs={12} sm={6} key={option.key}>
-                          <FormControlLabel
-                            control={
+                    <FormControlLabel
+                      control={
                               <Checkbox
                                 checked={editing?.[option.key] !== false}
                                 onChange={toggleAccessRequirement(option.key)}

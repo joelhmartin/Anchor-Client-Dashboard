@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-Alert, Box, CircularProgress, Container, Paper, Stack, Step, StepLabel, Stepper, Typography,
-  Button,
-} from '@mui/material';
+import { Alert, Box, CircularProgress, Container, Paper, Stack, Step, StepLabel, Stepper, Typography, Button } from '@mui/material';
 
 import {
   fetchOnboarding,
@@ -612,14 +609,9 @@ export default function ClientOnboardingPage() {
           if (data?.user?.id) window.localStorage.removeItem(`anchor:onboarding:draft:user:${data.user.id}`);
         }
       } catch {}
-      // Immediately refresh the current user so sidebar + route gating switches to the full app.
-      try {
-        await refreshUser();
-      } catch {}
-      // Redirect to portal with a flag to show completion modal over the dashboard.
-      setCompleteOpen(false);
+      // Show completion modal - user stays on this page, no redirect
       setOnboardingComplete(true);
-      navigate('/portal', { replace: true, state: { onboardingComplete: true } });
+      setCompleteOpen(true);
     } catch (err) {
       const msg = getErrorMessage(err, 'Unable to save onboarding information');
       setError(msg);
@@ -629,12 +621,8 @@ export default function ClientOnboardingPage() {
     }
   };
 
-  // Once onboarding is marked complete (should already redirect), guard against any lingering state.
-  useEffect(() => {
-    if (onboardingComplete) {
-      navigate('/portal', { replace: true, state: { onboardingComplete: true } });
-    }
-  }, [onboardingComplete, navigate]);
+  // Once onboarding is complete, we stay on this page showing the completion modal.
+  // The user cannot log back in until their account is activated by an admin.
 
   const renderProfileStep = () => (
     <ProfileStep
@@ -798,34 +786,21 @@ export default function ClientOnboardingPage() {
             >
               <Stack spacing={2.25}>
                 <Typography variant="h4" sx={{ fontWeight: 800, letterSpacing: -0.6 }}>
-                  Thank you for completing your onboarding
+                  Thank You!
                 </Typography>
                 <Typography variant="body1" color="text.secondary">
-                  We appreciate you taking the time to share these details. Your onboarding form has been received, and your account is
-                  ready for the next steps.
+                  We appreciate you taking the time to share these details. Your onboarding form has been received and your account has been
+                  created.
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Next step: schedule a quick kick-off with your Account Manager.
+                <Typography variant="body1" color="text.secondary">
+                  Our team will now build out your dashboard over the next few days. We&apos;ll send you an email when everything is ready
+                  for you to log in and explore.
                 </Typography>
-
-                <Button
-                  component="a"
-                  href={CALENDAR_LINK}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  variant="contained"
-                  size="large"
-                  fullWidth
-                >
-                  Schedule a meeting with your Account Manager
-                </Button>
-
-                <Button variant="text" onClick={() => setCompleteOpen(false)} sx={{ alignSelf: 'center' }}>
-                  Close
-                </Button>
-
+                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                  You may now close this browser window.
+                </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  If you have any questions, reply to your onboarding email or reach out to your account manager directly.
+                  If you have any questions in the meantime, reply to your onboarding email or reach out to your account manager directly.
                 </Typography>
               </Stack>
             </Paper>
