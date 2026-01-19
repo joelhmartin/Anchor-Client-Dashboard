@@ -98,7 +98,7 @@ export default function ClientOnboardingPage() {
   const { token } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { login: authLogin, refreshUser } = useAuth();
+  const { user: authUser, login: authLogin, refreshUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -406,20 +406,24 @@ export default function ClientOnboardingPage() {
     setSuccessMessage('');
   }, []);
 
+  // After step 1, the user is logged in and the token is revoked.
+  // Use authenticated endpoints if user is logged in, regardless of token in URL.
+  const useTokenEndpoint = token && !authUser;
+
   const uploadAvatar = useCallback(
-    (tokenValue, file) => (tokenValue ? uploadOnboardingAvatar(tokenValue, file) : uploadOnboardingAvatarMe(file)),
-    []
+    (tokenValue, file) => (useTokenEndpoint ? uploadOnboardingAvatar(tokenValue, file) : uploadOnboardingAvatarMe(file)),
+    [useTokenEndpoint]
   );
 
   const uploadBrandAssets = useCallback(
     (tokenValue, files, options) =>
-      tokenValue ? uploadOnboardingBrandAssets(tokenValue, files, options) : uploadOnboardingBrandAssetsMe(files, options),
-    []
+      useTokenEndpoint ? uploadOnboardingBrandAssets(tokenValue, files, options) : uploadOnboardingBrandAssetsMe(files, options),
+    [useTokenEndpoint]
   );
 
   const deleteBrandAsset = useCallback(
-    (tokenValue, assetId) => (tokenValue ? deleteOnboardingBrandAsset(tokenValue, assetId) : deleteOnboardingBrandAssetMe(assetId)),
-    []
+    (tokenValue, assetId) => (useTokenEndpoint ? deleteOnboardingBrandAsset(tokenValue, assetId) : deleteOnboardingBrandAssetMe(assetId)),
+    [useTokenEndpoint]
   );
 
   const validateStep = (stepIndex = activeStep) => {
@@ -430,7 +434,8 @@ export default function ClientOnboardingPage() {
         return false;
       }
       const hasPassword = Boolean(data?.user?.has_password);
-      const mustSetPasswordNow = Boolean(token) || !hasPassword;
+      // Only require password if using token endpoint (not yet logged in) or user has no password
+      const mustSetPasswordNow = useTokenEndpoint || !hasPassword;
       if (mustSetPasswordNow) {
         if (!form.password || form.password.length < 8) {
           toast.error('Please choose a password with at least 8 characters');
@@ -491,10 +496,7 @@ export default function ClientOnboardingPage() {
         toast.error('Please confirm forms/integrations details (provided or understood).');
         return false;
       }
-      if (access.website_forms_details_status === 'provided' && !String(access.website_forms_notes || '').trim()) {
-        toast.error('Please add a short note about your website forms/integrations.');
-        return false;
-      }
+      // Notes field is optional - no validation required
     }
     setError('');
     return true;
@@ -524,7 +526,8 @@ export default function ClientOnboardingPage() {
       } else {
         writeLocalDraft(LOCAL_DRAFT_ME_KEY, draft);
       }
-      if (token) {
+      // Use token endpoint only if not yet logged in
+      if (useTokenEndpoint) {
         await saveOnboardingDraft(token, draft);
       } else {
         await saveOnboardingDraftMe(draft);
@@ -540,7 +543,8 @@ export default function ClientOnboardingPage() {
     const key = stepConfig[activeStep]?.key;
 
     // Step 1 completion: activate account immediately (no redirect, stay on same page).
-    if (key === 'profile' && token) {
+    // Only do this if we're using the token endpoint (user not yet logged in).
+    if (key === 'profile' && useTokenEndpoint) {
       try {
         setSubmitting(true);
         // Save draft first so we can land back on step 2 if they return later.
@@ -580,9 +584,9 @@ export default function ClientOnboardingPage() {
           name: service.name.trim(),
           active: service.active !== false
         }));
-      if (token) {
-        // Token flow must activate+login first (step 1). If user somehow reaches submit with a token,
-        // force them back to step 1 to set/reset their password.
+      if (useTokenEndpoint) {
+        // Token flow must activate+login first (step 1). If user somehow reaches submit with a token
+        // and hasn't logged in yet, force them back to step 1 to set/reset their password.
         toast.error('Please set your password in step 1 before finishing onboarding.');
         setActiveStep(0);
         return;
