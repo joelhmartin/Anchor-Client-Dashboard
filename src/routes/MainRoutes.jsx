@@ -8,6 +8,7 @@ import RequireAuth from './RequireAuth';
 import SuspendedRoute from 'ui-component/SuspendedRoute';
 import useAuth from 'hooks/useAuth';
 import Loader from 'ui-component/Loader';
+import ErrorBoundary from './ErrorBoundary';
 
 const AdminHub = Loadable(lazy(() => import('views/admin/AdminHub')));
 const ClientView = Loadable(lazy(() => import('views/admin/ClientView')));
@@ -90,6 +91,7 @@ const MainRoutes = {
       <MainLayout />
     </RequireAuth>
   ),
+  errorElement: <ErrorBoundary />,
   children: [
     {
       path: '/',
@@ -129,7 +131,11 @@ const MainRoutes = {
     },
     {
       path: 'services',
-      element: <ServicesManagement />
+      element: (
+        <AdminRoute>
+          <ServicesManagement />
+        </AdminRoute>
+      )
     },
     {
       path: 'active-clients',

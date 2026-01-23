@@ -146,7 +146,33 @@ app.use('/uploads', express.static(UPLOAD_DIR));
 app.use('/email-assets', express.static(EMAIL_ASSETS_DIR));
 
 if (NODE_ENV === 'production') {
-  app.use(express.static(CLIENT_BUILD_DIR));
+  // IMPORTANT:
+  // - `index.html` must NOT be cached; otherwise users can get a stale HTML shell that points at
+  //   JS chunk files that no longer exist after a deploy, causing:
+  //   "Failed to fetch dynamically imported module /assets/XYZ-<hash>.js"
+  // - Hashed assets under /assets/* SHOULD be cached for a long time (immutable).
+  app.use(
+    express.static(CLIENT_BUILD_DIR, {
+      setHeaders: (res, filePath) => {
+        const normalized = String(filePath || '').replace(/\\/g, '/');
+
+        // Never cache HTML shells
+        if (normalized.endsWith('/index.html') || normalized.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-store');
+          return;
+        }
+
+        // Cache-bustable hashed assets
+        if (normalized.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          return;
+        }
+
+        // Default for other files (manifest, icons, etc.)
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      }
+    })
+  );
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
@@ -155,12 +181,14 @@ if (NODE_ENV === 'production') {
   // Forms Manager page needs relaxed CSP for Monaco Editor
   app.get('/forms*', (req, res) => {
     res.setHeader('Content-Security-Policy', buildCspHeader(monacoCspDirectives));
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
   });
 
   // All other client routes use the secure default CSP (set by helmet)
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
   });
 }
