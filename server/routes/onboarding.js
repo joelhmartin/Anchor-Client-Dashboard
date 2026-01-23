@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createNotificationsForAdmins, notifyAdminsByEmail } from '../services/notifications.js';
-import { isMailgunConfigured, sendMailgunMessage } from '../services/mailgun.js';
+import { isMailgunConfigured, sendMailgunMessageWithLogging } from '../services/mailgun.js';
 import { generateClientOnboardingPdf } from '../services/onboardingPdf.js';
 
 const router = express.Router();
@@ -609,14 +609,15 @@ router.post('/me/submit', requireAuth, async (req, res) => {
         const payload = await getOnboardingPayloadForUser(userId);
         const { buffer, filename } = await generateClientOnboardingPdf({ payload });
         const bccAdmins = await getAdminNotificationEmails();
-        await sendMailgunMessage({
-          to: [onboardedUser.email],
-          cc: ['jvenner@anchorcorps.com', 'jdowning@anchorcorps.com', 'scapece@anchorcorps.com'],
-          bcc: bccAdmins,
-          subject: 'Anchor Corps — Onboarding Complete',
-          text: `Hello${display_name ? ` ${display_name}` : ''},
+        await sendMailgunMessageWithLogging(
+          {
+            to: [onboardedUser.email],
+            cc: ['jvenner@anchorcorps.com', 'jdowning@anchorcorps.com', 'scapece@anchorcorps.com'],
+            bcc: bccAdmins,
+            subject: 'Anchor Corps — Onboarding Complete',
+            text: `Hello${display_name ? ` ${display_name}` : ''},
 
-Thank you for completing your onboarding. We’ve received your information and your account is ready for the next steps.
+Thank you for completing your onboarding. We've received your information and your account is ready for the next steps.
 
 A PDF copy of your completed onboarding is attached for your records.
 
@@ -624,16 +625,23 @@ If you have any questions, reply to your onboarding email or reach out to us dir
 
 Thank you,
 — Anchor Corps`,
-          html: `<p>Hello${display_name ? ` ${display_name}` : ''},</p>
-<p>Thank you for completing your onboarding. We’ve received your information and your account is ready for the next steps.</p>
+            html: `<p>Hello${display_name ? ` ${display_name}` : ''},</p>
+<p>Thank you for completing your onboarding. We've received your information and your account is ready for the next steps.</p>
 <p>We will begin building your account shortly and will reach out when it's ready.</p>
 <p>A PDF copy of your completed onboarding is attached for your records.</p>
 <hr />
 <p>If you have any questions, reply to your onboarding email or reach out to us directly.</p>
 <p><i>Thank you,</i></p>
 <p><strong>— Anchor Corps</strong></p>`,
-          attachments: [{ data: buffer, filename, contentType: 'application/pdf' }]
-        });
+            attachments: [{ data: buffer, filename, contentType: 'application/pdf' }]
+          },
+          {
+            emailType: 'onboarding_complete',
+            recipientName: display_name,
+            clientId: userId,
+            metadata: { has_pdf_attachment: true }
+          }
+        );
       }
     } catch (emailErr) {
       console.error('[onboarding:me:submit:email]', emailErr);

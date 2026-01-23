@@ -9,7 +9,7 @@
  */
 
 import { query, getClient } from '../db.js';
-import { sendMailgunMessage } from './mailgun.js';
+import { sendMailgunMessageWithLogging } from './mailgun.js';
 
 const MAX_ATTEMPTS = 5;
 const RETRY_DELAY_MS = 5000; // 5 seconds base delay
@@ -192,12 +192,22 @@ async function processEmailJob(client, job) {
   // Send email to each recipient
   for (const recipient of recipients) {
     try {
-      await sendMailgunMessage({
-        to: recipient,
-        subject: `New ${job.form_name} Submission`,
-        text: emailBody,
-        from: process.env.MAILGUN_DEFAULT_FROM || 'forms@anchorcorps.com'
-      });
+      await sendMailgunMessageWithLogging(
+        {
+          to: recipient,
+          subject: `New ${job.form_name} Submission`,
+          text: emailBody,
+          from: process.env.MAILGUN_DEFAULT_FROM || 'forms@anchorcorps.com'
+        },
+        {
+          emailType: 'form_submission',
+          metadata: { 
+            form_id: job.form_id, 
+            form_name: job.form_name,
+            submission_id: job.submission_id 
+          }
+        }
+      );
     } catch (err) {
       console.error(`Failed to send email to ${recipient}:`, err);
       throw err; // Will trigger retry

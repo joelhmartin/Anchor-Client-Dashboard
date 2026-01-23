@@ -44,12 +44,22 @@ import Stepper from '@mui/material/Stepper';
 
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import Tooltip from '@mui/material/Tooltip';
+import Chip from '@mui/material/Chip';
+import TablePagination from '@mui/material/TablePagination';
 
 import MainCard from 'ui-component/cards/MainCard';
+import { fetchEmailLogs, fetchEmailLogDetail, fetchEmailStats, EMAIL_TYPE_LABELS, STATUS_COLORS } from 'api/emailLogs';
 import useAuth from 'hooks/useAuth';
 import useTableSearch from 'hooks/useTableSearch';
-import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail, activateClient } from 'api/clients';
+import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail, activateClient, getClientOnboardingLink } from 'api/clients';
 import { requestPasswordReset } from 'api/auth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
@@ -144,8 +154,20 @@ export default function AdminHub() {
   const [sendingOnboardingEmail, setSendingOnboardingEmail] = useState(false);
   const [sendingOnboardingForId, setSendingOnboardingForId] = useState('');
   const [activatingClientId, setActivatingClientId] = useState('');
+  const [copyingLinkForId, setCopyingLinkForId] = useState('');
   const [taskWorkspaces, setTaskWorkspaces] = useState([]);
   const [taskWorkspacesLoading, setTaskWorkspacesLoading] = useState(false);
+
+  // Hub Section Tabs (0 = Users & Clients, 1 = Email Logs)
+  const [hubSection, setHubSection] = useState(0);
+
+  // Email Logs State
+  const [emailLogs, setEmailLogs] = useState([]);
+  const [emailLogsLoading, setEmailLogsLoading] = useState(false);
+  const [emailLogsPagination, setEmailLogsPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 1 });
+  const [emailLogsFilters, setEmailLogsFilters] = useState({ emailType: 'all', status: 'all', search: '' });
+  const [emailLogDetail, setEmailLogDetail] = useState({ open: false, log: null, loading: false });
+  const [emailStats, setEmailStats] = useState(null);
 
   const effectiveRole = user?.effective_role || user?.role;
   const isSuperAdmin = effectiveRole === 'superadmin';
@@ -326,6 +348,75 @@ export default function AdminHub() {
     // Keep selection valid as the client list changes.
     setSelectedClientIds((prev) => prev.filter((id) => sortedClientOnly.some((c) => c.id === id)));
   }, [sortedClientOnly]);
+
+  // Load email logs when hubSection switches to Email Logs tab
+  const loadEmailLogs = useCallback(async () => {
+    if (!canAccessHub) return;
+    setEmailLogsLoading(true);
+    try {
+      const result = await fetchEmailLogs({
+        page: emailLogsPagination.page,
+        limit: emailLogsPagination.limit,
+        emailType: emailLogsFilters.emailType,
+        status: emailLogsFilters.status,
+        search: emailLogsFilters.search
+      });
+      setEmailLogs(result.logs || []);
+      setEmailLogsPagination((prev) => ({ ...prev, ...result.pagination }));
+    } catch (err) {
+      reportError(err, 'Unable to load email logs');
+    } finally {
+      setEmailLogsLoading(false);
+    }
+  }, [canAccessHub, emailLogsPagination.page, emailLogsPagination.limit, emailLogsFilters, reportError]);
+
+  const loadEmailStats = useCallback(async () => {
+    try {
+      const result = await fetchEmailStats(30);
+      setEmailStats(result.stats || []);
+    } catch (err) {
+      console.error('Failed to load email stats', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (hubSection === 1 && canAccessHub) {
+      loadEmailLogs();
+      loadEmailStats();
+    }
+  }, [hubSection, canAccessHub, loadEmailLogs, loadEmailStats]);
+
+  // Reload email logs when filters/pagination change
+  useEffect(() => {
+    if (hubSection === 1 && canAccessHub) {
+      loadEmailLogs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailLogsFilters, emailLogsPagination.page, emailLogsPagination.limit]);
+
+  const handleViewEmailLog = async (log) => {
+    setEmailLogDetail({ open: true, log: null, loading: true });
+    try {
+      const detail = await fetchEmailLogDetail(log.id);
+      setEmailLogDetail({ open: true, log: detail, loading: false });
+    } catch (err) {
+      reportError(err, 'Unable to load email detail');
+      setEmailLogDetail({ open: false, log: null, loading: false });
+    }
+  };
+
+  const handleEmailLogsFilterChange = (key, value) => {
+    setEmailLogsFilters((prev) => ({ ...prev, [key]: value }));
+    setEmailLogsPagination((prev) => ({ ...prev, page: 1 }));
+  };
+
+  const handleEmailLogsPageChange = (event, newPage) => {
+    setEmailLogsPagination((prev) => ({ ...prev, page: newPage + 1 }));
+  };
+
+  const handleEmailLogsRowsPerPageChange = (event) => {
+    setEmailLogsPagination((prev) => ({ ...prev, limit: parseInt(event.target.value, 10), page: 1 }));
+  };
 
   const toggleSelectClient = (clientId) => {
     setSelectedClientIds((prev) => {
@@ -774,6 +865,23 @@ export default function AdminHub() {
     }
   };
 
+  const handleCopyOnboardingLink = async (clientId) => {
+    if (!clientId) return;
+    setCopyingLinkForId(clientId);
+    setError('');
+    setSuccess('');
+    try {
+      const result = await getClientOnboardingLink(clientId);
+      await navigator.clipboard.writeText(result.url);
+      setSuccess('Onboarding link copied to clipboard');
+      toast.success('Onboarding link copied!');
+    } catch (err) {
+      setError(err.message || 'Unable to generate onboarding link');
+    } finally {
+      setCopyingLinkForId('');
+    }
+  };
+
   const handleActivateClient = async (clientId) => {
     if (!clientId) return;
     setActivatingClientId(clientId);
@@ -1193,12 +1301,53 @@ export default function AdminHub() {
     }
   };
 
+  // Format date for display
+  const formatEmailDate = (dateStr) => {
+    if (!dateStr) return '—';
+    return new Date(dateStr).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  // Compute email stats summary
+  const emailStatsSummary = useMemo(() => {
+    if (!emailStats || !emailStats.length) return { sent: 0, failed: 0, pending: 0, byType: {} };
+    const summary = { sent: 0, failed: 0, pending: 0, byType: {} };
+    emailStats.forEach((row) => {
+      const count = parseInt(row.count, 10);
+      if (row.status === 'sent') summary.sent += count;
+      else if (row.status === 'failed') summary.failed += count;
+      else if (row.status === 'pending') summary.pending += count;
+      if (!summary.byType[row.email_type]) summary.byType[row.email_type] = 0;
+      summary.byType[row.email_type] += count;
+    });
+    return summary;
+  }, [emailStats]);
+
   return (
     <MainCard title="Client Hub">
       <Stack spacing={3}>
         {error && <Alert severity="error">{error}</Alert>}
         {success && <Alert severity="success">{success}</Alert>}
 
+        {/* Top-level Hub Navigation */}
+        <Tabs
+          value={hubSection}
+          onChange={(e, v) => setHubSection(v)}
+          sx={{ borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tab icon={<PeopleOutlineIcon />} iconPosition="start" label="Users & Clients" />
+          <Tab icon={<MailOutlineIcon />} iconPosition="start" label="Email Logs" />
+        </Tabs>
+
+        {/* Users & Clients Section */}
+        {hubSection === 0 && (
+          <>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
           <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
             <Typography variant="h5" sx={{ mb: 2 }}>
@@ -1482,14 +1631,31 @@ export default function AdminHub() {
                           </Tooltip>
                         )}
                         {c.role === 'client' && !c.onboarding_completed_at && (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() => handleSendOnboardingEmailNow(c.id)}
-                            disabled={sendingOnboardingForId === c.id}
-                          >
-                            {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
-                          </Button>
+                          <>
+                            <Tooltip title="Copy onboarding link">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => handleCopyOnboardingLink(c.id)}
+                                  disabled={copyingLinkForId === c.id}
+                                >
+                                  {copyingLinkForId === c.id ? (
+                                    <CircularProgress size={18} color="inherit" />
+                                  ) : (
+                                    <ContentCopyIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => handleSendOnboardingEmailNow(c.id)}
+                              disabled={sendingOnboardingForId === c.id}
+                            >
+                              {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
+                            </Button>
+                          </>
                         )}
                         {c.role === 'client' && c.onboarding_completed_at && !c.activated_at && (
                           <Button
@@ -1531,7 +1697,343 @@ export default function AdminHub() {
             </Table>
           </TableContainer>
         </Box>
+          </>
+        )}
+
+        {/* Email Logs Section */}
+        {hubSection === 1 && (
+          <Stack spacing={3}>
+            {/* Stats Summary */}
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <Card variant="outlined" sx={{ minWidth: 140, flex: 1 }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <CheckCircleIcon color="success" />
+                    <Box>
+                      <Typography variant="h4" color="success.main">{emailStatsSummary.sent}</Typography>
+                      <Typography variant="caption" color="text.secondary">Sent (30d)</Typography>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+              <Card variant="outlined" sx={{ minWidth: 140, flex: 1 }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <ErrorIcon color="error" />
+                    <Box>
+                      <Typography variant="h4" color="error.main">{emailStatsSummary.failed}</Typography>
+                      <Typography variant="caption" color="text.secondary">Failed (30d)</Typography>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+              <Card variant="outlined" sx={{ minWidth: 140, flex: 1 }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <ScheduleIcon color="warning" />
+                    <Box>
+                      <Typography variant="h4" color="warning.main">{emailStatsSummary.pending}</Typography>
+                      <Typography variant="caption" color="text.secondary">Pending</Typography>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Box>
+
+            {/* Filters */}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+              <TextField
+                size="small"
+                placeholder="Search emails..."
+                value={emailLogsFilters.search}
+                onChange={(e) => handleEmailLogsFilterChange('search', e.target.value)}
+                sx={{ minWidth: 200 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <MailOutlineIcon fontSize="small" />
+                    </InputAdornment>
+                  )
+                }}
+              />
+              <FormControl size="small" sx={{ minWidth: 150 }}>
+                <InputLabel>Type</InputLabel>
+                <Select
+                  value={emailLogsFilters.emailType}
+                  label="Type"
+                  onChange={(e) => handleEmailLogsFilterChange('emailType', e.target.value)}
+                >
+                  <MenuItem value="all">All Types</MenuItem>
+                  {Object.entries(EMAIL_TYPE_LABELS).map(([key, label]) => (
+                    <MenuItem key={key} value={key}>{label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ minWidth: 120 }}>
+                <InputLabel>Status</InputLabel>
+                <Select
+                  value={emailLogsFilters.status}
+                  label="Status"
+                  onChange={(e) => handleEmailLogsFilterChange('status', e.target.value)}
+                >
+                  <MenuItem value="all">All Statuses</MenuItem>
+                  <MenuItem value="sent">Sent</MenuItem>
+                  <MenuItem value="failed">Failed</MenuItem>
+                  <MenuItem value="pending">Pending</MenuItem>
+                </Select>
+              </FormControl>
+              <Button variant="outlined" size="small" onClick={loadEmailLogs} disabled={emailLogsLoading}>
+                {emailLogsLoading ? 'Loading...' : 'Refresh'}
+              </Button>
+            </Stack>
+
+            {/* Email Logs Table */}
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+              {emailLogsLoading && <LinearProgress />}
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Date</TableCell>
+                      <TableCell>Type</TableCell>
+                      <TableCell>Recipient</TableCell>
+                      <TableCell>Subject</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell align="right">Action</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {emailLogs.map((log) => (
+                      <TableRow key={log.id} hover>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2">{formatEmailDate(log.created_at)}</Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={EMAIL_TYPE_LABELS[log.email_type] || log.email_type}
+                            size="small"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2" fontWeight={500}>
+                            {log.recipient_name || log.recipient_email}
+                          </Typography>
+                          {log.recipient_name && (
+                            <Typography variant="caption" color="text.secondary">
+                              {log.recipient_email}
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 300 }}>
+                          <Typography variant="body2" noWrap>
+                            {log.subject}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            icon={
+                              log.status === 'sent' ? <CheckCircleIcon /> :
+                              log.status === 'failed' ? <ErrorIcon /> :
+                              <ScheduleIcon />
+                            }
+                            label={STATUS_COLORS[log.status]?.label || log.status}
+                            size="small"
+                            color={STATUS_COLORS[log.status]?.color || 'default'}
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell align="right">
+                          <Tooltip title="View Details">
+                            <IconButton size="small" onClick={() => handleViewEmailLog(log)}>
+                              <VisibilityIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!emailLogs.length && !emailLogsLoading && (
+                      <TableRow>
+                        <TableCell colSpan={6} align="center">
+                          <Typography color="text.secondary" sx={{ py: 3 }}>
+                            No email logs found
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <TablePagination
+                component="div"
+                count={emailLogsPagination.total}
+                page={emailLogsPagination.page - 1}
+                onPageChange={handleEmailLogsPageChange}
+                rowsPerPage={emailLogsPagination.limit}
+                onRowsPerPageChange={handleEmailLogsRowsPerPageChange}
+                rowsPerPageOptions={[10, 25, 50, 100]}
+              />
+            </Box>
+          </Stack>
+        )}
       </Stack>
+
+      {/* Email Detail Dialog */}
+      <Dialog
+        open={emailLogDetail.open}
+        onClose={() => setEmailLogDetail({ open: false, log: null, loading: false })}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Typography variant="h5">Email Details</Typography>
+            {emailLogDetail.log && (
+              <Chip
+                icon={
+                  emailLogDetail.log.status === 'sent' ? <CheckCircleIcon /> :
+                  emailLogDetail.log.status === 'failed' ? <ErrorIcon /> :
+                  <ScheduleIcon />
+                }
+                label={STATUS_COLORS[emailLogDetail.log.status]?.label || emailLogDetail.log.status}
+                size="small"
+                color={STATUS_COLORS[emailLogDetail.log.status]?.color || 'default'}
+              />
+            )}
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {emailLogDetail.loading ? (
+            <Stack alignItems="center" sx={{ py: 4 }}>
+              <CircularProgress />
+              <Typography sx={{ mt: 2 }}>Loading email details...</Typography>
+            </Stack>
+          ) : emailLogDetail.log ? (
+            <Stack spacing={3}>
+              {/* Basic Info */}
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Email Type</Typography>
+                <Chip
+                  label={EMAIL_TYPE_LABELS[emailLogDetail.log.email_type] || emailLogDetail.log.email_type}
+                  size="small"
+                  variant="outlined"
+                />
+              </Box>
+              <Divider />
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="subtitle2" color="text.secondary">Recipient</Typography>
+                  <Typography>{emailLogDetail.log.recipient_name || '—'}</Typography>
+                  <Typography variant="body2" color="text.secondary">{emailLogDetail.log.recipient_email}</Typography>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Typography variant="subtitle2" color="text.secondary">Sent At</Typography>
+                  <Typography>{formatEmailDate(emailLogDetail.log.sent_at || emailLogDetail.log.created_at)}</Typography>
+                </Grid>
+              </Grid>
+              {emailLogDetail.log.cc_emails?.length > 0 && (
+                <Box>
+                  <Typography variant="subtitle2" color="text.secondary">CC</Typography>
+                  <Typography variant="body2">{emailLogDetail.log.cc_emails.join(', ')}</Typography>
+                </Box>
+              )}
+              <Divider />
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Subject</Typography>
+                <Typography>{emailLogDetail.log.subject}</Typography>
+              </Box>
+
+              {/* Error Message if failed */}
+              {emailLogDetail.log.status === 'failed' && emailLogDetail.log.error_message && (
+                <Alert severity="error">
+                  <Typography variant="subtitle2">Error Message</Typography>
+                  <Typography variant="body2">{emailLogDetail.log.error_message}</Typography>
+                </Alert>
+              )}
+
+              {/* Mailgun Info */}
+              {emailLogDetail.log.mailgun_id && (
+                <Box>
+                  <Typography variant="subtitle2" color="text.secondary">Mailgun ID</Typography>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                    {emailLogDetail.log.mailgun_id}
+                  </Typography>
+                </Box>
+              )}
+
+              <Divider />
+
+              {/* Email Content */}
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Email Content</Typography>
+                {emailLogDetail.log.html_body ? (
+                  <Paper variant="outlined" sx={{ p: 2, maxHeight: 400, overflow: 'auto' }}>
+                    <div dangerouslySetInnerHTML={{ __html: emailLogDetail.log.html_body }} />
+                  </Paper>
+                ) : emailLogDetail.log.text_body ? (
+                  <Paper variant="outlined" sx={{ p: 2, maxHeight: 400, overflow: 'auto' }}>
+                    <Typography
+                      variant="body2"
+                      component="pre"
+                      sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', m: 0 }}
+                    >
+                      {emailLogDetail.log.text_body}
+                    </Typography>
+                  </Paper>
+                ) : (
+                  <Typography color="text.secondary" fontStyle="italic">
+                    No content available
+                  </Typography>
+                )}
+              </Box>
+
+              {/* Metadata */}
+              {emailLogDetail.log.metadata && Object.keys(emailLogDetail.log.metadata).length > 0 && (
+                <Box>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Metadata</Typography>
+                  <Paper variant="outlined" sx={{ p: 1.5 }}>
+                    <Typography
+                      variant="body2"
+                      component="pre"
+                      sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', m: 0, fontSize: '0.75rem' }}
+                    >
+                      {JSON.stringify(emailLogDetail.log.metadata, null, 2)}
+                    </Typography>
+                  </Paper>
+                </Box>
+              )}
+
+              {/* Triggered By / Client Info */}
+              <Divider />
+              <Grid container spacing={2}>
+                {emailLogDetail.log.triggered_by_email && (
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle2" color="text.secondary">Triggered By</Typography>
+                    <Typography>
+                      {emailLogDetail.log.triggered_by_first_name} {emailLogDetail.log.triggered_by_last_name}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">{emailLogDetail.log.triggered_by_email}</Typography>
+                  </Grid>
+                )}
+                {emailLogDetail.log.client_email && (
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle2" color="text.secondary">Related Client</Typography>
+                    <Typography>
+                      {emailLogDetail.log.client_first_name} {emailLogDetail.log.client_last_name}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">{emailLogDetail.log.client_email}</Typography>
+                  </Grid>
+                )}
+              </Grid>
+            </Stack>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEmailLogDetail({ open: false, log: null, loading: false })}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Drawer
         anchor="right"
@@ -1562,13 +2064,25 @@ export default function AdminHub() {
             </Box>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
               {editing?.role === 'client' && !editing?.onboarding_completed_at && (
-                <Button
-                  variant="outlined"
-                  onClick={() => handleSendOnboardingEmailNow(editing.id)}
-                  disabled={sendingOnboardingForId === editing.id}
-                >
-                  {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
-                </Button>
+                <>
+                  <Tooltip title="Copy onboarding link to clipboard">
+                    <Button
+                      variant="text"
+                      onClick={() => handleCopyOnboardingLink(editing.id)}
+                      disabled={copyingLinkForId === editing.id}
+                      startIcon={copyingLinkForId === editing.id ? <CircularProgress size={16} /> : <ContentCopyIcon />}
+                    >
+                      {copyingLinkForId === editing.id ? 'Copying…' : 'Copy Link'}
+                    </Button>
+                  </Tooltip>
+                  <Button
+                    variant="outlined"
+                    onClick={() => handleSendOnboardingEmailNow(editing.id)}
+                    disabled={sendingOnboardingForId === editing.id}
+                  >
+                    {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
+                  </Button>
+                </>
               )}
               {editing?.role === 'client' && editing?.onboarding_completed_at && !editing?.activated_at && (
                 <Button

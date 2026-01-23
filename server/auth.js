@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 import { query } from './db.js';
 import { isAdminOrEditor } from './middleware/roles.js';
-import { isMailgunConfigured, sendMailgunMessage } from './services/mailgun.js';
+import { isMailgunConfigured, sendMailgunMessageWithLogging } from './services/mailgun.js';
 
 const router = Router();
 
@@ -177,20 +177,28 @@ async function sendPasswordResetEmail(user, token, baseUrl) {
     return { delivered: false, resetUrl };
   }
 
-  await sendMailgunMessage({
-    to: [user.email],
-    subject: 'Reset your Anchor password',
-    text: `Hi ${name},
+  await sendMailgunMessageWithLogging(
+    {
+      to: [user.email],
+      subject: 'Reset your Anchor password',
+      text: `Hi ${name},
 
 We received a request to reset your Anchor password. Use the link below to set a new password:
 ${resetUrl}
 
 If you did not request this, you can safely ignore this email.`,
-    html: `<p>Hi ${name},</p>
+      html: `<p>Hi ${name},</p>
 <p>We received a request to reset your Anchor password. Use the link below to set a new password:</p>
 <p><a href="${resetUrl}" target="_blank" rel="noopener">Reset your password</a></p>
 <p>If you did not request this, you can safely ignore this email.</p>`
-  });
+    },
+    {
+      emailType: 'password_reset',
+      recipientName: name,
+      clientId: user.id,
+      metadata: { reset_url: resetUrl }
+    }
+  );
 
   return { delivered: true, resetUrl };
 }

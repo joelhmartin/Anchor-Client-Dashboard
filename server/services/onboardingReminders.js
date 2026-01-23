@@ -1,5 +1,5 @@
 import { query } from '../db.js';
-import { sendMailgunMessage, isMailgunConfigured } from './mailgun.js';
+import { sendMailgunMessageWithLogging, isMailgunConfigured } from './mailgun.js';
 import { createNotification, createNotificationsForAdmins, notifyAdminsByEmail } from './notifications.js';
 import { getMondaySettings, findPersonById } from './monday.js';
 
@@ -77,12 +77,20 @@ export async function sendOnboardingExpiryReminders({ baseUrl } = {}) {
       if (isMailgunConfigured()) {
         if (managerEmail) {
           const greeting = managerName ? `Hi ${managerName},` : 'Hi there,';
-          await sendMailgunMessage({
-            to: managerEmail,
-            subject: `Onboarding link expired: ${clientLabel}`,
-            text: `${greeting}\n\n${body}\n\nOpen Client Hub: ${hubUrl}\n`,
-            html: `<p>${greeting}</p><p>${body}</p><p><a href="${hubUrl}" target="_blank" rel="noopener">Open Client Hub</a></p>`
-          });
+          await sendMailgunMessageWithLogging(
+            {
+              to: managerEmail,
+              subject: `Onboarding link expired: ${clientLabel}`,
+              text: `${greeting}\n\n${body}\n\nOpen Client Hub: ${hubUrl}\n`,
+              html: `<p>${greeting}</p><p>${body}</p><p><a href="${hubUrl}" target="_blank" rel="noopener">Open Client Hub</a></p>`
+            },
+            {
+              emailType: 'onboarding_reminder',
+              recipientName: managerName,
+              clientId: r.client_user_id,
+              metadata: { token_id: r.token_id, manager_notified: true }
+            }
+          );
         } else {
           // Fallback email to admins if no manager email available.
           await notifyAdminsByEmail({

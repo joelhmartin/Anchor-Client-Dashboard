@@ -28,3 +28,7 @@ export function sendClientOnboardingEmail(id) {
 export function activateClient(id) {
   return client.post(`/hub/clients/${id}/activate`).then((res) => res.data);
 }
+
+export function getClientOnboardingLink(id) {
+  return client.get(`/hub/clients/${id}/onboarding-link`).then((res) => res.data);
+}

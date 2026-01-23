@@ -2523,27 +2523,23 @@ export default function ClientPortal() {
 
                             {/* Action Buttons */}
                             <Stack direction="row" spacing={0.5} onClick={(e) => e.stopPropagation()}>
-                              <Tooltip title="Start Journey" arrow>
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  onClick={() => handleOpenConcernDialog(call)}
-                                  sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.7rem' }}
-                                >
-                                  Journey
-                                </Button>
-                              </Tooltip>
-                              <Tooltip title="Mark as Agreed to Service" arrow>
-                                <Button
-                                  size="small"
-                                  variant="contained"
-                                  color="secondary"
-                                  onClick={() => handleOpenServiceDialog(call)}
-                                  sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.7rem' }}
-                                >
-                                  Agreed
-                                </Button>
-                              </Tooltip>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => handleOpenConcernDialog(call)}
+                                sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.65rem' }}
+                              >
+                                Start Journey
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="secondary"
+                                onClick={() => handleOpenServiceDialog(call)}
+                                sx={{ minWidth: 0, px: 1, py: 0.25, fontSize: '0.65rem' }}
+                              >
+                                Agreed to Service
+                              </Button>
                             </Stack>
 
                             {/* Time ago */}
@@ -2646,11 +2642,23 @@ export default function ClientPortal() {
                           </TableCell>
                           <TableCell onClick={(e) => e.stopPropagation()}>
                             <Stack direction="row" spacing={0.5}>
-                              <Tooltip title="Start Journey">
-                                <IconButton size="small" onClick={() => handleOpenConcernDialog(call)}>
-                                  <AddIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => handleOpenConcernDialog(call)}
+                                sx={{ fontSize: '0.65rem', py: 0.25 }}
+                              >
+                                Start Journey
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="secondary"
+                                onClick={() => handleOpenServiceDialog(call)}
+                                sx={{ fontSize: '0.65rem', py: 0.25 }}
+                              >
+                                Agreed to Service
+                              </Button>
                             </Stack>
                           </TableCell>
                         </TableRow>

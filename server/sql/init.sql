@@ -766,3 +766,30 @@ CREATE TABLE IF NOT EXISTS call_log_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_call_log_tags_call ON call_log_tags(call_id);
 CREATE INDEX IF NOT EXISTS idx_call_log_tags_tag ON call_log_tags(tag_id);
+
+-- Email Logs - Track all emails sent from the application
+CREATE TABLE IF NOT EXISTS email_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  email_type TEXT NOT NULL,
+  recipient_email TEXT NOT NULL,
+  recipient_name TEXT,
+  cc_emails TEXT[],
+  bcc_emails TEXT[],
+  subject TEXT NOT NULL,
+  text_body TEXT,
+  html_body TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  mailgun_id TEXT,
+  mailgun_message TEXT,
+  error_message TEXT,
+  triggered_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  client_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_email_logs_created ON email_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_logs_type ON email_logs(email_type);
+CREATE INDEX IF NOT EXISTS idx_email_logs_status ON email_logs(status);
+CREATE INDEX IF NOT EXISTS idx_email_logs_recipient ON email_logs(recipient_email);
+CREATE INDEX IF NOT EXISTS idx_email_logs_client ON email_logs(client_id);

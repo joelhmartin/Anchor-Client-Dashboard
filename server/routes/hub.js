@@ -25,19 +25,26 @@ import {
   changeColumnValue,
   uploadFileToColumn
 } from '../services/monday.js';
-import { 
-  DEFAULT_AI_PROMPT, 
-  pullCallsFromCtm, 
-  buildCallsFromCache, 
-  postSaleToCTM, 
+import {
+  DEFAULT_AI_PROMPT,
+  pullCallsFromCtm,
+  buildCallsFromCache,
+  postSaleToCTM,
   fetchPhoneInteractionSources,
   enrichCallerType,
   normalizePhoneNumber,
-  getClientJourneys 
+  getClientJourneys
 } from '../services/ctm.js';
 import { generateAiResponse } from '../services/ai.js';
 import { generateImagenImage } from '../services/imagen.js';
-import { sendMailgunMessage, isMailgunConfigured } from '../services/mailgun.js';
+import {
+  sendMailgunMessage,
+  sendMailgunMessageWithLogging,
+  isMailgunConfigured,
+  fetchEmailLogs,
+  fetchEmailLogById,
+  getEmailStats
+} from '../services/mailgun.js';
 import {
   createNotification,
   createNotificationsForAdmins,
@@ -316,15 +323,19 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
     symptoms: Array.isArray(row.symptoms) ? row.symptoms : [],
     steps: stepMap.get(row.id) || [],
     notes: noteMap.get(row.id) || [],
-    service: row.service_id ? {
-      id: row.service_id,
-      name: row.service_name,
-      description: row.service_description
-    } : null,
-    parent_journey: row.parent_journey_id ? {
-      id: row.parent_journey_id,
-      client_name: row.parent_journey_name
-    } : null
+    service: row.service_id
+      ? {
+          id: row.service_id,
+          name: row.service_name,
+          description: row.service_description
+        }
+      : null,
+    parent_journey: row.parent_journey_id
+      ? {
+          id: row.parent_journey_id,
+          client_name: row.parent_journey_name
+        }
+      : null
   }));
   return filters.id ? shaped[0] || null : shaped;
 }
@@ -634,12 +645,19 @@ You can review it inside the Anchor admin hub.
   }
 
   if (managerEmail && isMailgunConfigured()) {
-    await sendMailgunMessage({
-      to: managerEmail,
-      subject: `${clientName} just created a new blog post`,
-      text: emailText,
-      html: emailHtml
-    });
+    await sendMailgunMessageWithLogging(
+      {
+        to: managerEmail,
+        subject: `${clientName} just created a new blog post`,
+        text: emailText,
+        html: emailHtml
+      },
+      {
+        emailType: 'blog_notification',
+        clientId: client.id,
+        metadata: { blog_post_id: blogPost.id, status: statusLabel }
+      }
+    );
   }
 }
 
@@ -1198,12 +1216,21 @@ router.post('/docs/admin/review', requireAdmin, async (req, res) => {
       meta: { document_id: doc_id, action: 'review_requested' }
     });
     if (isMailgunConfigured() && clientInfo.email) {
-      await sendMailgunMessage({
-        to: clientInfo.email,
-        subject: 'A document needs your review',
-        text: `Hi ${clientInfo.first_name || ''},\n\n"${docLabel}" has been flagged for your review. Visit your client portal to respond: ${portalLink}`,
-        html: `<p>Hi ${clientInfo.first_name || 'there'},</p><p><strong>${docLabel}</strong> has been flagged for your review. Visit your client portal to respond.</p><p><a href="${portalLink}" target="_blank" rel="noopener">Open Client Portal</a></p>`
-      });
+      await sendMailgunMessageWithLogging(
+        {
+          to: clientInfo.email,
+          subject: 'A document needs your review',
+          text: `Hi ${clientInfo.first_name || ''},\n\n"${docLabel}" has been flagged for your review. Visit your client portal to respond: ${portalLink}`,
+          html: `<p>Hi ${clientInfo.first_name || 'there'},</p><p><strong>${docLabel}</strong> has been flagged for your review. Visit your client portal to respond.</p><p><a href="${portalLink}" target="_blank" rel="noopener">Open Client Portal</a></p>`
+        },
+        {
+          emailType: 'document_review',
+          recipientName: clientInfo.first_name,
+          triggeredById: req.user?.id,
+          clientId: user_id,
+          metadata: { document_id: doc_id }
+        }
+      );
     }
   }
 
@@ -1377,14 +1404,64 @@ If you were not expecting this email, ignore it.`;
 <p><a href="${onboardingUrl}" style="background:#0f6efd;color:#fff;padding:10px 18px;border-radius:4px;text-decoration:none;display:inline-block;">Complete Onboarding</a></p>
 <p>If you were not expecting this email, you can safely ignore it.</p>`;
 
-  await sendMailgunMessage({
-    to: clientUser.email,
-    subject,
-    text,
-    html
-  });
+  await sendMailgunMessageWithLogging(
+    {
+      to: clientUser.email,
+      subject,
+      text,
+      html
+    },
+    {
+      emailType: 'onboarding_invite',
+      recipientName: clientUser.first_name,
+      triggeredById: req.user?.id,
+      clientId,
+      metadata: { onboarding_url: onboardingUrl }
+    }
+  );
   logEvent('mailgun:onboarding', 'Onboarding email queued', { clientId, email: clientUser.email });
   res.json({ message: 'Onboarding email sent' });
+});
+
+// Get or generate onboarding link without sending email (for manual sharing)
+router.get('/clients/:id/onboarding-link', isAdminOrEditor, async (req, res) => {
+  const clientId = req.params.id;
+  const { rows } = await query('SELECT id, email, first_name, last_name, role FROM users WHERE id = $1', [clientId]);
+  if (!rows.length) return res.status(404).json({ message: 'Client not found' });
+  const clientUser = rows[0];
+  if (clientUser.role !== 'client') {
+    return res.status(400).json({ message: 'Onboarding links are only for client accounts.' });
+  }
+
+  // If onboarding is already completed, don't issue links.
+  const { rows: profileRows } = await query('SELECT onboarding_completed_at FROM client_profiles WHERE user_id = $1 LIMIT 1', [clientId]);
+  if (profileRows[0]?.onboarding_completed_at) {
+    return res.status(400).json({ message: 'Client onboarding is already completed.' });
+  }
+
+  const token = uuidv4();
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
+
+  // Revoke any previously-issued (still valid) links so only the newest link works.
+  await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL', [
+    clientId
+  ]);
+  await query(
+    `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
+     VALUES ($1,$2,$3,$4)`,
+    [clientId, tokenHash, expiresAt, JSON.stringify({ created_by: req.user.id, source: 'manual_copy' })]
+  );
+
+  const baseUrl = resolveBaseUrl(req);
+  const onboardingUrl = `${baseUrl}/onboarding/${token}`;
+
+  logEvent('onboarding:link-generated', 'Onboarding link generated for manual sharing', { clientId, email: clientUser.email });
+  res.json({
+    url: onboardingUrl,
+    expiresAt: expiresAt.toISOString(),
+    message: 'Onboarding link generated. Previous links have been revoked.'
+  });
 });
 
 router.get('/notifications', async (req, res) => {
@@ -1438,17 +1515,65 @@ router.post('/email/test', isAdminOrEditor, async (req, res) => {
   const bodyText = text || 'Test email sent via Mailgun sandbox.';
 
   try {
-    const response = await sendMailgunMessage({
-      to,
-      subject: resolvedSubject,
-      text: bodyText,
-      html
-    });
+    const response = await sendMailgunMessageWithLogging(
+      {
+        to,
+        subject: resolvedSubject,
+        text: bodyText,
+        html
+      },
+      {
+        emailType: 'test',
+        triggeredById: req.user?.id,
+        metadata: { source: 'admin_test' }
+      }
+    );
     logEvent('mailgun:test', 'Mailgun test email sent', { id: response.id, message: response.message });
     res.json({ id: response.id, message: response.message });
   } catch (err) {
     logEvent('mailgun:test', 'Failed to send test email', { error: err.message });
     res.status(500).json({ message: err.message || 'Unable to send email' });
+  }
+});
+
+// Email Logs - Admin endpoints
+router.get('/email-logs', isAdminOrEditor, async (req, res) => {
+  try {
+    const { page, limit, email_type, status, search, date_from, date_to } = req.query;
+    const result = await fetchEmailLogs({
+      page: parseInt(page, 10) || 1,
+      limit: parseInt(limit, 10) || 50,
+      emailType: email_type,
+      status,
+      search,
+      dateFrom: date_from,
+      dateTo: date_to
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to fetch email logs' });
+  }
+});
+
+router.get('/email-logs/stats', isAdminOrEditor, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days, 10) || 30;
+    const stats = await getEmailStats(days);
+    res.json({ stats });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to fetch email stats' });
+  }
+});
+
+router.get('/email-logs/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    const log = await fetchEmailLogById(req.params.id);
+    if (!log) {
+      return res.status(404).json({ message: 'Email log not found' });
+    }
+    res.json(log);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to fetch email log' });
   }
 });
 
@@ -1800,7 +1925,9 @@ router.post('/clients/:id/activate', isAdminOrEditor, async (req, res) => {
     }
 
     // Check if already activated
-    const { rows: profileRows } = await query('SELECT activated_at, onboarding_completed_at FROM client_profiles WHERE user_id = $1', [clientId]);
+    const { rows: profileRows } = await query('SELECT activated_at, onboarding_completed_at FROM client_profiles WHERE user_id = $1', [
+      clientId
+    ]);
     if (profileRows[0]?.activated_at) {
       return res.status(400).json({ message: 'Account is already activated' });
     }
@@ -1820,16 +1947,25 @@ router.post('/clients/:id/activate', isAdminOrEditor, async (req, res) => {
       const appBaseUrl = resolveAppBaseUrl(req);
       const loginUrl = `${appBaseUrl}/pages/login`;
       try {
-        await sendMailgunMessage({
-          to: [user.email],
-          subject: 'Your Anchor Dashboard is Ready!',
-          text: `Hello${user.first_name ? ` ${user.first_name}` : ''},\n\nGreat news! Your Anchor dashboard is now ready. You can log in and start exploring.\n\nLog in here: ${loginUrl}\n\nIf you have any questions, please reach out to your account manager.\n\n— Anchor`,
-          html: `<p>Hello${user.first_name ? ` ${user.first_name}` : ''},</p>
+        await sendMailgunMessageWithLogging(
+          {
+            to: [user.email],
+            subject: 'Your Anchor Dashboard is Ready!',
+            text: `Hello${user.first_name ? ` ${user.first_name}` : ''},\n\nGreat news! Your Anchor dashboard is now ready. You can log in and start exploring.\n\nLog in here: ${loginUrl}\n\nIf you have any questions, please reach out to your account manager.\n\n— Anchor`,
+            html: `<p>Hello${user.first_name ? ` ${user.first_name}` : ''},</p>
 <p>Great news! Your Anchor dashboard is now ready. You can log in and start exploring.</p>
 <p><a href="${loginUrl}" style="display:inline-block;padding:12px 24px;background:#667eea;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">Log In to Your Dashboard</a></p>
 <p>If you have any questions, please reach out to your account manager.</p>
 <p>— Anchor</p>`
-        });
+          },
+          {
+            emailType: 'account_activated',
+            recipientName: user.first_name,
+            triggeredById: req.user?.id,
+            clientId: user.id,
+            metadata: { login_url: loginUrl }
+          }
+        );
       } catch (emailErr) {
         console.error('[clients:activate:email]', emailErr);
         // Don't fail the activation if email fails
@@ -2176,12 +2312,20 @@ router.post('/requests', uploadRequestAttachment.single('attachment'), async (re
           }
 
           if (contact.managerEmail && isMailgunConfigured()) {
-            await sendMailgunMessage({
-              to: contact.managerEmail,
-              subject: 'Rush Job Requested',
-              text: textLines.join('\n'),
-              html: htmlSections.join('')
-            });
+            await sendMailgunMessageWithLogging(
+              {
+                to: contact.managerEmail,
+                subject: 'Rush Job Requested',
+                text: textLines.join('\n'),
+                html: htmlSections.join('')
+              },
+              {
+                emailType: 'rush_job',
+                triggeredById: targetUserId,
+                clientId: targetUserId,
+                metadata: { request_id: requestId, monday_link: mondayLink }
+              }
+            );
           }
 
           if (contact.notificationUserId) {
@@ -2313,7 +2457,7 @@ router.get('/requests', async (req, res) => {
 router.get('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const shouldSync = req.query.sync === 'true';
-  
+
   // Search, filter, and pagination params
   const search = req.query.search?.trim() || '';
   const callerType = req.query.caller_type || '';
@@ -2422,7 +2566,7 @@ router.get('/calls', async (req, res) => {
 
   try {
     logEvent('calls:sync', 'Syncing calls from CTM', { userId: targetUserId, cursor: profile.ctm_sync_cursor });
-    
+
     const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
@@ -2437,10 +2581,10 @@ router.get('/calls', async (req, res) => {
       await Promise.all(
         freshCalls.map(async ({ call, meta }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
-          
+
           // Enrich caller type
           const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
-          
+
           return query(
             `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
              VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -2475,10 +2619,7 @@ router.get('/calls', async (req, res) => {
 
       // Update sync cursor
       if (syncMeta.latestTimestamp) {
-        await query(
-          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
-          [new Date(syncMeta.latestTimestamp), targetUserId]
-        );
+        await query('UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2', [new Date(syncMeta.latestTimestamp), targetUserId]);
       }
 
       // Post auto-starred scores back to CTM
@@ -2521,7 +2662,7 @@ router.get('/calls', async (req, res) => {
     const refreshed = await query(mainQuery, params);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
-    
+
     const refreshedPagination = {
       page,
       limit,
@@ -2529,10 +2670,10 @@ router.get('/calls', async (req, res) => {
       totalPages: Math.ceil(refreshedTotal / limit),
       hasMore: page * limit < refreshedTotal
     };
-    
-    return res.json({ 
-      calls: shaped, 
-      synced: true, 
+
+    return res.json({
+      calls: shaped,
+      synced: true,
       newCalls: freshCalls.length,
       pagination: refreshedPagination,
       syncMeta: {
@@ -2566,18 +2707,23 @@ router.post('/calls/sync', async (req, res) => {
     return res.status(400).json({ message: 'CTM credentials not configured.' });
   }
 
-  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [
+    targetUserId
+  ]);
 
   try {
-    logEvent('calls:sync', fullSync ? 'Full sync with CTM' : 'Incremental sync with CTM', { userId: targetUserId, cursor: profile.ctm_sync_cursor });
-    
+    logEvent('calls:sync', fullSync ? 'Full sync with CTM' : 'Incremental sync with CTM', {
+      userId: targetUserId,
+      cursor: profile.ctm_sync_cursor
+    });
+
     const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
       existingRows: cached.rows,
       autoStarEnabled: profile.auto_star_enabled || false,
       syncRatings: true,
-      sinceTimestamp: fullSync ? null : (profile.ctm_sync_cursor || null),
+      sinceTimestamp: fullSync ? null : profile.ctm_sync_cursor || null,
       fullSync
     });
 
@@ -2588,10 +2734,10 @@ router.post('/calls/sync', async (req, res) => {
       await Promise.all(
         freshCalls.map(async ({ call, meta, isRatingUpdate }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
-          
+
           // Enrich caller type
           const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
-          
+
           const result = await query(
             `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
              VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -2629,10 +2775,7 @@ router.post('/calls/sync', async (req, res) => {
 
       // Update sync cursor
       if (syncMeta.latestTimestamp) {
-        await query(
-          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
-          [new Date(syncMeta.latestTimestamp), targetUserId]
-        );
+        await query('UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2', [new Date(syncMeta.latestTimestamp), targetUserId]);
       }
 
       // Auto-star new calls
@@ -2651,7 +2794,9 @@ router.post('/calls/sync', async (req, res) => {
     }
 
     // Return updated data
-    const refreshed = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+    const refreshed = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [
+      targetUserId
+    ]);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
 
@@ -2702,11 +2847,13 @@ router.post('/calls/full-sync', async (req, res) => {
   // Reset sync cursor for full re-sync
   await query('UPDATE client_profiles SET ctm_sync_cursor=NULL WHERE user_id=$1', [targetUserId]);
 
-  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [
+    targetUserId
+  ]);
 
   try {
     logEvent('calls:full-sync', 'Starting full historical sync with CTM', { userId: targetUserId });
-    
+
     const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
@@ -2723,10 +2870,10 @@ router.post('/calls/full-sync', async (req, res) => {
       await Promise.all(
         freshCalls.map(async ({ call, meta }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
-          
+
           // Enrich caller type
           const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
-          
+
           const result = await query(
             `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
              VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -2764,18 +2911,15 @@ router.post('/calls/full-sync', async (req, res) => {
 
       // Update sync cursor
       if (syncMeta.latestTimestamp) {
-        await query(
-          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
-          [new Date(syncMeta.latestTimestamp), targetUserId]
-        );
+        await query('UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2', [new Date(syncMeta.latestTimestamp), targetUserId]);
       }
     }
 
-    logEvent('calls:full-sync', 'Full sync completed', { 
-      userId: targetUserId, 
-      newCalls: newCount, 
+    logEvent('calls:full-sync', 'Full sync completed', {
+      userId: targetUserId,
+      newCalls: newCount,
       updatedCalls: updatedCount,
-      pagesProcessed: syncMeta.pagesProcessed 
+      pagesProcessed: syncMeta.pagesProcessed
     });
 
     return res.json({
@@ -2916,10 +3060,10 @@ router.post('/calls/:id/link-client', async (req, res) => {
 
   try {
     // Verify the active client exists and belongs to the user
-    const clientRes = await query(
-      'SELECT id, client_name FROM active_clients WHERE id=$1 AND owner_user_id=$2',
-      [activeClientId, targetUserId]
-    );
+    const clientRes = await query('SELECT id, client_name FROM active_clients WHERE id=$1 AND owner_user_id=$2', [
+      activeClientId,
+      targetUserId
+    ]);
 
     if (!clientRes.rows.length) {
       return res.status(404).json({ message: 'Active client not found' });
@@ -2938,7 +3082,7 @@ router.post('/calls/:id/link-client', async (req, res) => {
 
     logEvent('calls:link-client', 'Call linked to active client', { callId, activeClientId, userId: targetUserId });
 
-    res.json({ 
+    res.json({
       message: `Call linked to ${client.client_name}`,
       activeClient: client
     });
@@ -2955,10 +3099,10 @@ router.delete('/calls/:id/link-client', async (req, res) => {
 
   try {
     // Re-enrich caller type (might still be a repeat caller)
-    const callRes = await query(
-      'SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)',
-      [callId, targetUserId]
-    );
+    const callRes = await query('SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)', [
+      callId,
+      targetUserId
+    ]);
 
     if (!callRes.rows.length) {
       return res.status(404).json({ message: 'Call not found' });
@@ -2994,10 +3138,10 @@ router.get('/calls/:id/history', async (req, res) => {
 
   try {
     // Get the call to find the phone number
-    const callRes = await query(
-      'SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)',
-      [callId, targetUserId]
-    );
+    const callRes = await query('SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)', [
+      callId,
+      targetUserId
+    ]);
 
     if (!callRes.rows.length) {
       return res.status(404).json({ message: 'Call not found' });
@@ -3024,7 +3168,7 @@ router.get('/calls/:id/history', async (req, res) => {
       [targetUserId, normalized]
     );
 
-    res.json({ 
+    res.json({
       calls: historyRes.rows,
       phoneNumber,
       totalCalls: historyRes.rows.length
@@ -3042,10 +3186,7 @@ router.get('/calls/:id/detail', async (req, res) => {
 
   try {
     // Get the full call record
-    const callRes = await query(
-      `SELECT * FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)`,
-      [callId, targetUserId]
-    );
+    const callRes = await query(`SELECT * FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)`, [callId, targetUserId]);
 
     if (!callRes.rows.length) {
       return res.status(404).json({ message: 'Lead not found' });
@@ -3087,10 +3228,7 @@ router.get('/calls/:id/detail', async (req, res) => {
     if (journeyRes.rows.length) {
       journey = journeyRes.rows[0];
       // Get journey steps
-      const stepsRes = await query(
-        `SELECT * FROM client_journey_steps WHERE journey_id = $1 ORDER BY position ASC`,
-        [journey.id]
-      );
+      const stepsRes = await query(`SELECT * FROM client_journey_steps WHERE journey_id = $1 ORDER BY position ASC`, [journey.id]);
       journey.steps = stepsRes.rows;
     }
 
@@ -3219,11 +3357,11 @@ router.get('/calls/stats', async (req, res) => {
         acc[row.caller_type || 'new'] = parseInt(row.count, 10);
         return acc;
       }, {}),
-      bySource: sourceRes.rows.map(row => ({
+      bySource: sourceRes.rows.map((row) => ({
         source: row.source || 'Unknown',
         count: parseInt(row.count, 10)
       })),
-      dailyVolume: volumeRes.rows.map(row => ({
+      dailyVolume: volumeRes.rows.map((row) => ({
         date: row.date,
         count: parseInt(row.count, 10)
       }))
@@ -3237,7 +3375,7 @@ router.get('/calls/stats', async (req, res) => {
 // GET /calls/export - Export leads to CSV
 router.get('/calls/export', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
-  
+
   try {
     const callsRes = await query(
       `SELECT 
@@ -3262,8 +3400,22 @@ router.get('/calls/export', async (req, res) => {
     );
 
     // Build CSV
-    const headers = ['Call ID', 'Caller Name', 'Phone', 'Direction', 'Date', 'Duration (sec)', 'Rating', 'Type', 'Source', 'Category', 'Classification', 'Summary', 'Region'];
-    const rows = callsRes.rows.map(row => [
+    const headers = [
+      'Call ID',
+      'Caller Name',
+      'Phone',
+      'Direction',
+      'Date',
+      'Duration (sec)',
+      'Rating',
+      'Type',
+      'Source',
+      'Category',
+      'Classification',
+      'Summary',
+      'Region'
+    ];
+    const rows = callsRes.rows.map((row) => [
       row.call_id,
       row.caller_name || '',
       row.from_number || '',
@@ -3287,13 +3439,10 @@ router.get('/calls/export', async (req, res) => {
       return str;
     };
 
-    const csv = [
-      headers.join(','),
-      ...rows.map(row => row.map(escapeCsv).join(','))
-    ].join('\n');
+    const csv = [headers.join(','), ...rows.map((row) => row.map(escapeCsv).join(','))].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="leads-export-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="leads-export-${new Date().toISOString().slice(0, 10)}.csv"`);
     res.send(csv);
   } catch (err) {
     console.error('[calls:export]', err);
@@ -3309,11 +3458,8 @@ router.get('/calls/export', async (req, res) => {
 router.get('/pipeline-stages', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   try {
-    const result = await query(
-      'SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC',
-      [targetUserId]
-    );
-    
+    const result = await query('SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC', [targetUserId]);
+
     // If no stages exist, create default ones
     if (result.rows.length === 0) {
       const defaultStages = [
@@ -3324,7 +3470,7 @@ router.get('/pipeline-stages', async (req, res) => {
         { name: 'Won', color: '#22c55e', position: 4, is_won_stage: true },
         { name: 'Lost', color: '#ef4444', position: 5, is_lost_stage: true }
       ];
-      
+
       for (const stage of defaultStages) {
         await query(
           `INSERT INTO lead_pipeline_stages (owner_user_id, name, color, position, is_won_stage, is_lost_stage)
@@ -3332,14 +3478,11 @@ router.get('/pipeline-stages', async (req, res) => {
           [targetUserId, stage.name, stage.color, stage.position, stage.is_won_stage || false, stage.is_lost_stage || false]
         );
       }
-      
-      const newResult = await query(
-        'SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC',
-        [targetUserId]
-      );
+
+      const newResult = await query('SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC', [targetUserId]);
       return res.json({ stages: newResult.rows });
     }
-    
+
     res.json({ stages: result.rows });
   } catch (err) {
     console.error('[pipeline-stages:list]', err);
@@ -3351,29 +3494,28 @@ router.get('/pipeline-stages', async (req, res) => {
 router.post('/pipeline-stages', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { name, color, position, is_won_stage, is_lost_stage } = req.body;
-  
+
   if (!name?.trim()) {
     return res.status(400).json({ message: 'Stage name is required' });
   }
-  
+
   try {
     // Get max position if not provided
     let pos = position;
     if (pos === undefined || pos === null) {
-      const maxRes = await query(
-        'SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM lead_pipeline_stages WHERE owner_user_id = $1',
-        [targetUserId]
-      );
+      const maxRes = await query('SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM lead_pipeline_stages WHERE owner_user_id = $1', [
+        targetUserId
+      ]);
       pos = maxRes.rows[0]?.next_pos || 0;
     }
-    
+
     const result = await query(
       `INSERT INTO lead_pipeline_stages (owner_user_id, name, color, position, is_won_stage, is_lost_stage)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [targetUserId, name.trim(), color || '#6366f1', pos, is_won_stage || false, is_lost_stage || false]
     );
-    
+
     res.json({ stage: result.rows[0] });
   } catch (err) {
     console.error('[pipeline-stages:create]', err);
@@ -3386,12 +3528,12 @@ router.put('/pipeline-stages/:id', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id } = req.params;
   const { name, color, position, is_won_stage, is_lost_stage } = req.body;
-  
+
   try {
     const fields = [];
     const params = [];
     let paramIndex = 1;
-    
+
     if (name !== undefined) {
       fields.push(`name = $${paramIndex++}`);
       params.push(name.trim());
@@ -3412,25 +3554,25 @@ router.put('/pipeline-stages/:id', async (req, res) => {
       fields.push(`is_lost_stage = $${paramIndex++}`);
       params.push(is_lost_stage);
     }
-    
+
     if (fields.length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
-    
+
     fields.push(`updated_at = NOW()`);
     params.push(id, targetUserId);
-    
+
     const result = await query(
       `UPDATE lead_pipeline_stages SET ${fields.join(', ')} 
        WHERE id = $${paramIndex} AND owner_user_id = $${paramIndex + 1}
        RETURNING *`,
       params
     );
-    
+
     if (!result.rows.length) {
       return res.status(404).json({ message: 'Pipeline stage not found' });
     }
-    
+
     res.json({ stage: result.rows[0] });
   } catch (err) {
     console.error('[pipeline-stages:update]', err);
@@ -3442,23 +3584,17 @@ router.put('/pipeline-stages/:id', async (req, res) => {
 router.delete('/pipeline-stages/:id', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id } = req.params;
-  
+
   try {
     // Clear stage from any calls using it
-    await query(
-      'UPDATE call_logs SET pipeline_stage_id = NULL WHERE pipeline_stage_id = $1',
-      [id]
-    );
-    
-    const result = await query(
-      'DELETE FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2 RETURNING id',
-      [id, targetUserId]
-    );
-    
+    await query('UPDATE call_logs SET pipeline_stage_id = NULL WHERE pipeline_stage_id = $1', [id]);
+
+    const result = await query('DELETE FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2 RETURNING id', [id, targetUserId]);
+
     if (!result.rows.length) {
       return res.status(404).json({ message: 'Pipeline stage not found' });
     }
-    
+
     res.json({ message: 'Pipeline stage deleted' });
   } catch (err) {
     console.error('[pipeline-stages:delete]', err);
@@ -3471,30 +3607,27 @@ router.put('/calls/:id/stage', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id: callId } = req.params;
   const { stage_id } = req.body;
-  
+
   try {
     // Verify stage belongs to user if provided
     if (stage_id) {
-      const stageRes = await query(
-        'SELECT id FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2',
-        [stage_id, targetUserId]
-      );
+      const stageRes = await query('SELECT id FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2', [stage_id, targetUserId]);
       if (!stageRes.rows.length) {
         return res.status(404).json({ message: 'Pipeline stage not found' });
       }
     }
-    
+
     const result = await query(
       `UPDATE call_logs SET pipeline_stage_id = $1 
        WHERE call_id = $2 AND (owner_user_id = $3 OR user_id = $3)
        RETURNING call_id`,
       [stage_id || null, callId, targetUserId]
     );
-    
+
     if (!result.rows.length) {
       return res.status(404).json({ message: 'Lead not found' });
     }
-    
+
     res.json({ message: 'Lead moved to stage', callId, stageId: stage_id });
   } catch (err) {
     console.error('[calls:stage]', err);
@@ -3510,7 +3643,7 @@ router.put('/calls/:id/stage', async (req, res) => {
 router.get('/leads/:callId/notes', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { callId } = req.params;
-  
+
   try {
     const result = await query(
       `SELECT ln.*, u.first_name, u.last_name, u.email as author_email
@@ -3520,12 +3653,12 @@ router.get('/leads/:callId/notes', async (req, res) => {
        ORDER BY ln.created_at DESC`,
       [targetUserId, callId]
     );
-    
-    const notes = result.rows.map(row => ({
+
+    const notes = result.rows.map((row) => ({
       ...row,
       author_name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.author_email || 'Unknown'
     }));
-    
+
     res.json({ notes });
   } catch (err) {
     console.error('[lead-notes:list]', err);
@@ -3539,34 +3672,34 @@ router.post('/leads/:callId/notes', async (req, res) => {
   const authorId = req.user.id;
   const { callId } = req.params;
   const { body, note_type, metadata } = req.body;
-  
+
   if (!body?.trim()) {
     return res.status(400).json({ message: 'Note body is required' });
   }
-  
+
   try {
     // Verify the lead exists for this user
-    const callRes = await query(
-      'SELECT call_id FROM call_logs WHERE call_id = $1 AND (owner_user_id = $2 OR user_id = $2)',
-      [callId, targetUserId]
-    );
-    
+    const callRes = await query('SELECT call_id FROM call_logs WHERE call_id = $1 AND (owner_user_id = $2 OR user_id = $2)', [
+      callId,
+      targetUserId
+    ]);
+
     if (!callRes.rows.length) {
       return res.status(404).json({ message: 'Lead not found' });
     }
-    
+
     const result = await query(
       `INSERT INTO lead_notes (owner_user_id, call_id, author_id, note_type, body, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [targetUserId, callId, authorId, note_type || 'note', body.trim(), metadata || {}]
     );
-    
+
     // Get author info
     const userRes = await query('SELECT first_name, last_name, email FROM users WHERE id = $1', [authorId]);
     const user = userRes.rows[0] || {};
-    
-    res.json({ 
+
+    res.json({
       note: {
         ...result.rows[0],
         author_name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Unknown'
@@ -3582,17 +3715,18 @@ router.post('/leads/:callId/notes', async (req, res) => {
 router.delete('/leads/:callId/notes/:noteId', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { callId, noteId } = req.params;
-  
+
   try {
-    const result = await query(
-      'DELETE FROM lead_notes WHERE id = $1 AND call_id = $2 AND owner_user_id = $3 RETURNING id',
-      [noteId, callId, targetUserId]
-    );
-    
+    const result = await query('DELETE FROM lead_notes WHERE id = $1 AND call_id = $2 AND owner_user_id = $3 RETURNING id', [
+      noteId,
+      callId,
+      targetUserId
+    ]);
+
     if (!result.rows.length) {
       return res.status(404).json({ message: 'Note not found' });
     }
-    
+
     res.json({ message: 'Note deleted' });
   } catch (err) {
     console.error('[lead-notes:delete]', err);
@@ -3608,10 +3742,7 @@ router.delete('/leads/:callId/notes/:noteId', async (req, res) => {
 router.get('/lead-tags', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   try {
-    const result = await query(
-      'SELECT * FROM lead_tags WHERE owner_user_id = $1 ORDER BY name ASC',
-      [targetUserId]
-    );
+    const result = await query('SELECT * FROM lead_tags WHERE owner_user_id = $1 ORDER BY name ASC', [targetUserId]);
     res.json({ tags: result.rows });
   } catch (err) {
     console.error('[lead-tags:list]', err);
@@ -3623,11 +3754,11 @@ router.get('/lead-tags', async (req, res) => {
 router.post('/lead-tags', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { name, color } = req.body;
-  
+
   if (!name?.trim()) {
     return res.status(400).json({ message: 'Tag name is required' });
   }
-  
+
   try {
     const result = await query(
       `INSERT INTO lead_tags (owner_user_id, name, color)
@@ -3647,12 +3778,9 @@ router.post('/lead-tags', async (req, res) => {
 router.delete('/lead-tags/:id', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id } = req.params;
-  
+
   try {
-    await query(
-      'DELETE FROM lead_tags WHERE id = $1 AND owner_user_id = $2',
-      [id, targetUserId]
-    );
+    await query('DELETE FROM lead_tags WHERE id = $1 AND owner_user_id = $2', [id, targetUserId]);
     res.json({ message: 'Tag deleted' });
   } catch (err) {
     console.error('[lead-tags:delete]', err);
@@ -3664,7 +3792,7 @@ router.delete('/lead-tags/:id', async (req, res) => {
 router.get('/calls/:id/tags', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id: callId } = req.params;
-  
+
   try {
     const result = await query(
       `SELECT lt.* FROM lead_tags lt
@@ -3685,10 +3813,10 @@ router.post('/calls/:id/tags', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id: callId } = req.params;
   const { tag_id, tag_name, tag_color } = req.body;
-  
+
   try {
     let tagId = tag_id;
-    
+
     // If no tag_id but tag_name provided, create or get the tag
     if (!tagId && tag_name) {
       const tagResult = await query(
@@ -3700,11 +3828,11 @@ router.post('/calls/:id/tags', async (req, res) => {
       );
       tagId = tagResult.rows[0].id;
     }
-    
+
     if (!tagId) {
       return res.status(400).json({ message: 'Tag ID or name is required' });
     }
-    
+
     // Add the tag to the call
     await query(
       `INSERT INTO call_log_tags (call_id, tag_id)
@@ -3712,7 +3840,7 @@ router.post('/calls/:id/tags', async (req, res) => {
        ON CONFLICT (call_id, tag_id) DO NOTHING`,
       [callId, tagId]
     );
-    
+
     // Return updated tags for this call
     const result = await query(
       `SELECT lt.* FROM lead_tags lt
@@ -3721,7 +3849,7 @@ router.post('/calls/:id/tags', async (req, res) => {
        ORDER BY lt.name ASC`,
       [callId, targetUserId]
     );
-    
+
     res.json({ tags: result.rows });
   } catch (err) {
     console.error('[call-tags:add]', err);
@@ -3732,12 +3860,9 @@ router.post('/calls/:id/tags', async (req, res) => {
 // DELETE /calls/:id/tags/:tagId - Remove tag from a call
 router.delete('/calls/:id/tags/:tagId', async (req, res) => {
   const { id: callId, tagId } = req.params;
-  
+
   try {
-    await query(
-      'DELETE FROM call_log_tags WHERE call_id = $1 AND tag_id = $2',
-      [callId, tagId]
-    );
+    await query('DELETE FROM call_log_tags WHERE call_id = $1 AND tag_id = $2', [callId, tagId]);
     res.json({ message: 'Tag removed from call' });
   } catch (err) {
     console.error('[call-tags:remove]', err);
@@ -3750,13 +3875,24 @@ router.put('/calls/:id/category', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id: callId } = req.params;
   const { category } = req.body;
-  
-  const validCategories = ['converted', 'warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'];
-  
+
+  const validCategories = [
+    'converted',
+    'warm',
+    'very_good',
+    'applicant',
+    'needs_attention',
+    'unanswered',
+    'negative',
+    'spam',
+    'neutral',
+    'unreviewed'
+  ];
+
   if (!validCategories.includes(category)) {
     return res.status(400).json({ message: 'Invalid category' });
   }
-  
+
   try {
     await query(
       `UPDATE call_logs 
@@ -3764,7 +3900,7 @@ router.put('/calls/:id/category', async (req, res) => {
        WHERE call_id = $2 AND (owner_user_id = $3 OR user_id = $3)`,
       [JSON.stringify(category), callId, targetUserId]
     );
-    
+
     res.json({ message: 'Category updated', category });
   } catch (err) {
     console.error('[calls:category]', err);
@@ -3780,10 +3916,7 @@ router.put('/calls/:id/category', async (req, res) => {
 router.get('/lead-views', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   try {
-    const result = await query(
-      'SELECT * FROM lead_saved_views WHERE owner_user_id = $1 ORDER BY created_at DESC',
-      [targetUserId]
-    );
+    const result = await query('SELECT * FROM lead_saved_views WHERE owner_user_id = $1 ORDER BY created_at DESC', [targetUserId]);
     res.json({ views: result.rows });
   } catch (err) {
     console.error('[lead-views:list]', err);
@@ -3795,27 +3928,24 @@ router.get('/lead-views', async (req, res) => {
 router.post('/lead-views', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { name, filters, is_default } = req.body;
-  
+
   if (!name?.trim()) {
     return res.status(400).json({ message: 'View name is required' });
   }
-  
+
   try {
     // If setting as default, clear other defaults
     if (is_default) {
-      await query(
-        'UPDATE lead_saved_views SET is_default = FALSE WHERE owner_user_id = $1',
-        [targetUserId]
-      );
+      await query('UPDATE lead_saved_views SET is_default = FALSE WHERE owner_user_id = $1', [targetUserId]);
     }
-    
+
     const result = await query(
       `INSERT INTO lead_saved_views (owner_user_id, name, filters, is_default)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [targetUserId, name.trim(), filters || {}, is_default || false]
     );
-    
+
     res.json({ view: result.rows[0] });
   } catch (err) {
     console.error('[lead-views:create]', err);
@@ -3827,17 +3957,14 @@ router.post('/lead-views', async (req, res) => {
 router.delete('/lead-views/:id', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const { id } = req.params;
-  
+
   try {
-    const result = await query(
-      'DELETE FROM lead_saved_views WHERE id = $1 AND owner_user_id = $2 RETURNING id',
-      [id, targetUserId]
-    );
-    
+    const result = await query('DELETE FROM lead_saved_views WHERE id = $1 AND owner_user_id = $2 RETURNING id', [id, targetUserId]);
+
     if (!result.rows.length) {
       return res.status(404).json({ message: 'View not found' });
     }
-    
+
     res.json({ message: 'View deleted' });
   } catch (err) {
     console.error('[lead-views:delete]', err);
@@ -4125,7 +4252,7 @@ router.post('/journeys', async (req, res) => {
   // If force_new is true, skip the existing journey lookup (allows multiple journeys per client)
   const findExisting = async (callKey) => {
     if (force_new) return null;
-    
+
     if (callKey) {
       // Only find existing journey by call key, not by active_client_id
       // This allows multiple journeys per active client
