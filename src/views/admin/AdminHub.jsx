@@ -42,6 +42,10 @@ import Step from '@mui/material/Step';
 import StepLabel from '@mui/material/StepLabel';
 import Stepper from '@mui/material/Stepper';
 
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import Tooltip from '@mui/material/Tooltip';
+
 import MainCard from 'ui-component/cards/MainCard';
 import useAuth from 'hooks/useAuth';
 import useTableSearch from 'hooks/useTableSearch';
@@ -1289,20 +1293,29 @@ export default function AdminHub() {
                       <TableCell>{c.email}</TableCell>
                       <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
                       <TableCell align="right">
-                        <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
-                          <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
-                            Edit
-                          </Button>
+                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                          <Tooltip title="Edit">
+                            <IconButton size="small" onClick={() => startEdit(c)}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                           {isAdmin && (
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              color="error"
-                              onClick={() => confirmDeleteClient(c.id)}
-                              disabled={deletingClientId === c.id}
-                            >
-                              {deletingClientId === c.id ? 'Deleting…' : 'Delete'}
-                            </Button>
+                            <Tooltip title="Delete">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  onClick={() => confirmDeleteClient(c.id)}
+                                  disabled={deletingClientId === c.id}
+                                >
+                                  {deletingClientId === c.id ? (
+                                    <CircularProgress size={18} color="inherit" />
+                                  ) : (
+                                    <DeleteOutlineIcon fontSize="small" />
+                                  )}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
                           )}
                         </Stack>
                       </TableCell>
@@ -1444,10 +1457,30 @@ export default function AdminHub() {
                         )}
                       </TableCell>
                     <TableCell align="right">
-                      <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
-                        <Button size="small" variant="outlined" onClick={() => startEdit(c)}>
-                          Edit
-                        </Button>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                        <Tooltip title="Edit">
+                          <IconButton size="small" onClick={() => startEdit(c)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        {isAdmin && (
+                          <Tooltip title="Delete">
+                            <span>
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => confirmDeleteClient(c.id)}
+                                disabled={deletingClientId === c.id}
+                              >
+                                {deletingClientId === c.id ? (
+                                  <CircularProgress size={18} color="inherit" />
+                                ) : (
+                                  <DeleteOutlineIcon fontSize="small" />
+                                )}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
                         {c.role === 'client' && !c.onboarding_completed_at && (
                           <Button
                             size="small"
@@ -1469,30 +1502,19 @@ export default function AdminHub() {
                             {activatingClientId === c.id ? 'Activating…' : 'Activate'}
                           </Button>
                         )}
-                        {isAdmin && (
+                        {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
                           <Button
                             size="small"
-                            variant="outlined"
-                            color="error"
-                            onClick={() => confirmDeleteClient(c.id)}
-                            disabled={deletingClientId === c.id}
-                          >
-                            {deletingClientId === c.id ? 'Deleting…' : 'Delete'}
-                          </Button>
-                        )}
-                        {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
-                        <Button
-                          size="small"
-                          variant="contained"
-                          disableElevation
-                          onClick={() => {
+                            variant="contained"
+                            disableElevation
+                            onClick={() => {
                               if (c.role === 'client' && !c.onboarding_completed_at) return;
-                            setActingClient(c.id);
-                            navigate('/portal');
-                          }}
-                        >
-                          Jump to View
-                        </Button>
+                              setActingClient(c.id);
+                              navigate('/portal');
+                            }}
+                          >
+                            Jump to View
+                          </Button>
                         )}
                       </Stack>
                     </TableCell>

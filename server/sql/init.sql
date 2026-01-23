@@ -675,3 +675,94 @@ WHERE cj.lead_call_key IS NULL AND cj.lead_call_id = cl.id;
 CREATE INDEX IF NOT EXISTS idx_services_user ON services(user_id);
 CREATE INDEX IF NOT EXISTS idx_active_clients_owner ON active_clients(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_client_services_agreed_date ON client_services(agreed_date);
+
+-- CTM CRM Professional Upgrade - Phase 1: Paginated Incremental Sync
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_sync_cursor TIMESTAMPTZ;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ctm_last_page_token TEXT;
+
+-- CTM CRM Professional Upgrade - Phase 2: Repeat Caller Detection
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_call_logs_owner_user ON call_logs(owner_user_id);
+-- Backfill owner_user_id from user_id for existing records
+UPDATE call_logs SET owner_user_id = user_id WHERE owner_user_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_call_logs_from_number ON call_logs(from_number);
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS caller_type TEXT DEFAULT 'new';
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS active_client_id UUID REFERENCES active_clients(id) ON DELETE SET NULL;
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS call_sequence INTEGER DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_call_logs_caller_type ON call_logs(caller_type);
+CREATE INDEX IF NOT EXISTS idx_call_logs_active_client ON call_logs(active_client_id);
+
+-- CTM CRM Professional Upgrade - Phase 4: Multi-Journey Support
+ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS service_id UUID REFERENCES services(id) ON DELETE SET NULL;
+ALTER TABLE client_journeys ADD COLUMN IF NOT EXISTS parent_journey_id UUID REFERENCES client_journeys(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_client_journeys_service ON client_journeys(service_id);
+CREATE INDEX IF NOT EXISTS idx_client_journeys_parent ON client_journeys(parent_journey_id);
+
+-- Full CRM Upgrade - Pipeline Stages
+CREATE TABLE IF NOT EXISTS lead_pipeline_stages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#6366f1',
+  position INTEGER NOT NULL DEFAULT 0,
+  is_won_stage BOOLEAN NOT NULL DEFAULT FALSE,
+  is_lost_stage BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_pipeline_stages_owner ON lead_pipeline_stages(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_lead_pipeline_stages_position ON lead_pipeline_stages(owner_user_id, position);
+
+-- Add pipeline stage to call_logs
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS pipeline_stage_id UUID REFERENCES lead_pipeline_stages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_call_logs_pipeline_stage ON call_logs(pipeline_stage_id);
+
+-- Full CRM Upgrade - Lead Notes (Communication Log)
+CREATE TABLE IF NOT EXISTS lead_notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  call_id TEXT NOT NULL,
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  note_type TEXT NOT NULL DEFAULT 'note', -- note, call, email, sms, meeting
+  body TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_notes_call ON lead_notes(call_id);
+CREATE INDEX IF NOT EXISTS idx_lead_notes_owner ON lead_notes(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_lead_notes_created ON lead_notes(created_at DESC);
+
+-- Full CRM Upgrade - Saved Views
+CREATE TABLE IF NOT EXISTS lead_saved_views (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  filters JSONB NOT NULL DEFAULT '{}',
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_saved_views_owner ON lead_saved_views(owner_user_id);
+
+-- Full CRM Upgrade - Lead Tags
+CREATE TABLE IF NOT EXISTS lead_tags (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#6366f1',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(owner_user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_lead_tags_owner ON lead_tags(owner_user_id);
+
+-- Junction table for call_logs <-> tags
+CREATE TABLE IF NOT EXISTS call_log_tags (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  call_id TEXT NOT NULL,
+  tag_id UUID NOT NULL REFERENCES lead_tags(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(call_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_call_log_tags_call ON call_log_tags(call_id);
+CREATE INDEX IF NOT EXISTS idx_call_log_tags_tag ON call_log_tags(tag_id);

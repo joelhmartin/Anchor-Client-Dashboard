@@ -25,7 +25,16 @@ import {
   changeColumnValue,
   uploadFileToColumn
 } from '../services/monday.js';
-import { DEFAULT_AI_PROMPT, pullCallsFromCtm, buildCallsFromCache, postSaleToCTM, fetchPhoneInteractionSources } from '../services/ctm.js';
+import { 
+  DEFAULT_AI_PROMPT, 
+  pullCallsFromCtm, 
+  buildCallsFromCache, 
+  postSaleToCTM, 
+  fetchPhoneInteractionSources,
+  enrichCallerType,
+  normalizePhoneNumber,
+  getClientJourneys 
+} from '../services/ctm.js';
 import { generateAiResponse } from '../services/ai.js';
 import { generateImagenImage } from '../services/imagen.js';
 import { sendMailgunMessage, isMailgunConfigured } from '../services/mailgun.js';
@@ -219,26 +228,35 @@ async function seedJourneySteps(journeyId, ownerId) {
 async function fetchJourneysForOwner(ownerId, filters = {}) {
   await ensureJourneyTables();
   const params = [ownerId];
-  const conditions = ['owner_user_id = $1'];
+  const conditions = ['cj.owner_user_id = $1'];
   const showArchivedOnly = filters.archived === true;
   const includeArchived = filters.includeArchived === true;
   if (filters.id) {
     params.push(filters.id);
-    conditions.push(`id = $${params.length}`);
+    conditions.push(`cj.id = $${params.length}`);
   }
   if (filters.status) {
     params.push(filters.status);
-    conditions.push(`status = $${params.length}`);
+    conditions.push(`cj.status = $${params.length}`);
+  }
+  if (filters.active_client_id) {
+    params.push(filters.active_client_id);
+    conditions.push(`cj.active_client_id = $${params.length}`);
   }
   if (showArchivedOnly) {
-    conditions.push('archived_at IS NOT NULL');
+    conditions.push('cj.archived_at IS NOT NULL');
   } else if (!includeArchived) {
-    conditions.push('archived_at IS NULL');
+    conditions.push('cj.archived_at IS NULL');
   }
-  const sql = `SELECT *
-               FROM client_journeys
+  const sql = `SELECT cj.*, 
+                      s.name as service_name, 
+                      s.description as service_description,
+                      pj.client_name as parent_journey_name
+               FROM client_journeys cj
+               LEFT JOIN services s ON cj.service_id = s.id
+               LEFT JOIN client_journeys pj ON cj.parent_journey_id = pj.id
                ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
-               ORDER BY created_at DESC`;
+               ORDER BY cj.created_at DESC`;
   const { rows } = await query(sql, params);
   if (!rows.length) {
     return filters.id ? null : [];
@@ -297,7 +315,16 @@ async function fetchJourneysForOwner(ownerId, filters = {}) {
     ...row,
     symptoms: Array.isArray(row.symptoms) ? row.symptoms : [],
     steps: stepMap.get(row.id) || [],
-    notes: noteMap.get(row.id) || []
+    notes: noteMap.get(row.id) || [],
+    service: row.service_id ? {
+      id: row.service_id,
+      name: row.service_name,
+      description: row.service_description
+    } : null,
+    parent_journey: row.parent_journey_id ? {
+      id: row.parent_journey_id,
+      client_name: row.parent_journey_name
+    } : null
   }));
   return filters.id ? shaped[0] || null : shaped;
 }
@@ -2286,20 +2313,99 @@ router.get('/requests', async (req, res) => {
 router.get('/calls', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
   const shouldSync = req.query.sync === 'true';
+  
+  // Search, filter, and pagination params
+  const search = req.query.search?.trim() || '';
+  const callerType = req.query.caller_type || '';
+  const category = req.query.category || '';
+  const dateFrom = req.query.date_from || '';
+  const dateTo = req.query.date_to || '';
+  const sortBy = req.query.sort_by || 'started_at';
+  const sortOrder = req.query.sort_order === 'asc' ? 'ASC' : 'DESC';
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const offset = (page - 1) * limit;
 
-  // Always start with cached data for fast initial load
-  const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
-  let cachedCalls = buildCallsFromCache(cached.rows);
+  // Build dynamic query with filters
+  const conditions = ['(owner_user_id = $1 OR user_id = $1)'];
+  const params = [targetUserId];
+  let paramIndex = 2;
+
+  if (search) {
+    conditions.push(`(
+      from_number ILIKE $${paramIndex} OR
+      meta->>'caller_name' ILIKE $${paramIndex} OR
+      meta->>'classification_summary' ILIKE $${paramIndex} OR
+      meta->>'source' ILIKE $${paramIndex}
+    )`);
+    params.push(`%${search}%`);
+    paramIndex++;
+  }
+
+  if (callerType && ['new', 'repeat', 'returning_customer'].includes(callerType)) {
+    conditions.push(`caller_type = $${paramIndex}`);
+    params.push(callerType);
+    paramIndex++;
+  }
+
+  if (category) {
+    conditions.push(`meta->>'category' = $${paramIndex}`);
+    params.push(category);
+    paramIndex++;
+  }
+
+  if (dateFrom) {
+    conditions.push(`started_at >= $${paramIndex}`);
+    params.push(new Date(dateFrom));
+    paramIndex++;
+  }
+
+  if (dateTo) {
+    conditions.push(`started_at <= $${paramIndex}`);
+    params.push(new Date(dateTo));
+    paramIndex++;
+  }
+
+  // Allowed sort columns to prevent SQL injection
+  const allowedSortColumns = ['started_at', 'score', 'duration_sec', 'from_number'];
+  const safeSort = allowedSortColumns.includes(sortBy) ? sortBy : 'started_at';
+
+  // Count total for pagination metadata
+  const countQuery = `SELECT COUNT(*) as total FROM call_logs WHERE ${conditions.join(' AND ')}`;
+  const countResult = await query(countQuery, params);
+  const total = parseInt(countResult.rows[0]?.total || 0, 10);
+
+  // Main query with pagination
+  const mainQuery = `
+    SELECT * FROM call_logs 
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY ${safeSort} ${sortOrder} NULLS LAST
+    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+  `;
+  params.push(limit, offset);
+
+  const cached = await query(mainQuery, params);
+  const cachedRows = cached.rows;
+  let cachedCalls = buildCallsFromCache(cachedRows);
   cachedCalls = await attachJourneyMetaToCalls(targetUserId, cachedCalls);
+
+  // Pagination metadata
+  const pagination = {
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+    hasMore: page * limit < total
+  };
 
   // If sync not requested, return cache immediately
   if (!shouldSync) {
-    return res.json({ calls: cachedCalls, cached: true });
+    return res.json({ calls: cachedCalls, cached: true, pagination });
   }
 
-  // Sync requested - fetch from CTM
+  // Sync requested - fetch from CTM with incremental sync
   const profileRes = await query(
-    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled, ctm_sync_cursor FROM client_profiles WHERE user_id=$1 LIMIT 1',
     [targetUserId]
   );
   const profile = profileRes.rows[0] || {};
@@ -2315,23 +2421,29 @@ router.get('/calls', async (req, res) => {
   }
 
   try {
-    logEvent('calls:sync', 'Syncing calls from CTM', { userId: targetUserId });
-    const freshCalls = await pullCallsFromCtm({
+    logEvent('calls:sync', 'Syncing calls from CTM', { userId: targetUserId, cursor: profile.ctm_sync_cursor });
+    
+    const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
-      existingRows: cached.rows,
+      existingRows: cachedRows,
       autoStarEnabled: profile.auto_star_enabled || false,
-      syncRatings: true // Also sync rating changes from CTM
+      syncRatings: true,
+      sinceTimestamp: profile.ctm_sync_cursor || null
     });
 
     if (freshCalls.length) {
-      // Save new/updated calls to database
+      // Save new/updated calls to database with caller enrichment
       await Promise.all(
-        freshCalls.map(({ call, meta }) => {
+        freshCalls.map(async ({ call, meta }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
+          
+          // Enrich caller type
+          const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
+          
           return query(
-            `INSERT INTO call_logs (user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
+             VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (call_id) DO UPDATE SET
                direction=EXCLUDED.direction,
                from_number=EXCLUDED.from_number,
@@ -2339,7 +2451,10 @@ router.get('/calls', async (req, res) => {
                started_at=EXCLUDED.started_at,
                duration_sec=EXCLUDED.duration_sec,
                score=EXCLUDED.score,
-               meta=EXCLUDED.meta`,
+               meta=EXCLUDED.meta,
+               caller_type=EXCLUDED.caller_type,
+               active_client_id=EXCLUDED.active_client_id,
+               call_sequence=EXCLUDED.call_sequence`,
             [
               targetUserId,
               call.id,
@@ -2349,11 +2464,22 @@ router.get('/calls', async (req, res) => {
               startedAt,
               call.duration_sec || null,
               call.score || 0,
-              JSON.stringify(meta || {})
+              JSON.stringify({ ...meta, ...enrichment }),
+              enrichment.callerType || 'new',
+              enrichment.activeClientId || null,
+              enrichment.callSequence || 1
             ]
           );
         })
       );
+
+      // Update sync cursor
+      if (syncMeta.latestTimestamp) {
+        await query(
+          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
+          [new Date(syncMeta.latestTimestamp), targetUserId]
+        );
+      }
 
       // Post auto-starred scores back to CTM
       const autoStarredCalls = freshCalls.filter(({ shouldPostScore }) => shouldPostScore);
@@ -2389,23 +2515,44 @@ router.get('/calls', async (req, res) => {
       }
     }
 
-    // Return refreshed data from database
-    const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+    // Return refreshed data from database (re-run with same filters/pagination)
+    const refreshedCount = await query(countQuery, params.slice(0, paramIndex - 2));
+    const refreshedTotal = parseInt(refreshedCount.rows[0]?.total || 0, 10);
+    const refreshed = await query(mainQuery, params);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
-    return res.json({ calls: shaped, synced: true, newCalls: freshCalls.length });
+    
+    const refreshedPagination = {
+      page,
+      limit,
+      total: refreshedTotal,
+      totalPages: Math.ceil(refreshedTotal / limit),
+      hasMore: page * limit < refreshedTotal
+    };
+    
+    return res.json({ 
+      calls: shaped, 
+      synced: true, 
+      newCalls: freshCalls.length,
+      pagination: refreshedPagination,
+      syncMeta: {
+        pagesProcessed: syncMeta.pagesProcessed,
+        totalFetched: syncMeta.totalFetched
+      }
+    });
   } catch (err) {
     console.error('[calls:sync]', err);
-    return res.json({ calls: cachedCalls, cached: true, stale: true, message: 'Sync failed. Showing cached data.' });
+    return res.json({ calls: cachedCalls, cached: true, stale: true, pagination, message: 'Sync failed. Showing cached data.' });
   }
 });
 
 // POST /calls/sync - Explicitly sync with CTM (for background refresh)
 router.post('/calls/sync', async (req, res) => {
   const targetUserId = req.portalUserId || req.user.id;
+  const fullSync = req.body.fullSync === true;
 
   const profileRes = await query(
-    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled, ctm_sync_cursor FROM client_profiles WHERE user_id=$1 LIMIT 1',
     [targetUserId]
   );
   const profile = profileRes.rows[0] || {};
@@ -2419,16 +2566,19 @@ router.post('/calls/sync', async (req, res) => {
     return res.status(400).json({ message: 'CTM credentials not configured.' });
   }
 
-  const cached = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
 
   try {
-    logEvent('calls:sync', 'Background sync with CTM', { userId: targetUserId });
-    const freshCalls = await pullCallsFromCtm({
+    logEvent('calls:sync', fullSync ? 'Full sync with CTM' : 'Incremental sync with CTM', { userId: targetUserId, cursor: profile.ctm_sync_cursor });
+    
+    const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
       credentials,
       prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
       existingRows: cached.rows,
       autoStarEnabled: profile.auto_star_enabled || false,
-      syncRatings: true
+      syncRatings: true,
+      sinceTimestamp: fullSync ? null : (profile.ctm_sync_cursor || null),
+      fullSync
     });
 
     let updatedCount = 0;
@@ -2438,9 +2588,13 @@ router.post('/calls/sync', async (req, res) => {
       await Promise.all(
         freshCalls.map(async ({ call, meta, isRatingUpdate }) => {
           const startedAt = call.started_at ? new Date(call.started_at) : null;
+          
+          // Enrich caller type
+          const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
+          
           const result = await query(
-            `INSERT INTO call_logs (user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
+             VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (call_id) DO UPDATE SET
                direction=EXCLUDED.direction,
                from_number=EXCLUDED.from_number,
@@ -2448,7 +2602,10 @@ router.post('/calls/sync', async (req, res) => {
                started_at=EXCLUDED.started_at,
                duration_sec=EXCLUDED.duration_sec,
                score=EXCLUDED.score,
-               meta=EXCLUDED.meta
+               meta=EXCLUDED.meta,
+               caller_type=EXCLUDED.caller_type,
+               active_client_id=EXCLUDED.active_client_id,
+               call_sequence=EXCLUDED.call_sequence
              RETURNING (xmax = 0) AS inserted`,
             [
               targetUserId,
@@ -2459,13 +2616,24 @@ router.post('/calls/sync', async (req, res) => {
               startedAt,
               call.duration_sec || null,
               call.score || 0,
-              JSON.stringify(meta || {})
+              JSON.stringify({ ...meta, ...enrichment }),
+              enrichment.callerType || 'new',
+              enrichment.activeClientId || null,
+              enrichment.callSequence || 1
             ]
           );
           if (result.rows[0]?.inserted) newCount++;
           else updatedCount++;
         })
       );
+
+      // Update sync cursor
+      if (syncMeta.latestTimestamp) {
+        await query(
+          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
+          [new Date(syncMeta.latestTimestamp), targetUserId]
+        );
+      }
 
       // Auto-star new calls
       const autoStarredCalls = freshCalls.filter(({ shouldPostScore }) => shouldPostScore);
@@ -2483,7 +2651,7 @@ router.post('/calls/sync', async (req, res) => {
     }
 
     // Return updated data
-    const refreshed = await query('SELECT * FROM call_logs WHERE user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+    const refreshed = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
     let shaped = buildCallsFromCache(refreshed.rows);
     shaped = await attachJourneyMetaToCalls(targetUserId, shaped);
 
@@ -2492,11 +2660,139 @@ router.post('/calls/sync', async (req, res) => {
       synced: true,
       newCalls: newCount,
       updatedCalls: updatedCount,
+      syncMeta: {
+        pagesProcessed: syncMeta.pagesProcessed,
+        totalFetched: syncMeta.totalFetched,
+        fullSync
+      },
       message: newCount || updatedCount ? `Synced ${newCount} new, ${updatedCount} updated` : 'Already up to date'
     });
   } catch (err) {
     console.error('[calls:sync]', err);
     return res.status(500).json({ message: 'Sync failed: ' + (err.message || 'Unknown error') });
+  }
+});
+
+// POST /calls/full-sync - Force full historical sync (admin-only for initial setup)
+router.post('/calls/full-sync', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+
+  // Only allow admins/super-admins or the user themselves
+  if (!req.user.role || !['admin', 'super_admin'].includes(req.user.role)) {
+    if (req.portalUserId && req.portalUserId !== req.user.id) {
+      return res.status(403).json({ message: 'Unauthorized: Full sync requires admin privileges.' });
+    }
+  }
+
+  const profileRes = await query(
+    'SELECT ctm_account_number, ctm_api_key, ctm_api_secret, ai_prompt, auto_star_enabled FROM client_profiles WHERE user_id=$1 LIMIT 1',
+    [targetUserId]
+  );
+  const profile = profileRes.rows[0] || {};
+  const credentials = {
+    accountId: profile.ctm_account_number,
+    apiKey: profile.ctm_api_key,
+    apiSecret: profile.ctm_api_secret
+  };
+
+  if (!credentials.accountId || !credentials.apiKey || !credentials.apiSecret) {
+    return res.status(400).json({ message: 'CTM credentials not configured.' });
+  }
+
+  // Reset sync cursor for full re-sync
+  await query('UPDATE client_profiles SET ctm_sync_cursor=NULL WHERE user_id=$1', [targetUserId]);
+
+  const cached = await query('SELECT * FROM call_logs WHERE owner_user_id=$1 OR user_id=$1 ORDER BY started_at DESC NULLS LAST', [targetUserId]);
+
+  try {
+    logEvent('calls:full-sync', 'Starting full historical sync with CTM', { userId: targetUserId });
+    
+    const { results: freshCalls, syncMeta } = await pullCallsFromCtm({
+      credentials,
+      prompt: profile.ai_prompt || DEFAULT_AI_PROMPT,
+      existingRows: cached.rows,
+      autoStarEnabled: profile.auto_star_enabled || false,
+      syncRatings: true,
+      fullSync: true
+    });
+
+    let updatedCount = 0;
+    let newCount = 0;
+
+    if (freshCalls.length) {
+      await Promise.all(
+        freshCalls.map(async ({ call, meta }) => {
+          const startedAt = call.started_at ? new Date(call.started_at) : null;
+          
+          // Enrich caller type
+          const enrichment = await enrichCallerType(query, targetUserId, call.caller_number, call.id);
+          
+          const result = await query(
+            `INSERT INTO call_logs (owner_user_id, user_id, call_id, direction, from_number, to_number, started_at, duration_sec, score, meta, caller_type, active_client_id, call_sequence)
+             VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ON CONFLICT (call_id) DO UPDATE SET
+               direction=EXCLUDED.direction,
+               from_number=EXCLUDED.from_number,
+               to_number=EXCLUDED.to_number,
+               started_at=EXCLUDED.started_at,
+               duration_sec=EXCLUDED.duration_sec,
+               score=EXCLUDED.score,
+               meta=EXCLUDED.meta,
+               caller_type=EXCLUDED.caller_type,
+               active_client_id=EXCLUDED.active_client_id,
+               call_sequence=EXCLUDED.call_sequence
+             RETURNING (xmax = 0) AS inserted`,
+            [
+              targetUserId,
+              call.id,
+              call.direction || null,
+              call.caller_number || null,
+              call.to_number || null,
+              startedAt,
+              call.duration_sec || null,
+              call.score || 0,
+              JSON.stringify({ ...meta, ...enrichment }),
+              enrichment.callerType || 'new',
+              enrichment.activeClientId || null,
+              enrichment.callSequence || 1
+            ]
+          );
+          if (result.rows[0]?.inserted) newCount++;
+          else updatedCount++;
+        })
+      );
+
+      // Update sync cursor
+      if (syncMeta.latestTimestamp) {
+        await query(
+          'UPDATE client_profiles SET ctm_sync_cursor=$1 WHERE user_id=$2',
+          [new Date(syncMeta.latestTimestamp), targetUserId]
+        );
+      }
+    }
+
+    logEvent('calls:full-sync', 'Full sync completed', { 
+      userId: targetUserId, 
+      newCalls: newCount, 
+      updatedCalls: updatedCount,
+      pagesProcessed: syncMeta.pagesProcessed 
+    });
+
+    return res.json({
+      success: true,
+      newCalls: newCount,
+      updatedCalls: updatedCount,
+      syncMeta: {
+        pagesProcessed: syncMeta.pagesProcessed,
+        totalFetched: syncMeta.totalFetched,
+        startDate: syncMeta.startDate,
+        endDate: syncMeta.endDate
+      },
+      message: `Full sync complete: ${newCount} new, ${updatedCount} updated calls`
+    });
+  } catch (err) {
+    console.error('[calls:full-sync]', err);
+    return res.status(500).json({ message: 'Full sync failed: ' + (err.message || 'Unknown error') });
   }
 });
 
@@ -2606,6 +2902,947 @@ router.delete('/calls/:id/score', async (req, res) => {
 
 router.post('/calls/reset-cache', requireAdmin, async (_req, res) => {
   res.json({ message: 'Call cache reset (noop stub)' });
+});
+
+// POST /calls/:id/link-client - Link a call to an existing active client
+router.post('/calls/:id/link-client', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const callId = req.params.id;
+  const { activeClientId } = req.body;
+
+  if (!activeClientId) {
+    return res.status(400).json({ message: 'activeClientId is required' });
+  }
+
+  try {
+    // Verify the active client exists and belongs to the user
+    const clientRes = await query(
+      'SELECT id, client_name FROM active_clients WHERE id=$1 AND owner_user_id=$2',
+      [activeClientId, targetUserId]
+    );
+
+    if (!clientRes.rows.length) {
+      return res.status(404).json({ message: 'Active client not found' });
+    }
+
+    const client = clientRes.rows[0];
+
+    // Update the call log with the active client link
+    await query(
+      `UPDATE call_logs 
+       SET active_client_id=$1, caller_type='returning_customer', 
+           meta = meta || $2::jsonb
+       WHERE call_id=$3 AND (owner_user_id=$4 OR user_id=$4)`,
+      [activeClientId, JSON.stringify({ activeClient: { id: client.id, client_name: client.client_name } }), callId, targetUserId]
+    );
+
+    logEvent('calls:link-client', 'Call linked to active client', { callId, activeClientId, userId: targetUserId });
+
+    res.json({ 
+      message: `Call linked to ${client.client_name}`,
+      activeClient: client
+    });
+  } catch (err) {
+    console.error('[calls:link-client]', err);
+    res.status(500).json({ message: 'Failed to link call to client' });
+  }
+});
+
+// DELETE /calls/:id/link-client - Unlink a call from active client
+router.delete('/calls/:id/link-client', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const callId = req.params.id;
+
+  try {
+    // Re-enrich caller type (might still be a repeat caller)
+    const callRes = await query(
+      'SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)',
+      [callId, targetUserId]
+    );
+
+    if (!callRes.rows.length) {
+      return res.status(404).json({ message: 'Call not found' });
+    }
+
+    const phoneNumber = callRes.rows[0].from_number;
+    const enrichment = await enrichCallerType(query, targetUserId, phoneNumber, callId);
+
+    // If they were linked to a client but now unlinked, check if still a repeat caller
+    const newCallerType = enrichment.callSequence > 1 ? 'repeat' : 'new';
+
+    await query(
+      `UPDATE call_logs 
+       SET active_client_id=NULL, caller_type=$1,
+           meta = meta - 'activeClient'
+       WHERE call_id=$2 AND (owner_user_id=$3 OR user_id=$3)`,
+      [newCallerType, callId, targetUserId]
+    );
+
+    logEvent('calls:unlink-client', 'Call unlinked from active client', { callId, userId: targetUserId });
+
+    res.json({ message: 'Call unlinked from client', callerType: newCallerType });
+  } catch (err) {
+    console.error('[calls:unlink-client]', err);
+    res.status(500).json({ message: 'Failed to unlink call from client' });
+  }
+});
+
+// GET /calls/:id/history - Get call history for a phone number
+router.get('/calls/:id/history', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const callId = req.params.id;
+
+  try {
+    // Get the call to find the phone number
+    const callRes = await query(
+      'SELECT from_number FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)',
+      [callId, targetUserId]
+    );
+
+    if (!callRes.rows.length) {
+      return res.status(404).json({ message: 'Call not found' });
+    }
+
+    const phoneNumber = callRes.rows[0].from_number;
+    if (!phoneNumber) {
+      return res.json({ calls: [], message: 'No phone number recorded' });
+    }
+
+    // Get all calls from this phone number
+    const normalized = normalizePhoneNumber(phoneNumber);
+    const historyRes = await query(
+      `SELECT call_id, started_at, duration_sec, score, caller_type, 
+              meta->>'classification' as classification,
+              meta->>'classification_summary' as summary,
+              meta->>'category' as category
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1)
+         AND from_number IS NOT NULL 
+         AND REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')
+       ORDER BY started_at DESC
+       LIMIT 50`,
+      [targetUserId, normalized]
+    );
+
+    res.json({ 
+      calls: historyRes.rows,
+      phoneNumber,
+      totalCalls: historyRes.rows.length
+    });
+  } catch (err) {
+    console.error('[calls:history]', err);
+    res.status(500).json({ message: 'Failed to fetch call history' });
+  }
+});
+
+// GET /calls/:id/detail - Full lead detail with all related data
+router.get('/calls/:id/detail', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const callId = req.params.id;
+
+  try {
+    // Get the full call record
+    const callRes = await query(
+      `SELECT * FROM call_logs WHERE call_id=$1 AND (owner_user_id=$2 OR user_id=$2)`,
+      [callId, targetUserId]
+    );
+
+    if (!callRes.rows.length) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    const row = callRes.rows[0];
+    const call = buildCallsFromCache([row])[0];
+
+    // Get call history for this phone number
+    let callHistory = [];
+    if (row.from_number) {
+      const normalized = normalizePhoneNumber(row.from_number);
+      const historyRes = await query(
+        `SELECT call_id, started_at, duration_sec, score, caller_type,
+                meta->>'category' as category,
+                meta->>'classification_summary' as summary
+         FROM call_logs 
+         WHERE (owner_user_id=$1 OR user_id=$1)
+           AND from_number IS NOT NULL 
+           AND REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')
+           AND call_id != $3
+         ORDER BY started_at DESC
+         LIMIT 20`,
+        [targetUserId, normalized, callId]
+      );
+      callHistory = historyRes.rows;
+    }
+
+    // Get associated journey if any
+    let journey = null;
+    const journeyRes = await query(
+      `SELECT cj.*, s.name as service_name
+       FROM client_journeys cj
+       LEFT JOIN services s ON cj.service_id = s.id
+       WHERE cj.owner_user_id = $1 AND cj.lead_call_key = $2
+       LIMIT 1`,
+      [targetUserId, callId]
+    );
+    if (journeyRes.rows.length) {
+      journey = journeyRes.rows[0];
+      // Get journey steps
+      const stepsRes = await query(
+        `SELECT * FROM client_journey_steps WHERE journey_id = $1 ORDER BY position ASC`,
+        [journey.id]
+      );
+      journey.steps = stepsRes.rows;
+    }
+
+    // Get linked active client if any
+    let activeClient = null;
+    if (row.active_client_id) {
+      const clientRes = await query(
+        `SELECT ac.*, 
+                (SELECT json_agg(cs.*) FROM client_services cs WHERE cs.active_client_id = ac.id) as services
+         FROM active_clients ac
+         WHERE ac.id = $1`,
+        [row.active_client_id]
+      );
+      if (clientRes.rows.length) {
+        activeClient = clientRes.rows[0];
+      }
+    }
+
+    res.json({
+      lead: call,
+      callHistory,
+      journey,
+      activeClient
+    });
+  } catch (err) {
+    console.error('[calls:detail]', err);
+    res.status(500).json({ message: 'Failed to fetch lead detail' });
+  }
+});
+
+// GET /calls/stats - Lead statistics for dashboard
+router.get('/calls/stats', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 30));
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  try {
+    // Total leads in period
+    const totalRes = await query(
+      `SELECT COUNT(*) as total FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2`,
+      [targetUserId, startDate]
+    );
+
+    // Leads by category
+    const categoryRes = await query(
+      `SELECT meta->>'category' as category, COUNT(*) as count
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2
+       GROUP BY meta->>'category'
+       ORDER BY count DESC`,
+      [targetUserId, startDate]
+    );
+
+    // Leads by caller type
+    const callerTypeRes = await query(
+      `SELECT caller_type, COUNT(*) as count
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2
+       GROUP BY caller_type`,
+      [targetUserId, startDate]
+    );
+
+    // Leads by source
+    const sourceRes = await query(
+      `SELECT meta->>'source' as source, COUNT(*) as count
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2
+       GROUP BY meta->>'source'
+       ORDER BY count DESC
+       LIMIT 10`,
+      [targetUserId, startDate]
+    );
+
+    // Conversion rate (leads with active_client_id / total)
+    const convertedRes = await query(
+      `SELECT COUNT(*) as converted FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2 AND active_client_id IS NOT NULL`,
+      [targetUserId, startDate]
+    );
+
+    // Daily volume (last 14 days)
+    const volumeRes = await query(
+      `SELECT DATE(started_at) as date, COUNT(*) as count
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= NOW() - INTERVAL '14 days'
+       GROUP BY DATE(started_at)
+       ORDER BY date ASC`,
+      [targetUserId]
+    );
+
+    // Average rating
+    const ratingRes = await query(
+      `SELECT AVG(score) as avg_rating, COUNT(*) as rated_count
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) AND started_at >= $2 AND score > 0`,
+      [targetUserId, startDate]
+    );
+
+    // Needs attention count
+    const attentionRes = await query(
+      `SELECT COUNT(*) as count FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1) 
+         AND started_at >= $2 
+         AND meta->>'category' = 'needs_attention'`,
+      [targetUserId, startDate]
+    );
+
+    const total = parseInt(totalRes.rows[0]?.total || 0, 10);
+    const converted = parseInt(convertedRes.rows[0]?.converted || 0, 10);
+
+    res.json({
+      period: { days, startDate: startDate.toISOString() },
+      total,
+      converted,
+      conversionRate: total > 0 ? ((converted / total) * 100).toFixed(1) : 0,
+      needsAttention: parseInt(attentionRes.rows[0]?.count || 0, 10),
+      averageRating: parseFloat(ratingRes.rows[0]?.avg_rating || 0).toFixed(1),
+      ratedCount: parseInt(ratingRes.rows[0]?.rated_count || 0, 10),
+      byCategory: categoryRes.rows.reduce((acc, row) => {
+        acc[row.category || 'unreviewed'] = parseInt(row.count, 10);
+        return acc;
+      }, {}),
+      byCallerType: callerTypeRes.rows.reduce((acc, row) => {
+        acc[row.caller_type || 'new'] = parseInt(row.count, 10);
+        return acc;
+      }, {}),
+      bySource: sourceRes.rows.map(row => ({
+        source: row.source || 'Unknown',
+        count: parseInt(row.count, 10)
+      })),
+      dailyVolume: volumeRes.rows.map(row => ({
+        date: row.date,
+        count: parseInt(row.count, 10)
+      }))
+    });
+  } catch (err) {
+    console.error('[calls:stats]', err);
+    res.status(500).json({ message: 'Failed to fetch lead statistics' });
+  }
+});
+
+// GET /calls/export - Export leads to CSV
+router.get('/calls/export', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  
+  try {
+    const callsRes = await query(
+      `SELECT 
+        call_id,
+        from_number,
+        to_number,
+        direction,
+        started_at,
+        duration_sec,
+        score,
+        caller_type,
+        meta->>'caller_name' as caller_name,
+        meta->>'source' as source,
+        meta->>'category' as category,
+        meta->>'classification' as classification,
+        meta->>'classification_summary' as summary,
+        meta->>'region' as region
+       FROM call_logs 
+       WHERE (owner_user_id=$1 OR user_id=$1)
+       ORDER BY started_at DESC`,
+      [targetUserId]
+    );
+
+    // Build CSV
+    const headers = ['Call ID', 'Caller Name', 'Phone', 'Direction', 'Date', 'Duration (sec)', 'Rating', 'Type', 'Source', 'Category', 'Classification', 'Summary', 'Region'];
+    const rows = callsRes.rows.map(row => [
+      row.call_id,
+      row.caller_name || '',
+      row.from_number || '',
+      row.direction || '',
+      row.started_at ? new Date(row.started_at).toISOString() : '',
+      row.duration_sec || 0,
+      row.score || '',
+      row.caller_type || 'new',
+      row.source || '',
+      row.category || 'unreviewed',
+      row.classification || '',
+      (row.summary || '').replace(/"/g, '""'),
+      row.region || ''
+    ]);
+
+    const escapeCsv = (val) => {
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const csv = [
+      headers.join(','),
+      ...rows.map(row => row.map(escapeCsv).join(','))
+    ].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="leads-export-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[calls:export]', err);
+    res.status(500).json({ message: 'Failed to export leads' });
+  }
+});
+
+// =====================
+// PIPELINE STAGES
+// =====================
+
+// GET /pipeline-stages - List all pipeline stages
+router.get('/pipeline-stages', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  try {
+    const result = await query(
+      'SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC',
+      [targetUserId]
+    );
+    
+    // If no stages exist, create default ones
+    if (result.rows.length === 0) {
+      const defaultStages = [
+        { name: 'New Lead', color: '#6366f1', position: 0 },
+        { name: 'Contacted', color: '#3b82f6', position: 1 },
+        { name: 'Qualified', color: '#10b981', position: 2 },
+        { name: 'Proposal Sent', color: '#f59e0b', position: 3 },
+        { name: 'Won', color: '#22c55e', position: 4, is_won_stage: true },
+        { name: 'Lost', color: '#ef4444', position: 5, is_lost_stage: true }
+      ];
+      
+      for (const stage of defaultStages) {
+        await query(
+          `INSERT INTO lead_pipeline_stages (owner_user_id, name, color, position, is_won_stage, is_lost_stage)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [targetUserId, stage.name, stage.color, stage.position, stage.is_won_stage || false, stage.is_lost_stage || false]
+        );
+      }
+      
+      const newResult = await query(
+        'SELECT * FROM lead_pipeline_stages WHERE owner_user_id = $1 ORDER BY position ASC',
+        [targetUserId]
+      );
+      return res.json({ stages: newResult.rows });
+    }
+    
+    res.json({ stages: result.rows });
+  } catch (err) {
+    console.error('[pipeline-stages:list]', err);
+    res.status(500).json({ message: 'Failed to fetch pipeline stages' });
+  }
+});
+
+// POST /pipeline-stages - Create a new pipeline stage
+router.post('/pipeline-stages', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { name, color, position, is_won_stage, is_lost_stage } = req.body;
+  
+  if (!name?.trim()) {
+    return res.status(400).json({ message: 'Stage name is required' });
+  }
+  
+  try {
+    // Get max position if not provided
+    let pos = position;
+    if (pos === undefined || pos === null) {
+      const maxRes = await query(
+        'SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM lead_pipeline_stages WHERE owner_user_id = $1',
+        [targetUserId]
+      );
+      pos = maxRes.rows[0]?.next_pos || 0;
+    }
+    
+    const result = await query(
+      `INSERT INTO lead_pipeline_stages (owner_user_id, name, color, position, is_won_stage, is_lost_stage)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [targetUserId, name.trim(), color || '#6366f1', pos, is_won_stage || false, is_lost_stage || false]
+    );
+    
+    res.json({ stage: result.rows[0] });
+  } catch (err) {
+    console.error('[pipeline-stages:create]', err);
+    res.status(500).json({ message: 'Failed to create pipeline stage' });
+  }
+});
+
+// PUT /pipeline-stages/:id - Update a pipeline stage
+router.put('/pipeline-stages/:id', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  const { name, color, position, is_won_stage, is_lost_stage } = req.body;
+  
+  try {
+    const fields = [];
+    const params = [];
+    let paramIndex = 1;
+    
+    if (name !== undefined) {
+      fields.push(`name = $${paramIndex++}`);
+      params.push(name.trim());
+    }
+    if (color !== undefined) {
+      fields.push(`color = $${paramIndex++}`);
+      params.push(color);
+    }
+    if (position !== undefined) {
+      fields.push(`position = $${paramIndex++}`);
+      params.push(position);
+    }
+    if (is_won_stage !== undefined) {
+      fields.push(`is_won_stage = $${paramIndex++}`);
+      params.push(is_won_stage);
+    }
+    if (is_lost_stage !== undefined) {
+      fields.push(`is_lost_stage = $${paramIndex++}`);
+      params.push(is_lost_stage);
+    }
+    
+    if (fields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    fields.push(`updated_at = NOW()`);
+    params.push(id, targetUserId);
+    
+    const result = await query(
+      `UPDATE lead_pipeline_stages SET ${fields.join(', ')} 
+       WHERE id = $${paramIndex} AND owner_user_id = $${paramIndex + 1}
+       RETURNING *`,
+      params
+    );
+    
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Pipeline stage not found' });
+    }
+    
+    res.json({ stage: result.rows[0] });
+  } catch (err) {
+    console.error('[pipeline-stages:update]', err);
+    res.status(500).json({ message: 'Failed to update pipeline stage' });
+  }
+});
+
+// DELETE /pipeline-stages/:id - Delete a pipeline stage
+router.delete('/pipeline-stages/:id', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  
+  try {
+    // Clear stage from any calls using it
+    await query(
+      'UPDATE call_logs SET pipeline_stage_id = NULL WHERE pipeline_stage_id = $1',
+      [id]
+    );
+    
+    const result = await query(
+      'DELETE FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2 RETURNING id',
+      [id, targetUserId]
+    );
+    
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Pipeline stage not found' });
+    }
+    
+    res.json({ message: 'Pipeline stage deleted' });
+  } catch (err) {
+    console.error('[pipeline-stages:delete]', err);
+    res.status(500).json({ message: 'Failed to delete pipeline stage' });
+  }
+});
+
+// PUT /calls/:id/stage - Move a lead to a pipeline stage
+router.put('/calls/:id/stage', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id: callId } = req.params;
+  const { stage_id } = req.body;
+  
+  try {
+    // Verify stage belongs to user if provided
+    if (stage_id) {
+      const stageRes = await query(
+        'SELECT id FROM lead_pipeline_stages WHERE id = $1 AND owner_user_id = $2',
+        [stage_id, targetUserId]
+      );
+      if (!stageRes.rows.length) {
+        return res.status(404).json({ message: 'Pipeline stage not found' });
+      }
+    }
+    
+    const result = await query(
+      `UPDATE call_logs SET pipeline_stage_id = $1 
+       WHERE call_id = $2 AND (owner_user_id = $3 OR user_id = $3)
+       RETURNING call_id`,
+      [stage_id || null, callId, targetUserId]
+    );
+    
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+    
+    res.json({ message: 'Lead moved to stage', callId, stageId: stage_id });
+  } catch (err) {
+    console.error('[calls:stage]', err);
+    res.status(500).json({ message: 'Failed to update lead stage' });
+  }
+});
+
+// =====================
+// LEAD NOTES (Communication Log)
+// =====================
+
+// GET /leads/:callId/notes - Get all notes for a lead
+router.get('/leads/:callId/notes', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { callId } = req.params;
+  
+  try {
+    const result = await query(
+      `SELECT ln.*, u.first_name, u.last_name, u.email as author_email
+       FROM lead_notes ln
+       LEFT JOIN users u ON ln.author_id = u.id
+       WHERE ln.owner_user_id = $1 AND ln.call_id = $2
+       ORDER BY ln.created_at DESC`,
+      [targetUserId, callId]
+    );
+    
+    const notes = result.rows.map(row => ({
+      ...row,
+      author_name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.author_email || 'Unknown'
+    }));
+    
+    res.json({ notes });
+  } catch (err) {
+    console.error('[lead-notes:list]', err);
+    res.status(500).json({ message: 'Failed to fetch lead notes' });
+  }
+});
+
+// POST /leads/:callId/notes - Add a note to a lead
+router.post('/leads/:callId/notes', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const authorId = req.user.id;
+  const { callId } = req.params;
+  const { body, note_type, metadata } = req.body;
+  
+  if (!body?.trim()) {
+    return res.status(400).json({ message: 'Note body is required' });
+  }
+  
+  try {
+    // Verify the lead exists for this user
+    const callRes = await query(
+      'SELECT call_id FROM call_logs WHERE call_id = $1 AND (owner_user_id = $2 OR user_id = $2)',
+      [callId, targetUserId]
+    );
+    
+    if (!callRes.rows.length) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+    
+    const result = await query(
+      `INSERT INTO lead_notes (owner_user_id, call_id, author_id, note_type, body, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [targetUserId, callId, authorId, note_type || 'note', body.trim(), metadata || {}]
+    );
+    
+    // Get author info
+    const userRes = await query('SELECT first_name, last_name, email FROM users WHERE id = $1', [authorId]);
+    const user = userRes.rows[0] || {};
+    
+    res.json({ 
+      note: {
+        ...result.rows[0],
+        author_name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Unknown'
+      }
+    });
+  } catch (err) {
+    console.error('[lead-notes:create]', err);
+    res.status(500).json({ message: 'Failed to add note' });
+  }
+});
+
+// DELETE /leads/:callId/notes/:noteId - Delete a note
+router.delete('/leads/:callId/notes/:noteId', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { callId, noteId } = req.params;
+  
+  try {
+    const result = await query(
+      'DELETE FROM lead_notes WHERE id = $1 AND call_id = $2 AND owner_user_id = $3 RETURNING id',
+      [noteId, callId, targetUserId]
+    );
+    
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Note not found' });
+    }
+    
+    res.json({ message: 'Note deleted' });
+  } catch (err) {
+    console.error('[lead-notes:delete]', err);
+    res.status(500).json({ message: 'Failed to delete note' });
+  }
+});
+
+// =====================
+// LEAD TAGS
+// =====================
+
+// GET /lead-tags - Get all tags for this user
+router.get('/lead-tags', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  try {
+    const result = await query(
+      'SELECT * FROM lead_tags WHERE owner_user_id = $1 ORDER BY name ASC',
+      [targetUserId]
+    );
+    res.json({ tags: result.rows });
+  } catch (err) {
+    console.error('[lead-tags:list]', err);
+    res.status(500).json({ message: 'Failed to fetch tags' });
+  }
+});
+
+// POST /lead-tags - Create a new tag
+router.post('/lead-tags', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { name, color } = req.body;
+  
+  if (!name?.trim()) {
+    return res.status(400).json({ message: 'Tag name is required' });
+  }
+  
+  try {
+    const result = await query(
+      `INSERT INTO lead_tags (owner_user_id, name, color)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (owner_user_id, name) DO UPDATE SET color = EXCLUDED.color
+       RETURNING *`,
+      [targetUserId, name.trim(), color || '#6366f1']
+    );
+    res.json({ tag: result.rows[0] });
+  } catch (err) {
+    console.error('[lead-tags:create]', err);
+    res.status(500).json({ message: 'Failed to create tag' });
+  }
+});
+
+// DELETE /lead-tags/:id - Delete a tag
+router.delete('/lead-tags/:id', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  
+  try {
+    await query(
+      'DELETE FROM lead_tags WHERE id = $1 AND owner_user_id = $2',
+      [id, targetUserId]
+    );
+    res.json({ message: 'Tag deleted' });
+  } catch (err) {
+    console.error('[lead-tags:delete]', err);
+    res.status(500).json({ message: 'Failed to delete tag' });
+  }
+});
+
+// GET /calls/:id/tags - Get tags for a specific call
+router.get('/calls/:id/tags', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id: callId } = req.params;
+  
+  try {
+    const result = await query(
+      `SELECT lt.* FROM lead_tags lt
+       JOIN call_log_tags clt ON lt.id = clt.tag_id
+       WHERE clt.call_id = $1 AND lt.owner_user_id = $2
+       ORDER BY lt.name ASC`,
+      [callId, targetUserId]
+    );
+    res.json({ tags: result.rows });
+  } catch (err) {
+    console.error('[call-tags:list]', err);
+    res.status(500).json({ message: 'Failed to fetch call tags' });
+  }
+});
+
+// POST /calls/:id/tags - Add tag to a call
+router.post('/calls/:id/tags', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id: callId } = req.params;
+  const { tag_id, tag_name, tag_color } = req.body;
+  
+  try {
+    let tagId = tag_id;
+    
+    // If no tag_id but tag_name provided, create or get the tag
+    if (!tagId && tag_name) {
+      const tagResult = await query(
+        `INSERT INTO lead_tags (owner_user_id, name, color)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (owner_user_id, name) DO UPDATE SET color = COALESCE(EXCLUDED.color, lead_tags.color)
+         RETURNING *`,
+        [targetUserId, tag_name.trim(), tag_color || '#6366f1']
+      );
+      tagId = tagResult.rows[0].id;
+    }
+    
+    if (!tagId) {
+      return res.status(400).json({ message: 'Tag ID or name is required' });
+    }
+    
+    // Add the tag to the call
+    await query(
+      `INSERT INTO call_log_tags (call_id, tag_id)
+       VALUES ($1, $2)
+       ON CONFLICT (call_id, tag_id) DO NOTHING`,
+      [callId, tagId]
+    );
+    
+    // Return updated tags for this call
+    const result = await query(
+      `SELECT lt.* FROM lead_tags lt
+       JOIN call_log_tags clt ON lt.id = clt.tag_id
+       WHERE clt.call_id = $1 AND lt.owner_user_id = $2
+       ORDER BY lt.name ASC`,
+      [callId, targetUserId]
+    );
+    
+    res.json({ tags: result.rows });
+  } catch (err) {
+    console.error('[call-tags:add]', err);
+    res.status(500).json({ message: 'Failed to add tag' });
+  }
+});
+
+// DELETE /calls/:id/tags/:tagId - Remove tag from a call
+router.delete('/calls/:id/tags/:tagId', async (req, res) => {
+  const { id: callId, tagId } = req.params;
+  
+  try {
+    await query(
+      'DELETE FROM call_log_tags WHERE call_id = $1 AND tag_id = $2',
+      [callId, tagId]
+    );
+    res.json({ message: 'Tag removed from call' });
+  } catch (err) {
+    console.error('[call-tags:remove]', err);
+    res.status(500).json({ message: 'Failed to remove tag' });
+  }
+});
+
+// PUT /calls/:id/category - Update call category/classification
+router.put('/calls/:id/category', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id: callId } = req.params;
+  const { category } = req.body;
+  
+  const validCategories = ['converted', 'warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'];
+  
+  if (!validCategories.includes(category)) {
+    return res.status(400).json({ message: 'Invalid category' });
+  }
+  
+  try {
+    await query(
+      `UPDATE call_logs 
+       SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{category}', $1::jsonb)
+       WHERE call_id = $2 AND (owner_user_id = $3 OR user_id = $3)`,
+      [JSON.stringify(category), callId, targetUserId]
+    );
+    
+    res.json({ message: 'Category updated', category });
+  } catch (err) {
+    console.error('[calls:category]', err);
+    res.status(500).json({ message: 'Failed to update category' });
+  }
+});
+
+// =====================
+// SAVED VIEWS
+// =====================
+
+// GET /lead-views - Get saved views
+router.get('/lead-views', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  try {
+    const result = await query(
+      'SELECT * FROM lead_saved_views WHERE owner_user_id = $1 ORDER BY created_at DESC',
+      [targetUserId]
+    );
+    res.json({ views: result.rows });
+  } catch (err) {
+    console.error('[lead-views:list]', err);
+    res.status(500).json({ message: 'Failed to fetch saved views' });
+  }
+});
+
+// POST /lead-views - Create a saved view
+router.post('/lead-views', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { name, filters, is_default } = req.body;
+  
+  if (!name?.trim()) {
+    return res.status(400).json({ message: 'View name is required' });
+  }
+  
+  try {
+    // If setting as default, clear other defaults
+    if (is_default) {
+      await query(
+        'UPDATE lead_saved_views SET is_default = FALSE WHERE owner_user_id = $1',
+        [targetUserId]
+      );
+    }
+    
+    const result = await query(
+      `INSERT INTO lead_saved_views (owner_user_id, name, filters, is_default)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [targetUserId, name.trim(), filters || {}, is_default || false]
+    );
+    
+    res.json({ view: result.rows[0] });
+  } catch (err) {
+    console.error('[lead-views:create]', err);
+    res.status(500).json({ message: 'Failed to create saved view' });
+  }
+});
+
+// DELETE /lead-views/:id - Delete a saved view
+router.delete('/lead-views/:id', async (req, res) => {
+  const targetUserId = req.portalUserId || req.user.id;
+  const { id } = req.params;
+  
+  try {
+    const result = await query(
+      'DELETE FROM lead_saved_views WHERE id = $1 AND owner_user_id = $2 RETURNING id',
+      [id, targetUserId]
+    );
+    
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'View not found' });
+    }
+    
+    res.json({ message: 'View deleted' });
+  } catch (err) {
+    console.error('[lead-views:delete]', err);
+    res.status(500).json({ message: 'Failed to delete view' });
+  }
 });
 
 router.get('/analytics', async (req, res) => {
@@ -2829,6 +4066,12 @@ router.get('/journeys', async (req, res) => {
     if (req.query.status && JOURNEY_STATUS_OPTIONS.includes(req.query.status)) {
       filters.status = req.query.status;
     }
+    if (req.query.active_client_id) {
+      filters.active_client_id = req.query.active_client_id;
+    }
+    if (req.query.include_archived === 'true') {
+      filters.includeArchived = true;
+    }
     const journeys = await fetchJourneysForOwner(ownerId, filters);
     res.json({ journeys });
   } catch (err) {
@@ -2864,11 +4107,14 @@ router.post('/journeys', async (req, res) => {
     symptoms = [],
     status = 'pending',
     next_action_at,
-    notes_summary
+    notes_summary,
+    service_id,
+    parent_journey_id,
+    force_new = false // If true, always create a new journey (for multi-journey support)
   } = req.body || {};
 
-  if (!client_name && !client_phone && !client_email && !lead_call_id) {
-    return res.status(400).json({ message: 'Client name or contact info is required' });
+  if (!client_name && !client_phone && !client_email && !lead_call_id && !active_client_id) {
+    return res.status(400).json({ message: 'Client name, contact info, or active client is required' });
   }
 
   const normalizedSymptoms = sanitizeSymptomList(symptoms);
@@ -2876,18 +4122,16 @@ router.post('/journeys', async (req, res) => {
   const desiredStatus = JOURNEY_STATUS_OPTIONS.includes(status) ? status : 'pending';
   const nextActionAt = parseDateValue(next_action_at);
 
+  // If force_new is true, skip the existing journey lookup (allows multiple journeys per client)
   const findExisting = async (callKey) => {
+    if (force_new) return null;
+    
     if (callKey) {
+      // Only find existing journey by call key, not by active_client_id
+      // This allows multiple journeys per active client
       const { rows } = await query('SELECT id FROM client_journeys WHERE owner_user_id = $1 AND lead_call_key = $2 LIMIT 1', [
         ownerId,
         callKey
-      ]);
-      if (rows.length) return rows[0].id;
-    }
-    if (active_client_id) {
-      const { rows } = await query('SELECT id FROM client_journeys WHERE owner_user_id = $1 AND active_client_id = $2 LIMIT 1', [
-        ownerId,
-        active_client_id
       ]);
       if (rows.length) return rows[0].id;
     }
@@ -2913,8 +4157,9 @@ router.post('/journeys', async (req, res) => {
              notes_summary = COALESCE($7, notes_summary),
              lead_call_key = COALESCE($8, lead_call_key),
              lead_call_id = COALESCE($9, lead_call_id),
+             service_id = COALESCE($10, service_id),
              updated_at = NOW()
-         WHERE id = $10 AND owner_user_id = $11`,
+         WHERE id = $11 AND owner_user_id = $12`,
         [
           client_name || null,
           client_phone || null,
@@ -2925,6 +4170,7 @@ router.post('/journeys', async (req, res) => {
           notes_summary || null,
           leadCallKey,
           leadCallUuid,
+          service_id || null,
           journeyId,
           ownerId
         ]
@@ -2943,9 +4189,11 @@ router.post('/journeys', async (req, res) => {
            status,
            paused,
            next_action_at,
-           notes_summary
+           notes_summary,
+           service_id,
+           parent_journey_id
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10,$11)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10,$11,$12,$13)
          RETURNING id`,
         [
           ownerId,
@@ -2958,7 +4206,9 @@ router.post('/journeys', async (req, res) => {
           symptomsJsonPayload,
           desiredStatus,
           nextActionAt,
-          notes_summary || null
+          notes_summary || null,
+          service_id || null,
+          parent_journey_id || null
         ]
       );
       resultingId = insert.rows[0].id;

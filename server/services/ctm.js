@@ -57,7 +57,7 @@ function getAutoStarRating(category) {
  * 2 = Not a fit (negative)
  * 3 = Solid lead (very_good)
  * 4 = Great lead (very_good)
- * 5 = Booked appointment (applicant/converted)
+ * 5 = Converted (agreed to service)
  */
 function getCategoryFromRating(score) {
   switch (score) {
@@ -70,7 +70,7 @@ function getCategoryFromRating(score) {
     case 4:
       return 'very_good';
     case 5:
-      return 'applicant'; // Booked/converted
+      return 'converted';
     default:
       return null; // No rating - use AI classification
   }
@@ -378,16 +378,67 @@ export async function classifyContent(prompt, transcript, message) {
   }
 }
 
-async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, maxPages = 5, extraParams = {}) {
+/**
+ * Normalize phone number for consistent comparison
+ * Strips all non-digit characters except leading +
+ */
+export function normalizePhoneNumber(phone) {
+  if (!phone) return '';
+  const str = String(phone).trim();
+  // Keep leading + if present, strip everything else non-numeric
+  if (str.startsWith('+')) {
+    return '+' + str.slice(1).replace(/\D/g, '');
+  }
+  return str.replace(/\D/g, '');
+}
+
+/**
+ * Fetch calls from CTM API with pagination support
+ * @param {Object} credentials - CTM API credentials
+ * @param {Object} options - Fetch options
+ * @param {Date|string} options.sinceTimestamp - Only fetch calls after this timestamp (incremental sync)
+ * @param {number} options.perPage - Results per page (default 100)
+ * @param {number} options.maxPages - Max pages to fetch, 0 = unlimited (default 0 for full sync)
+ * @param {boolean} options.fullSync - If true, ignores sinceTimestamp and fetches all available data
+ * @param {Object} options.extraParams - Additional CTM API params
+ */
+async function fetchCtmCalls({ accountId, apiKey, apiSecret }, options = {}) {
+  const {
+    sinceTimestamp = null,
+    perPage = 100,
+    maxPages = 0, // 0 = unlimited
+    fullSync = false,
+    extraParams = {}
+  } = options;
+
   if (!accountId || !apiKey || !apiSecret) {
     throw new Error('CallTrackingMetrics credentials not configured.');
   }
-  // CTM date filters are day-based; include tomorrow to ensure “today” is fully captured across timezones
+
+  // CTM date filters are day-based; include tomorrow to ensure "today" is fully captured across timezones
   const now = Date.now();
-  const startDate = new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const endDate = new Date(now + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  
+  // For incremental sync, use sinceTimestamp; for full sync, go back 1 year by default
+  let startDate;
+  if (fullSync || !sinceTimestamp) {
+    // Full sync: fetch up to 1 year of history (CTM may have its own limits)
+    const defaultLookback = Number(process.env.CTM_FULL_SYNC_DAYS || 365);
+    startDate = new Date(now - defaultLookback * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  } else {
+    // Incremental sync: start from last sync cursor
+    const cursorDate = new Date(sinceTimestamp);
+    // Go back 1 day from cursor to catch any edge cases with timezone/timing
+    cursorDate.setDate(cursorDate.getDate() - 1);
+    startDate = cursorDate.toISOString().slice(0, 10);
+  }
+
   const calls = [];
-  for (let page = 1; page <= maxPages; page += 1) {
+  let page = 1;
+  let latestTimestamp = null;
+  const pageLimit = maxPages > 0 ? maxPages : 1000; // Safety limit
+
+  while (page <= pageLimit) {
     const resp = await axios.get(`${CTM_BASE}/api/v1/accounts/${accountId}/calls`, {
       params: {
         per_page: perPage,
@@ -401,8 +452,9 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
         Authorization: `Basic ${Buffer.from(`${apiKey}:${apiSecret}`).toString('base64')}`,
         Accept: 'application/json'
       },
-      timeout: 20000
+      timeout: 30000
     });
+
     const payload = Array.isArray(resp.data?.data?.calls)
       ? resp.data.data.calls
       : Array.isArray(resp.data?.calls)
@@ -410,19 +462,56 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, perPage = 100, ma
       : Array.isArray(resp.data?.data)
       ? resp.data.data
       : [];
+
     if (!payload.length) break;
+
+    // Track the latest timestamp for cursor update
+    for (const call of payload) {
+      const { timestampMs } = parseTimestamp(call);
+      if (timestampMs && (!latestTimestamp || timestampMs > latestTimestamp)) {
+        latestTimestamp = timestampMs;
+      }
+    }
+
     calls.push(...payload);
+
+    // Stop if we got fewer results than requested (last page)
     if (payload.length < perPage) break;
+
+    page += 1;
   }
-  return calls;
+
+  return {
+    calls,
+    latestTimestamp,
+    pagesProcessed: page,
+    startDate,
+    endDate
+  };
 }
 
-export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT, existingRows = [], autoStarEnabled = false, syncRatings = false }) {
+export async function pullCallsFromCtm({ 
+  credentials, 
+  prompt = DEFAULT_AI_PROMPT, 
+  existingRows = [], 
+  autoStarEnabled = false, 
+  syncRatings = false,
+  sinceTimestamp = null,
+  fullSync = false 
+}) {
   const existingMap = new Map();
   existingRows.forEach((row) => {
     if (row && row.call_id) existingMap.set(row.call_id, row);
   });
-  const rawCalls = await fetchCtmCalls(credentials);
+  
+  const fetchResult = await fetchCtmCalls(credentials, {
+    sinceTimestamp,
+    fullSync,
+    perPage: 100,
+    maxPages: 0 // Unlimited for full pagination
+  });
+  
+  const rawCalls = fetchResult.calls || [];
   const limited = rawCalls.slice(0, MAX_CALLS);
   const results = [];
   let classified = 0;
@@ -447,6 +536,8 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     
     // Check if CTM rating changed (for two-way sync)
     const ratingChangedInCtm = syncRatings && existing && ctmScore !== dbScore && ctmScore > 0;
+    // Check if rating was removed (had rating before, now 0)
+    const ratingWasRemoved = syncRatings && existing && dbScore > 0 && ctmScore === 0;
     
     // Use CTM score as authoritative when syncing ratings
     const existingScore = syncRatings ? ctmScore : (dbScore || ctmScore);
@@ -469,25 +560,38 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
     const hasExistingCtmRating = ctmScore > 0;
     const categoryFromRating = getCategoryFromRating(ctmScore);
     
+    // IMPORTANT: If CTM has a rating, it ALWAYS determines the category
+    // This ensures two-way sync works - when ratings change in CTM, category updates
+    if (hasExistingCtmRating && categoryFromRating) {
+      category = categoryFromRating;
+    } else if (ratingWasRemoved) {
+      // Rating was removed in CTM - reset to unreviewed
+      category = 'unreviewed';
+    }
+    
+    // Now handle classification and summary (AI analysis)
     if (unansweredLikely && !hasConversation) {
       classification = 'unanswered';
-      summary = 'Call was unanswered with no voicemail.';
-      category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : 'unanswered';
+      summary = summary || 'Call was unanswered with no voicemail.';
+      // Only set category if no CTM rating
+      if (!hasExistingCtmRating) {
+        category = 'unanswered';
+      }
     } else if (stubMessage && !transcript) {
       classification = 'neutral';
-      summary = 'Call logged from CTM metadata.';
-      category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : 'neutral';
+      summary = summary || 'Call logged from CTM metadata.';
+      // Only set category if no CTM rating
+      if (!hasExistingCtmRating) {
+        category = 'neutral';
+      }
     } else if (hasConversation) {
-      // Run AI classification if we don't have a summary yet (even if lead has a rating)
+      // Run AI classification if we don't have a summary yet
       if (!summary && classified < CLASSIFY_LIMIT) {
         const ai = await classifyContent(prompt, transcript, message);
         classification = ai.classification;
         summary = ai.summary;
         // Only use AI category if there's no existing CTM rating
-        // If CTM has a rating, use that to determine category (user/manager already rated it)
-        if (hasExistingCtmRating && categoryFromRating) {
-          category = categoryFromRating;
-        } else {
+        if (!hasExistingCtmRating) {
           category = ai.category;
           shouldAutoStar = true; // Only eligible for auto-star if no existing rating
         }
@@ -495,20 +599,16 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
       } else if (!classification) {
         classification = 'unreviewed';
         summary = summary || 'AI classification skipped.';
-        category = hasExistingCtmRating && categoryFromRating ? categoryFromRating : (category || 'unreviewed');
-      } else if (hasExistingCtmRating && categoryFromRating) {
-        // Has existing classification but CTM rating takes precedence for category
-        category = categoryFromRating;
+        if (!hasExistingCtmRating) {
+          category = category || 'unreviewed';
+        }
       }
-    } else if (hasExistingCtmRating && categoryFromRating) {
-      // No conversation but has CTM rating - use rating for category
-      category = categoryFromRating;
     }
 
     // If voicemail but this is a good/applicant lead, elevate to needs_attention
+    // Only if NOT rated by CTM (rating takes priority)
     const goodLead = category === 'warm' || category === 'very_good' || category === 'applicant';
     if (voicemailFlag && goodLead && !hasExistingCtmRating) {
-      // Only elevate to needs_attention if not already rated
       category = 'needs_attention';
     }
     
@@ -565,7 +665,18 @@ export async function pullCallsFromCtm({ credentials, prompt = DEFAULT_AI_PROMPT
       hadExistingRating: hasExistingCtmRating
     });
   }
-  return results;
+  
+  return {
+    results,
+    syncMeta: {
+      latestTimestamp: fetchResult.latestTimestamp,
+      pagesProcessed: fetchResult.pagesProcessed,
+      startDate: fetchResult.startDate,
+      endDate: fetchResult.endDate,
+      totalFetched: rawCalls.length,
+      processedCount: results.length
+    }
+  };
 }
 
 function isLikelyUnanswered(raw = {}) {
@@ -633,9 +744,59 @@ export function buildCallsFromCache(rows = []) {
     .map((row) => {
       if (!row.call_id) return null;
       const meta = row.meta || {};
+      const durationSec = row.duration_sec || meta.duration_sec || 0;
+      const direction = row.direction || meta.direction || 'inbound';
+      const startedAt = row.started_at || meta.started_at;
+      
+      // Format duration as human-readable string
+      const formatDuration = (seconds) => {
+        if (!seconds || seconds < 1) return '0s';
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins > 0) return `${mins}m ${secs}s`;
+        return `${secs}s`;
+      };
+      
+      // Calculate time ago for relative timestamps
+      const getTimeAgo = (timestamp) => {
+        if (!timestamp) return null;
+        const now = Date.now();
+        const then = new Date(timestamp).getTime();
+        const diffMs = now - then;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+        return `${Math.floor(diffDays / 30)}mo ago`;
+      };
+      
       return {
         id: row.call_id,
         rating: row.score || 0,
+        caller_type: row.caller_type || meta.callerType || 'new',
+        active_client_id: row.active_client_id || meta.activeClientId || null,
+        call_sequence: row.call_sequence || meta.callSequence || 1,
+        active_client: meta.activeClient || null,
+        previous_calls: meta.previousCalls || [],
+        // Explicit fields for UI
+        duration_sec: durationSec,
+        duration_formatted: formatDuration(durationSec),
+        direction: direction,
+        is_inbound: direction === 'inbound' || direction === 'in',
+        started_at: startedAt,
+        time_ago: getTimeAgo(startedAt),
+        from_number: row.from_number || meta.caller_number || null,
+        to_number: row.to_number || meta.to_number || null,
+        // Explicitly include transcript fields
+        transcript: meta.transcript || null,
+        transcript_url: meta.transcript_url || null,
+        recording_url: meta.recording_url || (meta.assets?.[0]?.url) || null,
+        message: meta.message || null,
         ...meta
       };
     })
@@ -736,4 +897,110 @@ export async function fetchPhoneInteractionSources(credentials, phoneNumber, per
     if (payload.length < perPage) break;
   }
   return Array.from(sources);
+}
+
+/**
+ * Enrich a call with caller type based on phone number
+ * Determines if caller is: new, repeat, or returning_customer
+ * @param {Object} db - Database query function
+ * @param {string} userId - Owner user ID
+ * @param {string} phoneNumber - Caller's phone number
+ * @param {string} currentCallId - Current call's ID (to exclude from count)
+ * @returns {Object} { callerType, activeClientId, callSequence, previousCalls }
+ */
+export async function enrichCallerType(query, userId, phoneNumber, currentCallId = null) {
+  if (!phoneNumber) {
+    return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
+  }
+  
+  const normalized = normalizePhoneNumber(phoneNumber);
+  if (!normalized || normalized.length < 7) {
+    return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
+  }
+
+  // 1. Check active_clients for exact phone match
+  const clientResult = await query(
+    `SELECT id, client_name, client_email, status 
+     FROM active_clients 
+     WHERE owner_user_id = $1 
+       AND client_phone IS NOT NULL 
+       AND REGEXP_REPLACE(client_phone, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')
+       AND (archived_at IS NULL OR archived_at > NOW())
+     LIMIT 1`,
+    [userId, normalized]
+  );
+  
+  // 2. Get previous calls from this phone number
+  let callFilter = `owner_user_id = $1 
+    AND from_number IS NOT NULL 
+    AND REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')`;
+  const params = [userId, normalized];
+  
+  if (currentCallId) {
+    callFilter += ` AND call_id != $3`;
+    params.push(currentCallId);
+  }
+  
+  const previousCallsResult = await query(
+    `SELECT call_id, started_at, score, meta->>'classification' as classification,
+            meta->>'classification_summary' as summary
+     FROM call_logs 
+     WHERE ${callFilter}
+     ORDER BY started_at DESC
+     LIMIT 10`,
+    params
+  );
+  
+  const previousCalls = previousCallsResult?.rows || [];
+  const callSequence = previousCalls.length + 1;
+  
+  // 3. Determine caller type
+  if (clientResult?.rows?.length > 0) {
+    const client = clientResult.rows[0];
+    return { 
+      callerType: 'returning_customer', 
+      activeClientId: client.id,
+      activeClient: client,
+      callSequence,
+      previousCalls 
+    };
+  }
+  
+  if (previousCalls.length > 0) {
+    return { 
+      callerType: 'repeat', 
+      activeClientId: null, 
+      callSequence,
+      previousCalls 
+    };
+  }
+  
+  return { 
+    callerType: 'new', 
+    activeClientId: null, 
+    callSequence: 1,
+    previousCalls: [] 
+  };
+}
+
+/**
+ * Get all journeys for an active client
+ * @param {Function} query - Database query function
+ * @param {string} activeClientId - Active client UUID
+ * @returns {Array} List of journeys with service info
+ */
+export async function getClientJourneys(query, activeClientId) {
+  if (!activeClientId) return [];
+  
+  const result = await query(
+    `SELECT cj.*, s.name as service_name, s.description as service_description
+     FROM client_journeys cj
+     LEFT JOIN services s ON cj.service_id = s.id
+     WHERE cj.active_client_id = $1 
+       AND (cj.archived_at IS NULL OR cj.archived_at > NOW())
+     ORDER BY cj.created_at DESC`,
+    [activeClientId]
+  );
+  
+  return result?.rows || [];
 }
