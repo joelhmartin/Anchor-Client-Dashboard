@@ -141,7 +141,7 @@ const CATEGORY_COLORS = {
   applicant: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
   needs_attention: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' },
   unanswered: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' },
-  negative: { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' },
+  not_a_fit: { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' },
   spam: { bg: '#fce7f3', text: '#9d174d', border: '#f9a8d4' },
   neutral: { bg: '#f5f5f5', text: '#525252', border: '#d4d4d4' },
   unreviewed: { bg: '#e0e7ff', text: '#3730a3', border: '#a5b4fc' }
@@ -2316,7 +2316,7 @@ export default function ClientPortal() {
                 'applicant',
                 'needs_attention',
                 'unanswered',
-                'negative',
+                'not_a_fit',
                 'spam',
                 'neutral',
                 'unreviewed'
@@ -4185,7 +4185,7 @@ export default function ClientPortal() {
                             'applicant',
                             'needs_attention',
                             'unanswered',
-                            'negative',
+                            'not_a_fit',
                             'spam',
                             'neutral',
                             'unreviewed'
@@ -4649,7 +4649,7 @@ export default function ClientPortal() {
           setCategoryMenuCallId(null);
         }}
       >
-        {['converted', 'warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'negative', 'spam', 'neutral', 'unreviewed'].map(
+        {['converted', 'warm', 'very_good', 'applicant', 'needs_attention', 'unanswered', 'not_a_fit', 'spam', 'neutral', 'unreviewed'].map(
           (cat) => {
             const catColor = getCategoryColor(cat);
             return (

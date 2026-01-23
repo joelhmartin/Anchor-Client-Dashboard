@@ -3883,7 +3883,7 @@ router.put('/calls/:id/category', async (req, res) => {
     'applicant',
     'needs_attention',
     'unanswered',
-    'negative',
+    'not_a_fit',
     'spam',
     'neutral',
     'unreviewed'

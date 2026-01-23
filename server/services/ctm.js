@@ -2,13 +2,33 @@ import axios from 'axios';
 import { generateAiResponse } from './ai.js';
 
 const CTM_BASE = process.env.CTM_API_BASE || 'https://api.calltrackingmetrics.com';
+
+// Canonical category definitions - ALWAYS appended to any prompt during classification
+// This ensures consistent categories regardless of custom business prompts
+export const CATEGORY_DEFINITIONS = `
+CATEGORIES (use exactly these values):
+- converted: Caller explicitly agreed to purchase/book a service
+- warm: Promising lead interested in services
+- very_hot: Ready to book/buy now, high intent
+- needs_attention: Left voicemail requesting callback or follow-up
+- voicemail: Voicemail with no actionable details
+- unanswered: No conversation occurred, no message left
+- not_a_fit: Caller is not a fit for services (wrong service type, outside service area, etc.)
+- spam: Telemarketer, robocall, wrong number, or irrelevant sales call
+- neutral: General inquiry or information request, unclear intent
+- applicant: ONLY use if caller explicitly asks about jobs, careers, employment, or applying for a position at the company. Do NOT use for service inquiries.
+
+Respond ONLY with JSON: {"category":"<category>","summary":"One sentence summary"}
+`.trim();
+
 export const DEFAULT_AI_PROMPT =
   process.env.DEFAULT_AI_PROMPT ||
-  'You are an assistant that classifies call transcripts. Categories: warm (promising lead interested in services), very_hot (ready to book/buy now), voicemail (voicemail with no actionable details), needs_attention (voicemail indicating they want services or callback), unanswered (no conversation occurred), negative (unhappy caller or not a fit), spam (irrelevant/sales/telemarketer), neutral (general inquiry or info request), applicant (ONLY use this if caller is explicitly asking about jobs, careers, employment opportunities, or applying for a position at the company - do NOT use for service inquiries). Respond ONLY with JSON like {"category":"warm","summary":"One sentence summary"}.';
+  'You are an assistant that classifies call transcripts for service businesses. Analyze the conversation and determine the caller intent.';
 
 const MAX_CALLS = Number(process.env.CTM_MAX_CALLS || 200);
 const CLASSIFY_LIMIT = Number(process.env.CTM_CLASSIFY_LIMIT || 40);
 const CATEGORY_MAP = {
+  converted: 'converted',
   warm: 'warm',
   very_hot: 'very_good',
   'very-hot': 'very_good',
@@ -17,7 +37,7 @@ const CATEGORY_MAP = {
   applicant: 'applicant',
   voicemail: 'voicemail',
   unanswered: 'unanswered',
-  negative: 'negative',
+  not_a_fit: 'not_a_fit',
   spam: 'spam',
   neutral: 'neutral'
 };
@@ -35,7 +55,7 @@ function getAutoStarRating(category) {
   switch (category) {
     case 'spam':
       return 1;
-    case 'negative':
+    case 'not_a_fit':
       return 2;
     case 'warm':
     case 'very_good':
@@ -54,7 +74,7 @@ function getAutoStarRating(category) {
  * Maps star rating (from CTM) to category for display/organization
  * This is the reverse of getAutoStarRating - used when leads already have ratings
  * 1 = Spam
- * 2 = Not a fit (negative)
+ * 2 = Not a fit
  * 3 = Solid lead (very_good)
  * 4 = Great lead (very_good)
  * 5 = Converted (agreed to service)
@@ -64,7 +84,7 @@ function getCategoryFromRating(score) {
     case 1:
       return 'spam';
     case 2:
-      return 'negative';
+      return 'not_a_fit';
     case 3:
       return 'very_good';
     case 4:
@@ -277,12 +297,13 @@ function mapCategory(value) {
 }
 
 const CATEGORY_PATTERNS = [
+  { key: 'converted', phrases: ['converted', 'agreed to service', 'booked', 'scheduled appointment', 'signed up'] },
   { key: 'needs_attention', phrases: ['needs_attention', 'needs attention', 'attention needed'] },
-  { key: 'very_hot', phrases: ['very hot', 'ready to book', 'booked appointment'] },
+  { key: 'very_hot', phrases: ['very hot', 'ready to book', 'ready to schedule'] },
   { key: 'warm', phrases: ['warm', 'interested lead', 'promising lead'] },
   { key: 'voicemail', phrases: ['voicemail', 'voice mail'] },
   { key: 'unanswered', phrases: ['unanswered', 'no answer', 'no response'] },
-  { key: 'negative', phrases: ['negative', 'not interested', 'unhappy'] },
+  { key: 'not_a_fit', phrases: ['not a fit', 'not interested', 'unhappy', 'negative'] },
   { key: 'spam', phrases: ['spam', 'telemarketer', 'scam', 'robocall'] },
   { key: 'neutral', phrases: ['neutral', 'general inquiry', 'info request'] },
   // Only match job-related phrases that are unambiguous (not "apply for service" etc)
@@ -309,13 +330,15 @@ export async function classifyContent(prompt, transcript, message) {
     };
   }
   const payloadPreview = content.slice(0, 500);
+  
+  // Build the system prompt: custom business context + canonical category definitions
+  const businessContext = prompt || DEFAULT_AI_PROMPT;
+  const systemPrompt = `${businessContext}\n\n${CATEGORY_DEFINITIONS}`;
+  
   try {
     const raw = await generateAiResponse({
-      prompt: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(
-        0,
-        6000
-      )}\n\nRespond ONLY with JSON like {"category":"warm","summary":"single sentence"}. Categories: warm (interested lead), very_hot (ready to buy/book), voicemail, needs_attention (callback requested), unanswered, negative (not a fit), spam, neutral (general inquiry), applicant (ONLY for job/career inquiries - NOT service inquiries).`,
-      systemPrompt: prompt || DEFAULT_AI_PROMPT,
+      prompt: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(0, 6000)}`,
+      systemPrompt,
       temperature: 0.2,
       maxTokens: 200,
       model: process.env.VERTEX_CLASSIFIER_MODEL || process.env.VERTEX_MODEL || undefined

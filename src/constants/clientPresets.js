@@ -143,6 +143,24 @@ export const HVAC_CONCERNS = [
   'Emergency Repair'
 ];
 
+// Home Service - Landscaping / Hardscaping
+export const LANDSCAPING_CONCERNS = [
+  'Lawn Care',
+  'Overgrown Yard',
+  'New Landscape Design',
+  'Patio Installation',
+  'Retaining Wall',
+  'Drainage Issues',
+  'Tree Removal',
+  'Irrigation System',
+  'Outdoor Lighting',
+  'Fence Installation',
+  'Mulch / Rock Beds',
+  'Sod Installation',
+  'Seasonal Cleanup',
+  'Driveway / Walkway'
+];
+
 // Food Service
 export const FOOD_SERVICE_CONCERNS = [
   'Catering Quote',
@@ -184,6 +202,7 @@ export const CLIENT_CONCERN_PRESETS = {
   roofing: ROOFING_CONCERNS,
   plumbing: PLUMBING_CONCERNS,
   hvac: HVAC_CONCERNS,
+  landscaping: LANDSCAPING_CONCERNS,
   // Food Service
   food_service: FOOD_SERVICE_CONCERNS,
   // General / Other
@@ -285,6 +304,22 @@ export const CLIENT_TYPE_PRESETS = [
           'Duct Cleaning',
           'Seasonal Tune-Up'
         ]
+      },
+      {
+        value: 'landscaping',
+        label: 'Landscaping / Hardscaping',
+        services: [
+          'Landscape Design',
+          'Lawn Maintenance',
+          'Patio & Pavers',
+          'Retaining Walls',
+          'Outdoor Lighting',
+          'Irrigation Systems',
+          'Tree & Shrub Care',
+          'Sod Installation',
+          'Hardscape Construction',
+          'Seasonal Cleanup'
+        ]
       }
     ]
   },
@@ -307,9 +342,12 @@ export function findClientTypePreset(value) {
 const envPrompt =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEFAULT_AI_PROMPT) ||
   (typeof process !== 'undefined' && process.env?.VITE_DEFAULT_AI_PROMPT);
+
+// Note: Category definitions are always appended server-side in classifyContent()
+// This base prompt should focus on business context and tone only
 export const AI_PROMPT_BASE =
   envPrompt ||
-  'You are an assistant that classifies call transcripts for service businesses. Possible categories: warm (promising lead), very_good (ready to book), voicemail, unanswered, negative, spam, neutral. Return a short JSON object like {"category":"warm","summary":"One sentence summary"}';
+  'You are an assistant that classifies call transcripts for service businesses. Analyze the conversation to determine caller intent and provide a brief summary.';
 
 const formatServiceLine = (services = []) => {
   const cleaned = services.filter(Boolean);
@@ -346,7 +384,8 @@ export const CLIENT_AI_PROMPTS = {
     default: promptFor('home service businesses', collectServices('home_service')),
     roofing: promptFor('roofing contractors', collectServices('home_service', 'roofing')),
     plumbing: promptFor('plumbing companies', collectServices('home_service', 'plumbing')),
-    hvac: promptFor('HVAC firms', collectServices('home_service', 'hvac'))
+    hvac: promptFor('HVAC firms', collectServices('home_service', 'hvac')),
+    landscaping: promptFor('landscaping and hardscaping companies', collectServices('home_service', 'landscaping'))
   },
   food_service: {
     description: 'food and hospitality businesses',
@@ -355,9 +394,8 @@ export const CLIENT_AI_PROMPTS = {
   other: {
     description: 'other business types',
     default:
-      `${AI_PROMPT_BASE} You are configuring a prompt for a business that does not match presets.` +
-      ' Replace the placeholders with real details before use.' +
-      ' Business type: {{business_type}}. Core services: {{services}}. Audience/tone: {{audience}}.'
+      `${AI_PROMPT_BASE} This is a custom business type.` +
+      ' Business type: {{business_type}}. Core services: {{services}}. Target audience: {{audience}}.'
   }
 };
 
