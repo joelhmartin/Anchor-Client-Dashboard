@@ -75,6 +75,7 @@ import PersonIcon from '@mui/icons-material/Person';
 
 import MainCard from 'ui-component/cards/MainCard';
 import FireworksCanvas from 'ui-component/FireworksCanvas';
+import ReviewsPanel from './ReviewsPanel';
 import useAuth from 'hooks/useAuth';
 import { fetchAnalyticsUrl } from 'api/analytics';
 import { fetchProfile, updateProfile, uploadAvatar } from 'api/profile';
@@ -125,6 +126,7 @@ const SECTION_CONFIG = [
   { value: 'analytics', label: 'Analytics' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'leads', label: 'Leads' },
+  { value: 'reviews', label: 'Reviews' },
   { value: 'journey', label: 'Client Journey' },
   { value: 'archive', label: 'Archive' },
   { value: 'brand', label: 'Brand Assets' },
@@ -1578,8 +1580,8 @@ export default function ClientPortal() {
         return;
       }
 
-      // Number keys for tab navigation (1-6)
-      const tabMap = { 1: 'profile', 2: 'brand', 3: 'documents', 4: 'leads', 5: 'journey', 6: 'archive' };
+      // Number keys for tab navigation (1-7)
+      const tabMap = { 1: 'profile', 2: 'brand', 3: 'documents', 4: 'leads', 5: 'journey', 6: 'archive', 7: 'reviews' };
       if (tabMap[e.key]) {
         e.preventDefault();
         navigate(`/portal?tab=${tabMap[e.key]}`);
@@ -2685,6 +2687,8 @@ export default function ClientPortal() {
             )}
           </Stack>
         )}
+
+        {activeTab === 'reviews' && <ReviewsPanel triggerMessage={triggerMessage} />}
 
         {activeTab === 'journey' && (
           <Stack spacing={2}>

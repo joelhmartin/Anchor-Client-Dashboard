@@ -16,6 +16,7 @@ import onboardingRouter from './routes/onboarding.js';
 import tasksRouter from './routes/tasks.js';
 import formsRouter from './routes/forms.js';
 import formsPublicRouter from './routes/formsPublic.js';
+import reviewsRouter from './routes/reviews.js';
 import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
 import { purgeArchivedTasks } from './services/taskCleanup.js';
 import { processSubmissionJobs } from './services/formSubmissionJobs.js';
@@ -129,6 +130,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/hub', hubRouter);
 app.use('/api/onboarding', onboardingRouter);
 app.use('/api/tasks', tasksRouter);
+app.use('/api/reviews', reviewsRouter);
 
 // Forms Manager uses Monaco Editor which requires unsafe-inline/eval
 // Apply relaxed CSP only to this route to keep other routes secure
@@ -220,6 +222,38 @@ async function maybeRunFormsMigration() {
     await query(sql);
     // eslint-disable-next-line no-console
     console.log('[migrations] ran migrate_forms_platform.sql');
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // file not present; skip
+    throw err;
+  }
+}
+
+// Run reviews migration (idempotent, uses IF NOT EXISTS)
+async function maybeRunReviewsMigration() {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const sqlPath = path.join(__dirname, 'sql', 'migrate_reviews.sql');
+    const sql = await readFile(sqlPath, 'utf8');
+    await query(sql);
+    // eslint-disable-next-line no-console
+    console.log('[migrations] ran migrate_reviews.sql');
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // file not present; skip
+    throw err;
+  }
+}
+
+// Run security migration (idempotent, uses IF NOT EXISTS)
+async function maybeRunSecurityMigration() {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const sqlPath = path.join(__dirname, 'sql', 'migrate_security.sql');
+    const sql = await readFile(sqlPath, 'utf8');
+    await query(sql);
+    // eslint-disable-next-line no-console
+    console.log('[migrations] ran migrate_security.sql');
   } catch (err) {
     if (err.code === 'ENOENT') return; // file not present; skip
     throw err;
@@ -321,6 +355,8 @@ cron.schedule('*/30 * * * * *', async () => {
 
 maybeRunMigrations()
   .then(maybeRunFormsMigration)
+  .then(maybeRunReviewsMigration)
+  .then(maybeRunSecurityMigration)
   .catch((err) => {
     console.error('[migrations] failed', err);
     process.exit(1);

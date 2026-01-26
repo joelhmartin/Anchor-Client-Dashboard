@@ -1,6 +1,7 @@
 FROM node:20-bullseye AS build
 
 # Runtime libs required by `canvas` (used for DocAI PDF rasterization).
+# Build tools required by `argon2` (native password hashing).
 # Without these, installs may succeed but the container can crash at runtime with missing .so errors.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
@@ -10,21 +11,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgif7 \
     librsvg2-2 \
     poppler-utils \
+    python3 \
+    g++ \
+    make \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY package.json yarn.lock .yarnrc.yml ./
 
-RUN npm ci
+RUN corepack enable \
+  && yarn install --immutable
 
 COPY . .
 
-RUN npm run build
+RUN yarn build
 
 FROM node:20-bullseye AS production
 
 # Same runtime libs in the production image (required by `canvas`).
+# Build tools required by `argon2` (native password hashing).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libpango-1.0-0 \
@@ -33,15 +39,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgif7 \
     librsvg2-2 \
     poppler-utils \
+    python3 \
+    g++ \
+    make \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package*.json ./
+COPY package.json yarn.lock .yarnrc.yml ./
 
-RUN npm ci --omit=dev
+RUN corepack enable \
+  && yarn install --immutable --production
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server

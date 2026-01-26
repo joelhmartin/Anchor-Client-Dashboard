@@ -182,14 +182,7 @@ function buildRegion(call) {
 }
 
 function getSource(call) {
-  return (
-    call.tracking_number_name ||
-    call.source ||
-    call.campaign_name ||
-    call.tracking_label ||
-    call.campaign_source ||
-    'Calls'
-  );
+  return call.tracking_number_name || call.source || call.campaign_name || call.tracking_label || call.campaign_source || 'Calls';
 }
 
 function getCallerName(call) {
@@ -197,14 +190,7 @@ function getCallerName(call) {
 }
 
 function getCallerNumber(call) {
-  return (
-    call.caller?.number ||
-    call.contact_number ||
-    call.caller_number ||
-    call.phone_number ||
-    call.from_number ||
-    ''
-  );
+  return call.caller?.number || call.contact_number || call.caller_number || call.phone_number || call.from_number || '';
 }
 
 function getToNumber(call) {
@@ -212,14 +198,7 @@ function getToNumber(call) {
 }
 
 function getDuration(call) {
-  return (
-    call.duration ||
-    call.duration_sec ||
-    call.duration_seconds ||
-    call.talk_time ||
-    call.call_duration ||
-    null
-  );
+  return call.duration || call.duration_sec || call.duration_seconds || call.talk_time || call.call_duration || null;
 }
 
 function parseTimestamp(call) {
@@ -293,7 +272,7 @@ function mapCategory(value) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '_');
-  return CATEGORY_MAP[slug] || (slug || 'unreviewed');
+  return CATEGORY_MAP[slug] || slug || 'unreviewed';
 }
 
 const CATEGORY_PATTERNS = [
@@ -307,7 +286,21 @@ const CATEGORY_PATTERNS = [
   { key: 'spam', phrases: ['spam', 'telemarketer', 'scam', 'robocall'] },
   { key: 'neutral', phrases: ['neutral', 'general inquiry', 'info request'] },
   // Only match job-related phrases that are unambiguous (not "apply for service" etc)
-  { key: 'applicant', phrases: ['job opening', 'job inquiry', 'career opportunity', 'employment inquiry', 'hiring', 'looking for work', 'seeking employment', 'job applicant', 'resume', 'cv submission'] }
+  {
+    key: 'applicant',
+    phrases: [
+      'job opening',
+      'job inquiry',
+      'career opportunity',
+      'employment inquiry',
+      'hiring',
+      'looking for work',
+      'seeking employment',
+      'job applicant',
+      'resume',
+      'cv submission'
+    ]
+  }
 ];
 
 function inferCategoryFromText(text = '') {
@@ -330,11 +323,11 @@ export async function classifyContent(prompt, transcript, message) {
     };
   }
   const payloadPreview = content.slice(0, 500);
-  
+
   // Build the system prompt: custom business context + canonical category definitions
   const businessContext = prompt || DEFAULT_AI_PROMPT;
   const systemPrompt = `${businessContext}\n\n${CATEGORY_DEFINITIONS}`;
-  
+
   try {
     const raw = await generateAiResponse({
       prompt: `${transcript ? 'Caller transcript:\n' : 'Form or message content:\n'}${content.slice(0, 6000)}`,
@@ -442,7 +435,7 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, options = {}) {
   // CTM date filters are day-based; include tomorrow to ensure "today" is fully captured across timezones
   const now = Date.now();
   const endDate = new Date(now + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  
+
   // For incremental sync, use sinceTimestamp; for full sync, go back 1 year by default
   let startDate;
   if (fullSync || !sinceTimestamp) {
@@ -482,10 +475,10 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, options = {}) {
     const payload = Array.isArray(resp.data?.data?.calls)
       ? resp.data.data.calls
       : Array.isArray(resp.data?.calls)
-      ? resp.data.calls
-      : Array.isArray(resp.data?.data)
-      ? resp.data.data
-      : [];
+        ? resp.data.calls
+        : Array.isArray(resp.data?.data)
+          ? resp.data.data
+          : [];
 
     if (!payload.length) break;
 
@@ -514,76 +507,65 @@ async function fetchCtmCalls({ accountId, apiKey, apiSecret }, options = {}) {
   };
 }
 
-export async function pullCallsFromCtm({ 
-  credentials, 
-  prompt = DEFAULT_AI_PROMPT, 
-  existingRows = [], 
-  autoStarEnabled = false, 
+export async function pullCallsFromCtm({
+  credentials,
+  prompt = DEFAULT_AI_PROMPT,
+  existingRows = [],
+  autoStarEnabled = false,
   syncRatings = false,
   sinceTimestamp = null,
-  fullSync = false 
+  fullSync = false
 }) {
   const existingMap = new Map();
   existingRows.forEach((row) => {
     if (row && row.call_id) existingMap.set(row.call_id, row);
   });
-  
+
   const fetchResult = await fetchCtmCalls(credentials, {
     sinceTimestamp,
     fullSync,
     perPage: 100,
     maxPages: 0 // Unlimited for full pagination
   });
-  
+
   const rawCalls = fetchResult.calls || [];
   const limited = rawCalls.slice(0, MAX_CALLS);
   const results = [];
   let classified = 0;
   for (const raw of limited) {
-    const callId =
-      raw.id ||
-      raw.call_id ||
-      raw.sid ||
-      raw.uuid ||
-      raw.callSid ||
-      raw.callSid ||
-      raw.call_uuid ||
-      raw.callId;
+    const callId = raw.id || raw.call_id || raw.sid || raw.uuid || raw.callSid || raw.callSid || raw.call_uuid || raw.callId;
     if (!callId) continue;
     const stringId = String(callId);
     const existing = existingMap.get(stringId);
     const prevMeta = existing?.meta || {};
-    
+
     // Get score from CTM (this is the authoritative source for two-way sync)
     const ctmScore = raw.sale?.score || raw.score || 0;
     const dbScore = existing?.score || 0;
-    
+
     // Check if CTM rating changed (for two-way sync)
     const ratingChangedInCtm = syncRatings && existing && ctmScore !== dbScore && ctmScore > 0;
     // Check if rating was removed (had rating before, now 0)
     const ratingWasRemoved = syncRatings && existing && dbScore > 0 && ctmScore === 0;
-    
+
     // Use CTM score as authoritative when syncing ratings
-    const existingScore = syncRatings ? ctmScore : (dbScore || ctmScore);
-    
+    const existingScore = syncRatings ? ctmScore : dbScore || ctmScore;
+
     const transcript = getTranscript(raw);
     const message = buildMessage(raw);
     const stubMessage = isCtmStubMessage(message);
-    const hasConversation = Boolean(
-      (transcript && transcript.trim()) ||
-        (!stubMessage && message && message.trim().length > 10)
-    );
+    const hasConversation = Boolean((transcript && transcript.trim()) || (!stubMessage && message && message.trim().length > 10));
     const unansweredLikely = isLikelyUnanswered(raw);
     const voicemailFlag = isVoicemail(raw);
     let classification = prevMeta.classification || '';
     let summary = prevMeta.classification_summary || '';
     let category = prevMeta.category || 'unreviewed';
     let shouldAutoStar = false;
-    
+
     // Check if lead already has a rating from CTM
     const hasExistingCtmRating = ctmScore > 0;
     const categoryFromRating = getCategoryFromRating(ctmScore);
-    
+
     // IMPORTANT: If CTM has a rating, it ALWAYS determines the category
     // This ensures two-way sync works - when ratings change in CTM, category updates
     if (hasExistingCtmRating && categoryFromRating) {
@@ -592,7 +574,7 @@ export async function pullCallsFromCtm({
       // Rating was removed in CTM - reset to unreviewed
       category = 'unreviewed';
     }
-    
+
     // Now handle classification and summary (AI analysis)
     if (unansweredLikely && !hasConversation) {
       classification = 'unanswered';
@@ -635,7 +617,7 @@ export async function pullCallsFromCtm({
     if (voicemailFlag && goodLead && !hasExistingCtmRating) {
       category = 'needs_attention';
     }
-    
+
     // Determine final score - NEVER overwrite existing CTM ratings
     let finalScore = existingScore;
     if (autoStarEnabled && shouldAutoStar && !hasExistingCtmRating && existingScore === 0) {
@@ -646,7 +628,7 @@ export async function pullCallsFromCtm({
       // 4. Our local DB doesn't have a rating either
       finalScore = getAutoStarRating(category);
     }
-    
+
     const { timestampMs, unixTime, startedAtIso } = parseTimestamp(raw);
     const source = getSource(raw);
     const assets = extractAssets(raw);
@@ -689,7 +671,7 @@ export async function pullCallsFromCtm({
       hadExistingRating: hasExistingCtmRating
     });
   }
-  
+
   return {
     results,
     syncMeta: {
@@ -704,16 +686,8 @@ export async function pullCallsFromCtm({
 }
 
 function isLikelyUnanswered(raw = {}) {
-  const duration =
-    Number(raw.duration) ||
-    Number(raw.duration_sec) ||
-    Number(raw.talk_time) ||
-    Number(raw.time_on_phone) ||
-    0;
-  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+  const duration = Number(raw.duration) || Number(raw.duration_sec) || Number(raw.talk_time) || Number(raw.time_on_phone) || 0;
+  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult].filter(Boolean).join(' ').toLowerCase();
   if (duration === 0 && statusString.includes('voicemail')) {
     return false;
   }
@@ -736,10 +710,7 @@ function isLikelyUnanswered(raw = {}) {
 }
 
 function isVoicemail(raw = {}) {
-  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult, raw.direction]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+  const statusString = [raw.status, raw.result, raw.call_status, raw.callResult, raw.direction].filter(Boolean).join(' ').toLowerCase();
   if (statusString.includes('voicemail') || statusString.includes('voice mail')) return true;
   if (Array.isArray(raw.actions)) {
     return raw.actions.some((action) => {
@@ -771,7 +742,7 @@ export function buildCallsFromCache(rows = []) {
       const durationSec = row.duration_sec || meta.duration_sec || 0;
       const direction = row.direction || meta.direction || 'inbound';
       const startedAt = row.started_at || meta.started_at;
-      
+
       // Format duration as human-readable string
       const formatDuration = (seconds) => {
         if (!seconds || seconds < 1) return '0s';
@@ -780,7 +751,7 @@ export function buildCallsFromCache(rows = []) {
         if (mins > 0) return `${mins}m ${secs}s`;
         return `${secs}s`;
       };
-      
+
       // Calculate time ago for relative timestamps
       const getTimeAgo = (timestamp) => {
         if (!timestamp) return null;
@@ -790,7 +761,7 @@ export function buildCallsFromCache(rows = []) {
         const diffMins = Math.floor(diffMs / 60000);
         const diffHours = Math.floor(diffMs / 3600000);
         const diffDays = Math.floor(diffMs / 86400000);
-        
+
         if (diffMins < 1) return 'Just now';
         if (diffMins < 60) return `${diffMins}m ago`;
         if (diffHours < 24) return `${diffHours}h ago`;
@@ -798,7 +769,7 @@ export function buildCallsFromCache(rows = []) {
         if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
         return `${Math.floor(diffDays / 30)}mo ago`;
       };
-      
+
       return {
         id: row.call_id,
         rating: row.score || 0,
@@ -819,7 +790,7 @@ export function buildCallsFromCache(rows = []) {
         // Explicitly include transcript fields
         transcript: meta.transcript || null,
         transcript_url: meta.transcript_url || null,
-        recording_url: meta.recording_url || (meta.assets?.[0]?.url) || null,
+        recording_url: meta.recording_url || meta.assets?.[0]?.url || null,
         message: meta.message || null,
         ...meta
       };
@@ -831,7 +802,7 @@ export function buildCallsFromCache(rows = []) {
 /**
  * Posts a sale/score to CallTrackingMetrics for a specific call
  * This marks the call as starred/scored in the CTM dashboard
- * 
+ *
  * @param {Object} credentials - CTM API credentials { accountId, apiKey, apiSecret }
  * @param {string} callId - The CTM call ID
  * @param {Object} saleData - Sale data to post { score, conversion, value, sale_date }
@@ -839,17 +810,17 @@ export function buildCallsFromCache(rows = []) {
  */
 export async function postSaleToCTM(credentials, callId, saleData = {}) {
   const { accountId, apiKey, apiSecret } = credentials;
-  
+
   if (!accountId || !apiKey || !apiSecret) {
     throw new Error('CallTrackingMetrics credentials not configured.');
   }
-  
+
   if (!callId) {
     throw new Error('Missing call ID for CTM sale posting.');
   }
 
   const url = `${CTM_BASE}/api/v1/accounts/${encodeURIComponent(accountId)}/calls/${encodeURIComponent(callId)}/sale`;
-  
+
   const payload = {
     score: saleData.score || 5,
     conversion: saleData.conversion !== undefined ? saleData.conversion : 1,
@@ -865,20 +836,20 @@ export async function postSaleToCTM(credentials, callId, saleData = {}) {
       },
       timeout: 20000
     });
-    
+
     return response.data;
   } catch (err) {
     const status = err.response?.status || 500;
     const errorData = err.response?.data;
     const message = errorData?.message || errorData?.error || err.message || 'Failed to update CallTrackingMetrics sale';
-    
+
     console.error('[ctm:postSale] Failed to post sale to CTM', {
       callId,
       status,
       error: message,
       payload
     });
-    
+
     // Re-throw with more context
     const error = new Error(`CTM API Error (${status}): ${message}`);
     error.status = status;
@@ -909,10 +880,10 @@ export async function fetchPhoneInteractionSources(credentials, phoneNumber, per
     const payload = Array.isArray(resp.data?.data?.calls)
       ? resp.data.data.calls
       : Array.isArray(resp.data?.calls)
-      ? resp.data.calls
-      : Array.isArray(resp.data?.data)
-      ? resp.data.data
-      : [];
+        ? resp.data.calls
+        : Array.isArray(resp.data?.data)
+          ? resp.data.data
+          : [];
     if (!payload.length) break;
     payload.forEach((entry) => {
       const src = getSource(entry);
@@ -936,7 +907,7 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
   if (!phoneNumber) {
     return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
   }
-  
+
   const normalized = normalizePhoneNumber(phoneNumber);
   if (!normalized || normalized.length < 7) {
     return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
@@ -953,18 +924,18 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
      LIMIT 1`,
     [userId, normalized]
   );
-  
+
   // 2. Get previous calls from this phone number
   let callFilter = `owner_user_id = $1 
     AND from_number IS NOT NULL 
     AND REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')`;
   const params = [userId, normalized];
-  
+
   if (currentCallId) {
     callFilter += ` AND call_id != $3`;
     params.push(currentCallId);
   }
-  
+
   const previousCallsResult = await query(
     `SELECT call_id, started_at, score, meta->>'classification' as classification,
             meta->>'classification_summary' as summary
@@ -974,36 +945,36 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
      LIMIT 10`,
     params
   );
-  
+
   const previousCalls = previousCallsResult?.rows || [];
   const callSequence = previousCalls.length + 1;
-  
+
   // 3. Determine caller type
   if (clientResult?.rows?.length > 0) {
     const client = clientResult.rows[0];
-    return { 
-      callerType: 'returning_customer', 
+    return {
+      callerType: 'returning_customer',
       activeClientId: client.id,
       activeClient: client,
       callSequence,
-      previousCalls 
+      previousCalls
     };
   }
-  
+
   if (previousCalls.length > 0) {
-    return { 
-      callerType: 'repeat', 
-      activeClientId: null, 
+    return {
+      callerType: 'repeat',
+      activeClientId: null,
       callSequence,
-      previousCalls 
+      previousCalls
     };
   }
-  
-  return { 
-    callerType: 'new', 
-    activeClientId: null, 
+
+  return {
+    callerType: 'new',
+    activeClientId: null,
     callSequence: 1,
-    previousCalls: [] 
+    previousCalls: []
   };
 }
 
@@ -1015,7 +986,7 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
  */
 export async function getClientJourneys(query, activeClientId) {
   if (!activeClientId) return [];
-  
+
   const result = await query(
     `SELECT cj.*, s.name as service_name, s.description as service_description
      FROM client_journeys cj
@@ -1025,6 +996,6 @@ export async function getClientJourneys(query, activeClientId) {
      ORDER BY cj.created_at DESC`,
     [activeClientId]
   );
-  
+
   return result?.rows || [];
 }

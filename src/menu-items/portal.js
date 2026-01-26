@@ -9,7 +9,8 @@ import {
   IconBriefcase,
   IconUsers,
   IconArticle,
-  IconArchive
+  IconArchive,
+  IconStar
 } from '@tabler/icons-react';
 
 const portalGroup = {
@@ -51,6 +52,13 @@ const portalGroup = {
       type: 'item',
       url: '/portal?tab=documents',
       icon: IconFolder
+    },
+    {
+      id: 'portal-reviews',
+      title: 'Reviews',
+      type: 'item',
+      url: '/portal?tab=reviews',
+      icon: IconStar
     }
   ]
 };

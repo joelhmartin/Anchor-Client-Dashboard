@@ -1,8 +1,15 @@
+import { getAccessToken } from './tokenStore';
+
 const API_BASE = import.meta.env.VITE_APP_API_BASE || '/api';
 
 async function request(path, options = {}) {
+  const token = getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    },
     credentials: 'include',
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined
@@ -29,6 +36,22 @@ export function login(payload) {
 
 export function register(payload) {
   return request('/auth/register', { method: 'POST', body: payload });
+}
+
+export function refreshSession() {
+  return request('/auth/refresh', { method: 'POST' });
+}
+
+export function verifyMfa(payload) {
+  return request('/auth/mfa/verify', { method: 'POST', body: payload });
+}
+
+export function resendMfa(challengeId) {
+  return request('/auth/mfa/resend', { method: 'POST', body: { challengeId } });
+}
+
+export function resendEmailVerification(email) {
+  return request('/auth/resend-verification', { method: 'POST', body: { email } });
 }
 
 export function logout() {

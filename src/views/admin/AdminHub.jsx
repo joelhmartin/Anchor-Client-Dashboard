@@ -813,7 +813,15 @@ export default function AdminHub() {
       toast.success(`Reclassified ${resp.updated} lead(s)`);
       setReclassifyDialog((prev) => ({ ...prev, open: false, loading: false }));
     } catch (err) {
-      reportError(err, 'Failed to reclassify leads');
+      // If backend isn't running the latest revision, Express returns an HTML 404 like:
+      // "Cannot POST /api/hub/clients/:id/reclassify-leads"
+      const status = err?.response?.status;
+      const body = typeof err?.response?.data === 'string' ? err.response.data : '';
+      if (status === 404 && body.includes('Cannot POST') && body.includes('/reclassify-leads')) {
+        toast.error('Reclassify endpoint not found. The API server likely needs a restart/redeploy.');
+      } else {
+        reportError(err, 'Failed to reclassify leads');
+      }
       setReclassifyDialog((prev) => ({ ...prev, loading: false }));
     }
   };

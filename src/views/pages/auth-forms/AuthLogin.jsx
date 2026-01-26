@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 // material-ui
@@ -16,6 +16,7 @@ import Box from '@mui/material/Box';
 import AnimateButton from 'ui-component/extended/AnimateButton';
 import CustomFormControl from 'ui-component/extended/Form/CustomFormControl';
 import useAuth from 'hooks/useAuth';
+import * as authApi from 'api/auth';
 import { useToast } from 'contexts/ToastContext';
 import { getErrorMessage } from 'utils/errors';
 
@@ -38,9 +39,24 @@ export default function AuthLogin() {
     password: ''
   });
   const [infoMessage, setInfoMessage] = useState(location.state?.resetMessage || '');
+  const [mfaChallenge, setMfaChallenge] = useState(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaSubmitting, setMfaSubmitting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const [showPassword, setShowPassword] = useState(false);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('verified') === '1') {
+      setInfoMessage('Email verified. You can sign in now.');
+    } else if (params.get('verified') === '0') {
+      setInfoMessage('Verification link expired or invalid. Request a new email.');
+    }
+    if (params.has('oauth')) {
+      setInfoMessage('OAuth sign-in failed. Please try again.');
+    }
+  }, [location.search]);
+  const oauthBase = import.meta.env.VITE_APP_API_BASE || '/api';
   const handleClickShowPassword = () => {
     setShowPassword(!showPassword);
   };
@@ -58,65 +74,183 @@ export default function AuthLogin() {
     setInfoMessage('');
     setSubmitting(true);
     try {
-      const user = await login(form);
+      const result = await login({ ...form, trustDevice: checked });
+      if (result?.requiresMfa) {
+        setMfaChallenge(result);
+        setMfaCode('');
+        return;
+      }
+      const user = result;
       const role = user?.effective_role || user?.role;
       const onboardingPending = role === 'client' && !user?.onboarding_completed_at;
       const target = onboardingPending ? '/onboarding' : location.state?.from?.pathname || '/';
       navigate(target, { replace: true });
     } catch (err) {
-      toast.error(getErrorMessage(err, 'Unable to sign in'));
+      const message = getErrorMessage(err, 'Unable to sign in');
+      if (message.toLowerCase().includes('verify')) {
+        setInfoMessage('Please verify your email before signing in.');
+      }
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }
   };
 
+  const mfaHeading = useMemo(() => {
+    if (!mfaChallenge?.maskedEmail) return 'Verification required';
+    return `Enter the code sent to ${mfaChallenge.maskedEmail}`;
+  }, [mfaChallenge?.maskedEmail]);
+
+  const handleVerifyMfa = async (event) => {
+    event.preventDefault();
+    if (!mfaChallenge?.challengeId) return;
+    setMfaSubmitting(true);
+    try {
+      const res = await authApi.verifyMfa({
+        challengeId: mfaChallenge.challengeId,
+        code: mfaCode,
+        trustDevice: checked
+      });
+      const role = res?.user?.effective_role || res?.user?.role;
+      const onboardingPending = role === 'client' && !res?.user?.onboarding_completed_at;
+      const target = onboardingPending ? '/onboarding' : location.state?.from?.pathname || '/';
+      navigate(target, { replace: true });
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Unable to verify code'));
+    } finally {
+      setMfaSubmitting(false);
+    }
+  };
+
+  const handleResendMfa = async () => {
+    if (!mfaChallenge?.challengeId) return;
+    try {
+      const res = await authApi.resendMfa(mfaChallenge.challengeId);
+      setInfoMessage('A new code was sent.');
+      setMfaChallenge((prev) => (prev ? { ...prev, expiresAt: res.expiresAt } : prev));
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Unable to resend code'));
+    }
+  };
+
   return (
-    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'grid', gap: 2 }}>
+    <Box component="form" onSubmit={mfaChallenge ? handleVerifyMfa : handleSubmit} sx={{ display: 'grid', gap: 2 }}>
       {infoMessage ? (
         <Typography variant="caption" color="text.secondary">
           {infoMessage}
         </Typography>
       ) : null}
 
-      <CustomFormControl fullWidth>
-        <InputLabel htmlFor="outlined-adornment-email-login">Email Address / Username</InputLabel>
-        <OutlinedInput
-          id="outlined-adornment-email-login"
-          type="email"
-          value={form.email}
-          onChange={handleChange}
-          name="email"
-          autoComplete="email"
-          required
-        />
-      </CustomFormControl>
+      {!mfaChallenge ? (
+        <>
+          <Button
+            variant="outlined"
+            color="secondary"
+            onClick={() => {
+              const returnTo = location.state?.from?.pathname || '/';
+              window.location.href = `${oauthBase}/auth/oauth/google?returnTo=${encodeURIComponent(returnTo)}`;
+            }}
+          >
+            Continue with Google
+          </Button>
+          <Button
+            variant="outlined"
+            color="secondary"
+            onClick={() => {
+              const returnTo = location.state?.from?.pathname || '/';
+              window.location.href = `${oauthBase}/auth/oauth/microsoft?returnTo=${encodeURIComponent(returnTo)}`;
+            }}
+          >
+            Continue with Microsoft
+          </Button>
+        </>
+      ) : null}
 
-      <CustomFormControl fullWidth>
-        <InputLabel htmlFor="outlined-adornment-password-login">Password</InputLabel>
-        <OutlinedInput
-          id="outlined-adornment-password-login"
-          type={showPassword ? 'text' : 'password'}
-          value={form.password}
-          name="password"
-          onChange={handleChange}
-          autoComplete="current-password"
-          required
-          endAdornment={
-            <InputAdornment position="end">
-              <IconButton
-                aria-label="toggle password visibility"
-                onClick={handleClickShowPassword}
-                onMouseDown={handleMouseDownPassword}
-                edge="end"
-                size="large"
-              >
-                {showPassword ? <Visibility /> : <VisibilityOff />}
-              </IconButton>
-            </InputAdornment>
-          }
-          label="Password"
-        />
-      </CustomFormControl>
+      {mfaChallenge ? (
+        <>
+          <Typography variant="body2" color="text.secondary">
+            {mfaHeading}
+          </Typography>
+          <CustomFormControl fullWidth>
+            <InputLabel htmlFor="outlined-adornment-mfa-code">Verification Code</InputLabel>
+            <OutlinedInput
+              id="outlined-adornment-mfa-code"
+              type="text"
+              value={mfaCode}
+              onChange={(event) => setMfaCode(event.target.value.replace(/\\D/g, '').slice(0, 6))}
+              name="mfaCode"
+              autoComplete="one-time-code"
+              required
+              label="Verification Code"
+            />
+          </CustomFormControl>
+          <Button variant="text" color="secondary" onClick={handleResendMfa} disabled={mfaSubmitting}>
+            Resend code
+          </Button>
+        </>
+      ) : (
+        <>
+          {infoMessage && infoMessage.toLowerCase().includes('verify') ? (
+            <Button
+              variant="text"
+              color="secondary"
+              onClick={async () => {
+                if (!form.email) {
+                  toast.error('Enter your email first.');
+                  return;
+                }
+                try {
+                  await authApi.resendEmailVerification(form.email);
+                  setInfoMessage('Verification email sent. Please check your inbox.');
+                } catch (err) {
+                  toast.error(getErrorMessage(err, 'Unable to resend verification'));
+                }
+              }}
+            >
+              Resend verification email
+            </Button>
+          ) : null}
+          <CustomFormControl fullWidth>
+            <InputLabel htmlFor="outlined-adornment-email-login">Email Address / Username</InputLabel>
+            <OutlinedInput
+              id="outlined-adornment-email-login"
+              type="email"
+              value={form.email}
+              onChange={handleChange}
+              name="email"
+              autoComplete="email"
+              required
+            />
+          </CustomFormControl>
+
+          <CustomFormControl fullWidth>
+            <InputLabel htmlFor="outlined-adornment-password-login">Password</InputLabel>
+            <OutlinedInput
+              id="outlined-adornment-password-login"
+              type={showPassword ? 'text' : 'password'}
+              value={form.password}
+              name="password"
+              onChange={handleChange}
+              autoComplete="current-password"
+              required
+              endAdornment={
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle password visibility"
+                    onClick={handleClickShowPassword}
+                    onMouseDown={handleMouseDownPassword}
+                    edge="end"
+                    size="large"
+                  >
+                    {showPassword ? <Visibility /> : <VisibilityOff />}
+                  </IconButton>
+                </InputAdornment>
+              }
+              label="Password"
+            />
+          </CustomFormControl>
+        </>
+      )}
 
       <Grid container sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
         <Grid>
@@ -138,8 +272,15 @@ export default function AuthLogin() {
       </Grid>
       <Box sx={{ mt: 2 }}>
         <AnimateButton>
-          <Button color="secondary" fullWidth size="large" type="submit" variant="contained" disabled={submitting}>
-            {submitting ? 'Signing In...' : 'Sign In'}
+          <Button
+            color="secondary"
+            fullWidth
+            size="large"
+            type="submit"
+            variant="contained"
+            disabled={submitting || mfaSubmitting}
+          >
+            {mfaChallenge ? (mfaSubmitting ? 'Verifying...' : 'Verify Code') : submitting ? 'Signing In...' : 'Sign In'}
           </Button>
         </AnimateButton>
       </Box>

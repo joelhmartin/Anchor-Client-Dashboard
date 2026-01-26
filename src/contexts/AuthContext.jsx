@@ -2,6 +2,7 @@ import PropTypes from 'prop-types';
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 
 import * as authApi from 'api/auth';
+import { clearAccessToken, setAccessToken } from 'api/tokenStore';
 
 export const AuthContext = createContext(undefined);
 
@@ -27,12 +28,19 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     authApi
-      .fetchCurrentUser()
+      .refreshSession()
       .then((res) => {
-        setUser(res.user);
-        setImpersonator(res.impersonator || null);
+        if (res?.accessToken) {
+          setAccessToken(res.accessToken);
+          setUser(res.user || null);
+        } else {
+          setUser(null);
+        }
       })
-      .catch(() => setUser(null))
+      .catch(() => {
+        clearAccessToken();
+        setUser(null);
+      })
       .finally(() => setInitializing(false));
   }, []);
 
@@ -54,20 +62,32 @@ export function AuthProvider({ children }) {
       refreshUser,
       login: async (payload) => {
         const res = await authApi.login(payload);
-        setUser(res.user);
+        if (res?.requiresMfa) {
+          return res;
+        }
+        if (res?.accessToken) {
+          setAccessToken(res.accessToken);
+        }
+        setUser(res.user || null);
         setImpersonator(null);
         updateActingClient(null);
         return res.user;
       },
       register: async (payload) => {
         const res = await authApi.register(payload);
-        setUser(res.user);
+        if (res?.accessToken) {
+          setAccessToken(res.accessToken);
+        }
+        setUser(res.user || null);
         setImpersonator(null);
         updateActingClient(null);
         return res.user;
       },
       impersonate: async (userId) => {
         const res = await authApi.impersonate(userId);
+        if (res?.accessToken) {
+          setAccessToken(res.accessToken);
+        }
         setUser(res.user);
         setImpersonator(res.impersonator || null);
         updateActingClient(null);
@@ -75,6 +95,7 @@ export function AuthProvider({ children }) {
       },
       logout: async () => {
         await authApi.logout();
+        clearAccessToken();
         setUser(null);
         setImpersonator(null);
         updateActingClient(null);

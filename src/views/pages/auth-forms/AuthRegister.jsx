@@ -75,7 +75,13 @@ export default function AuthRegister() {
     setSubmitting(true);
     try {
       await register(form);
-      navigate('/', { replace: true });
+      navigate('/pages/login', {
+        replace: true,
+        state: {
+          email: form.email,
+          resetMessage: 'Account created. Please verify your email before signing in.'
+        }
+      });
     } catch (err) {
       toast.error(getErrorMessage(err, 'Unable to sign up'));
     } finally {

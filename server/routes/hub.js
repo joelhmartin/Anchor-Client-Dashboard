@@ -3078,18 +3078,13 @@ router.post('/clients/:id/reclassify-leads', isAdminOrEditor, async (req, res) =
       const meta = row.meta || {};
 
       const hasExisting =
-        Boolean(meta?.category) && (typeof meta?.classification_summary === 'string' && meta.classification_summary.trim().length > 0);
+        Boolean(meta?.category) && typeof meta?.classification_summary === 'string' && meta.classification_summary.trim().length > 0;
       if (!forceAll && hasExisting) {
         skipped += 1;
         continue;
       }
 
-      const transcript =
-        meta?.transcript ||
-        meta?.transcription_text ||
-        meta?.transcription?.text ||
-        meta?.transcript_text ||
-        '';
+      const transcript = meta?.transcript || meta?.transcription_text || meta?.transcription?.text || meta?.transcript_text || '';
       const message = meta?.message || meta?.notes || '';
 
       // If we have no content, skip rather than writing empty summaries.

@@ -1,17 +1,82 @@
-import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
+/**
+ * Authentication Routes
+ *
+ * Implements secure authentication with:
+ * - Short-lived access tokens (15 min) + rotating refresh tokens
+ * - Conditional MFA (email OTP)
+ * - Rate limiting
+ * - Session management
+ * - Audit logging
+ */
+
 import cookieParser from 'cookie-parser';
+import crypto from 'crypto';
 import { Router } from 'express';
-import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 import { query } from './db.js';
 import { isAdminOrEditor } from './middleware/roles.js';
+import { loginRateLimiter, passwordResetRateLimiter, recordFailedLoginAttempt, getClientIp } from './middleware/rateLimit.js';
+import {
+  // Password
+  validatePassword,
+  hashPassword,
+  verifyPassword,
+  needsRehash,
+  getPasswordRequirements,
+  // Sessions
+  createAuthenticatedSession,
+  refreshAuthenticatedSession,
+  endSession,
+  endAllSessions,
+  listUserSessions,
+  revokeUserSession,
+  onPasswordChange,
+  // Tokens
+  hashToken,
+  verifyAccessToken,
+  // Rate limiting
+  clearRateLimit,
+  recordFailedLogin,
+  resetFailedLogins,
+  isUserLocked,
+  // MFA
+  isMfaRequired,
+  createEmailOtpChallenge,
+  verifyOtp,
+  hasPendingChallenge,
+  resendOtp,
+  getMfaSettings,
+  enableEmailOtp,
+  // Device
+  extractDeviceInfo,
+  trustDevice,
+  getUserTrustedDevices,
+  revokeDeviceTrust,
+  // Audit
+  logSecurityEvent,
+  SecurityEventTypes,
+  SecurityEventCategories,
+  logLoginAttempt
+} from './services/security/index.js';
+import {
+  buildAuthUrl,
+  createCodeChallenge,
+  createCodeVerifier,
+  createOauthState,
+  exchangeCodeForTokens,
+  fetchProviderProfile,
+  getOauthConfig
+} from './services/security/oauth.js';
 import { isMailgunConfigured, sendMailgunMessageWithLogging } from './services/mailgun.js';
+import { getEffectiveRole } from './utils/roles.js';
 
 const router = Router();
-
 router.use(cookieParser());
+
+// ============================================================================
+// SCHEMAS
+// ============================================================================
 
 const dateToString = (val) => (val instanceof Date ? val.toISOString() : val);
 
@@ -37,12 +102,21 @@ const registerSchema = z.object({
   firstName: nameSchema,
   lastName: nameSchema,
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters')
+  password: z.string().min(12, 'Password must be at least 12 characters')
 });
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters')
+  password: z.string().min(1, 'Password is required'),
+  deviceId: z.string().optional(),
+  deviceFingerprint: z.string().optional(),
+  trustDevice: z.boolean().optional().default(false)
+});
+
+const mfaVerifySchema = z.object({
+  challengeId: z.string().uuid(),
+  code: z.string().length(6, 'Code must be 6 digits'),
+  trustDevice: z.boolean().optional().default(false)
 });
 
 const passwordResetRequestSchema = z.object({
@@ -51,13 +125,74 @@ const passwordResetRequestSchema = z.object({
 
 const passwordResetSchema = z.object({
   token: z.string().min(10, 'Reset token is required'),
-  password: z.string().min(8, 'Password must be at least 8 characters')
+  password: z.string().min(12, 'Password must be at least 12 characters')
 });
 
-const COOKIE_NAME = 'session';
-const COOKIE_MAX_AGE = 1000 * 60 * 60 * 24 * 7; // 7 days
+const emailVerificationSchema = z.object({
+  email: z.string().email()
+});
+
+// ============================================================================
+// COOKIE CONFIGURATION
+// ============================================================================
+
+const REFRESH_COOKIE_NAME = 'refresh_token';
 const IMPERSONATOR_COOKIE = 'impersonator';
+const OAUTH_STATE_PREFIX = 'oauth_state_';
+const OAUTH_VERIFIER_PREFIX = 'oauth_verifier_';
+const OAUTH_RETURN_PREFIX = 'oauth_return_';
+const REFRESH_COOKIE_MAX_AGE = 1000 * 60 * 60 * 24 * 30; // 30 days
 const PASSWORD_RESET_TTL_MINUTES = parseInt(process.env.PASSWORD_RESET_TTL_MINUTES || '60', 10);
+const OAUTH_COOKIE_MAX_AGE = 1000 * 60 * 10; // 10 minutes
+const OAUTH_PROVIDERS = new Set(['google', 'microsoft']);
+
+function setRefreshCookie(res, token) {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie(REFRESH_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'strict' : 'lax',
+    maxAge: REFRESH_COOKIE_MAX_AGE,
+    path: '/'
+  });
+}
+
+function setImpersonatorCookie(res, userId) {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie(IMPERSONATOR_COOKIE, userId || '', {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'strict' : 'lax',
+    maxAge: REFRESH_COOKIE_MAX_AGE,
+    path: '/'
+  });
+}
+
+function clearAuthCookies(res) {
+  res.clearCookie(REFRESH_COOKIE_NAME, { httpOnly: true, sameSite: 'lax', path: '/' });
+  res.clearCookie(IMPERSONATOR_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/' });
+}
+
+function setOauthCookie(res, name, value) {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie(name, value, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'lax' : 'lax',
+    maxAge: OAUTH_COOKIE_MAX_AGE,
+    path: '/api/auth/oauth'
+  });
+}
+
+function clearOauthCookies(res, provider) {
+  res.clearCookie(`${OAUTH_STATE_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
+  res.clearCookie(`${OAUTH_VERIFIER_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
+  res.clearCookie(`${OAUTH_RETURN_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
 
 function normalizeBase(value) {
   if (!value) return null;
@@ -74,16 +209,13 @@ function resolveAppBaseUrl(req) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const isLocalHost = host && (host.includes('localhost') || host.includes('127.0.0.1'));
 
-  // Prefer explicit local override when running locally
   const localOverride = normalizeBase(process.env.LOCAL_APP_BASE_URL);
   if (isLocalHost && localOverride) return localOverride;
 
-  // In development with localhost, default to port 3000 unless overridden
   if (isLocalHost && process.env.NODE_ENV !== 'production') {
     return 'http://localhost:3000';
   }
 
-  // Fall back to configured base URL (single source of truth)
   const fromEnv = normalizeBase(process.env.APP_BASE_URL || process.env.CLIENT_APP_URL);
   if (fromEnv) return fromEnv;
 
@@ -92,40 +224,97 @@ function resolveAppBaseUrl(req) {
   return 'http://localhost:3000';
 }
 
-function signToken(userId) {
-  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is not set');
-  return jwt.sign({ sub: userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+function getReturnPath(value) {
+  if (typeof value !== 'string') return '/';
+  if (!value.startsWith('/')) return '/';
+  return value;
 }
 
-function setAuthCookie(res, token) {
-  const isProd = process.env.NODE_ENV === 'production';
-  res.cookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'lax' : 'lax',
-    maxAge: COOKIE_MAX_AGE,
-    path: '/'
-  });
+async function findUserByEmail(email) {
+  const { rows } = await query(
+    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
+     FROM users u
+     LEFT JOIN client_profiles cp ON cp.user_id = u.id
+     WHERE u.email = $1
+     LIMIT 1`,
+    [email.toLowerCase()]
+  );
+  return rows[0] || null;
 }
 
-function setImpersonatorCookie(res, userId) {
-  const isProd = process.env.NODE_ENV === 'production';
-  res.cookie(IMPERSONATOR_COOKIE, userId || '', {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'lax' : 'lax',
-    maxAge: COOKIE_MAX_AGE,
-    path: '/'
-  });
+async function findUserById(id) {
+  const { rows } = await query(
+    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
+     FROM users u
+     LEFT JOIN client_profiles cp ON cp.user_id = u.id
+     WHERE u.id = $1
+     LIMIT 1`,
+    [id]
+  );
+  return rows[0] || null;
 }
 
-function clearAuthCookie(res) {
-  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax', path: '/' });
-  res.clearCookie(IMPERSONATOR_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/' });
-}
+async function upsertOauthIdentity(provider, profile) {
+  const normalizedEmail = profile.email.toLowerCase();
 
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
+  const { rows: identityRows } = await query(
+    `SELECT id, user_id FROM user_oauth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1`,
+    [provider, profile.providerUserId]
+  );
+
+  if (identityRows.length > 0) {
+    const identity = identityRows[0];
+    await query(
+      `UPDATE user_oauth_identities
+       SET provider_email = $1,
+           provider_email_verified = $2,
+           provider_name = $3,
+           provider_picture = $4,
+           last_login_at = NOW()
+       WHERE id = $5`,
+      [normalizedEmail, profile.emailVerified, profile.name || null, profile.picture || null, identity.id]
+    );
+
+    return identity.user_id;
+  }
+
+  const { rows: userRows } = await query(`SELECT * FROM users WHERE email = $1 LIMIT 1`, [normalizedEmail]);
+
+  let userId = userRows[0]?.id;
+  if (!userId) {
+    const firstName = profile.firstName || profile.name?.split(' ')[0] || 'User';
+    const lastName = profile.lastName || profile.name?.split(' ').slice(1).join(' ') || '';
+    const { rows } = await query(
+      `INSERT INTO users (first_name, last_name, email, password_hash, role, auth_provider, email_verified_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING id`,
+      [firstName, lastName || 'User', normalizedEmail, null, 'client', provider]
+    );
+    userId = rows[0].id;
+  } else {
+    await query(
+      `UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = $1`,
+      [userId]
+    );
+  }
+
+  await query(
+    `INSERT INTO user_oauth_identities (
+      user_id, provider, provider_user_id, provider_email, provider_email_verified,
+      provider_name, provider_picture, created_at, last_login_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+    [
+      userId,
+      provider,
+      profile.providerUserId,
+      normalizedEmail,
+      profile.emailVerified,
+      profile.name || null,
+      profile.picture || null
+    ]
+  );
+
+  return userId;
 }
 
 async function pruneExpiredResetTokens(userId) {
@@ -167,12 +356,90 @@ async function markResetTokenUsed(record) {
   await pruneExpiredResetTokens(record.user_id);
 }
 
+async function pruneExpiredEmailVerificationTokens(userId) {
+  if (userId) {
+    await query(
+      'DELETE FROM email_verification_tokens WHERE user_id = $1 AND (verified_at IS NOT NULL OR expires_at < NOW())',
+      [userId]
+    );
+    return;
+  }
+  await query('DELETE FROM email_verification_tokens WHERE expires_at < NOW()');
+}
+
+async function createEmailVerificationToken(userId, email) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 60 minutes
+  await pruneExpiredEmailVerificationTokens(userId);
+  await query(
+    `INSERT INTO email_verification_tokens (user_id, token_hash, email, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [userId, tokenHash, email, expiresAt]
+  );
+  return { token, expiresAt };
+}
+
+async function findValidEmailVerificationToken(token) {
+  const tokenHash = hashToken(token);
+  const { rows } = await query(
+    `SELECT id, user_id, email
+     FROM email_verification_tokens
+     WHERE token_hash = $1 AND verified_at IS NULL AND expires_at > NOW()
+     LIMIT 1`,
+    [tokenHash]
+  );
+  return rows[0] || null;
+}
+
+async function markEmailVerified(record) {
+  if (!record?.id || !record?.user_id) return;
+  await query('UPDATE email_verification_tokens SET verified_at = NOW() WHERE id = $1', [record.id]);
+  await query('UPDATE users SET email_verified_at = NOW() WHERE id = $1', [record.user_id]);
+  await pruneExpiredEmailVerificationTokens(record.user_id);
+}
+
+async function sendEmailVerificationEmail(user, token, baseUrl) {
+  const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'there';
+
+  if (!isMailgunConfigured()) {
+    // eslint-disable-next-line no-console
+    console.warn(`[email-verify] Mail provider not configured. Verify URL: ${verifyUrl}`);
+    return { delivered: false, verifyUrl };
+  }
+
+  await sendMailgunMessageWithLogging(
+    {
+      to: [user.email],
+      subject: 'Verify your Anchor email',
+      text: `Hi ${name},
+
+Thanks for creating your Anchor account. Please verify your email address using the link below:
+${verifyUrl}
+
+If you did not create this account, you can safely ignore this email.`,
+      html: `<p>Hi ${name},</p>
+<p>Thanks for creating your Anchor account. Please verify your email address using the link below:</p>
+<p><a href="${verifyUrl}" target="_blank" rel="noopener">Verify your email</a></p>
+<p>If you did not create this account, you can safely ignore this email.</p>`
+    },
+    {
+      emailType: 'email_verification',
+      recipientName: name,
+      clientId: user.id,
+      metadata: { verify_url: verifyUrl }
+    }
+  );
+
+  return { delivered: true, verifyUrl };
+}
+
 async function sendPasswordResetEmail(user, token, baseUrl) {
   const resetUrl = `${baseUrl}/pages/forgot-password?token=${token}`;
   const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'there';
 
   if (!isMailgunConfigured()) {
-    // eslint-disable-next-line no-console
     console.warn(`[password-reset] Mail provider not configured. Reset URL: ${resetUrl}`);
     return { delivered: false, resetUrl };
   }
@@ -203,118 +470,771 @@ If you did not request this, you can safely ignore this email.`,
   return { delivered: true, resetUrl };
 }
 
-async function findUserByEmail(email) {
-  const { rows } = await query(
-    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
-     FROM users u
-     LEFT JOIN client_profiles cp ON cp.user_id = u.id
-     WHERE u.email = $1
-     LIMIT 1`,
-    [email.toLowerCase()]
-  );
-  return rows[0] ? userSchema.parse(rows[0]) : null;
-}
+// ============================================================================
+// ROUTES
+// ============================================================================
 
-async function findUserById(id) {
-  const { rows } = await query(
-    `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
-     FROM users u
-     LEFT JOIN client_profiles cp ON cp.user_id = u.id
-     WHERE u.id = $1
-     LIMIT 1`,
-    [id]
-  );
-  return rows[0] ? userSchema.parse(rows[0]) : null;
-}
-
-router.get('/me', async (req, res) => {
+/**
+ * GET /api/auth/oauth/:provider
+ * Begin OAuth login flow (Google/Microsoft)
+ */
+router.get('/oauth/:provider', async (req, res) => {
   try {
-    const token = req.cookies?.[COOKIE_NAME];
-    if (!token) return res.status(401).json({ message: 'Not authenticated' });
+    const provider = String(req.params.provider || '').toLowerCase();
+    if (!OAUTH_PROVIDERS.has(provider)) {
+      return res.status(404).json({ message: 'Provider not supported', code: 'OAUTH_PROVIDER_NOT_SUPPORTED' });
+    }
 
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await findUserById(payload.sub);
-    if (!user) return res.status(401).json({ message: 'Session invalid' });
+    const baseUrl = resolveAppBaseUrl(req);
+    const redirectUri = `${baseUrl}/api/auth/oauth/${provider}/callback`;
+    const config = getOauthConfig(provider, redirectUri);
 
-    res.json({ user, impersonator: req.cookies?.[IMPERSONATOR_COOKIE] || null });
+    if (!config?.clientId || !config?.clientSecret) {
+      const loginRedirect = `${baseUrl}/pages/login?oauth=not_configured`;
+      const accept = req.headers.accept || '';
+      console.warn(`[oauth:start] Missing ${provider} OAuth env vars`);
+      if (accept.includes('text/html')) {
+        return res.redirect(loginRedirect);
+      }
+      return res.status(500).json({ message: 'OAuth not configured', code: 'OAUTH_NOT_CONFIGURED' });
+    }
+
+    const state = createOauthState();
+    const codeVerifier = createCodeVerifier();
+    const codeChallenge = createCodeChallenge(codeVerifier);
+    const returnTo = getReturnPath(req.query.returnTo);
+
+    setOauthCookie(res, `${OAUTH_STATE_PREFIX}${provider}`, state);
+    setOauthCookie(res, `${OAUTH_VERIFIER_PREFIX}${provider}`, codeVerifier);
+    setOauthCookie(res, `${OAUTH_RETURN_PREFIX}${provider}`, returnTo);
+
+    const authUrl = buildAuthUrl(provider, config, { state, codeChallenge });
+    res.redirect(authUrl);
   } catch (err) {
-    res.status(401).json({ message: 'Session expired or invalid' });
+    console.error('[oauth:start]', err);
+    res.status(500).json({ message: 'Unable to start OAuth flow', code: 'OAUTH_START_FAILED' });
   }
 });
 
-router.post('/register', async (req, res) => {
+/**
+ * GET /api/auth/oauth/:provider/callback
+ * OAuth provider callback
+ */
+router.get('/oauth/:provider/callback', async (req, res) => {
+  const provider = String(req.params.provider || '').toLowerCase();
+  console.log(`[oauth:callback:${provider}] Starting callback handler`);
+  
+  if (!OAUTH_PROVIDERS.has(provider)) {
+    return res.status(404).json({ message: 'Provider not supported', code: 'OAUTH_PROVIDER_NOT_SUPPORTED' });
+  }
+
+  const baseUrl = resolveAppBaseUrl(req);
+  const loginRedirect = `${baseUrl}/pages/login`;
+
+  try {
+    const { code, state } = req.query;
+    console.log(`[oauth:callback:${provider}] code=${code ? 'present' : 'missing'}, state=${state ? 'present' : 'missing'}`);
+    
+    if (!code || !state) {
+      console.log(`[oauth:callback:${provider}] Missing code or state, redirecting with missing_code`);
+      return res.redirect(`${loginRedirect}?oauth=missing_code`);
+    }
+
+    const expectedState = req.cookies?.[`${OAUTH_STATE_PREFIX}${provider}`];
+    const codeVerifier = req.cookies?.[`${OAUTH_VERIFIER_PREFIX}${provider}`];
+    const returnTo = getReturnPath(req.cookies?.[`${OAUTH_RETURN_PREFIX}${provider}`]);
+    
+    console.log(`[oauth:callback:${provider}] expectedState=${expectedState ? 'present' : 'missing'}, codeVerifier=${codeVerifier ? 'present' : 'missing'}, returnTo=${returnTo}`);
+
+    clearOauthCookies(res, provider);
+
+    if (!expectedState || expectedState !== state || !codeVerifier) {
+      console.log(`[oauth:callback:${provider}] State mismatch or missing verifier. expected=${expectedState}, received=${state}`);
+      return res.redirect(`${loginRedirect}?oauth=state_mismatch`);
+    }
+
+    const redirectUri = `${baseUrl}/api/auth/oauth/${provider}/callback`;
+    const config = getOauthConfig(provider, redirectUri);
+    if (!config?.clientId || !config?.clientSecret) {
+      return res.redirect(`${loginRedirect}?oauth=not_configured`);
+    }
+
+    console.log(`[oauth:callback:${provider}] Exchanging code for tokens...`);
+    const tokens = await exchangeCodeForTokens(provider, config, code, codeVerifier);
+    console.log(`[oauth:callback:${provider}] Got tokens, fetching profile...`);
+    const profile = await fetchProviderProfile(provider, tokens);
+    console.log(`[oauth:callback:${provider}] Profile: email=${profile.email}, verified=${profile.emailVerified}`);
+
+    if (!profile.email || !profile.emailVerified) {
+      console.log(`[oauth:callback:${provider}] Email not verified, redirecting`);
+      return res.redirect(`${loginRedirect}?oauth=email_unverified`);
+    }
+
+    console.log(`[oauth:callback:${provider}] Upserting OAuth identity...`);
+    const userId = await upsertOauthIdentity(provider, profile);
+    console.log(`[oauth:callback:${provider}] User ID: ${userId}`);
+    const user = await findUserById(userId);
+
+    const deviceInfo = extractDeviceInfo(req);
+    console.log(`[oauth:callback:${provider}] Creating session...`);
+    const session = await createAuthenticatedSession(user, deviceInfo, {
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    });
+    console.log(`[oauth:callback:${provider}] Session created, setting cookies...`);
+
+    setRefreshCookie(res, session.refreshToken);
+    setImpersonatorCookie(res, '');
+
+    await logSecurityEvent({
+      userId: user.id,
+      eventType: SecurityEventTypes.OAUTH_LOGIN,
+      eventCategory: SecurityEventCategories.OAUTH,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      deviceId: deviceInfo.deviceId,
+      success: true,
+      details: { provider }
+    });
+
+    console.log(`[oauth:callback:${provider}] Success! Redirecting to ${baseUrl}${returnTo}`);
+    res.redirect(`${baseUrl}${returnTo}`);
+  } catch (err) {
+    console.error('[oauth:callback]', err);
+    res.redirect(`${loginRedirect}?oauth=failed`);
+  }
+});
+
+/**
+ * GET /api/auth/me
+ * Get current user from access token (via Authorization header)
+ */
+router.get('/me', async (req, res) => {
+  try {
+    // Try Authorization header first (preferred)
+    const authHeader = req.headers.authorization;
+    let accessToken = null;
+
+    if (authHeader?.startsWith('Bearer ')) {
+      accessToken = authHeader.substring(7);
+    }
+
+    if (!accessToken) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token expired or invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const user = await findUserById(payload.userId);
+    if (!user) {
+      return res.status(401).json({ message: 'Session invalid', code: 'USER_NOT_FOUND' });
+    }
+
+    const effectiveRole = await getEffectiveRole(user.role);
+
+    res.json({
+      user: userSchema.parse({ ...user, role: user.role }),
+      effectiveRole,
+      impersonator: req.cookies?.[IMPERSONATOR_COOKIE] || null
+    });
+  } catch (err) {
+    console.error('[auth/me]', err);
+    res.status(401).json({ message: 'Session expired or invalid', code: 'SESSION_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/register
+ * Register a new user account
+ */
+router.post('/register', loginRateLimiter(), async (req, res) => {
   try {
     const payload = registerSchema.parse(req.body);
-    const existing = await findUserByEmail(payload.email);
-    if (existing) return res.status(409).json({ message: 'Email already in use' });
 
-    const passwordHash = await bcrypt.hash(payload.password, 12);
+    // Validate password strength
+    const passwordValidation = validatePassword(payload.password, {
+      email: payload.email,
+      firstName: payload.firstName,
+      lastName: payload.lastName
+    });
+
+    if (!passwordValidation.valid) {
+      return res.status(400).json({
+        message: passwordValidation.errors[0],
+        errors: passwordValidation.errors,
+        code: 'WEAK_PASSWORD'
+      });
+    }
+
+    const existing = await findUserByEmail(payload.email);
+    if (existing) {
+      return res.status(409).json({ message: 'Email already in use', code: 'EMAIL_EXISTS' });
+    }
+
+    // Hash password with Argon2
+    const passwordHash = await hashPassword(payload.password);
+
     const { rows } = await query(
-      `INSERT INTO users (first_name, last_name, email, password_hash, role)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, email, first_name, last_name, role, created_at`,
+      `INSERT INTO users (first_name, last_name, email, password_hash, role, auth_provider)
+       VALUES ($1, $2, $3, $4, $5, 'local') RETURNING *`,
       [payload.firstName.trim(), payload.lastName.trim(), payload.email.toLowerCase(), passwordHash, 'client']
     );
 
-    const user = userSchema.parse(rows[0]);
-    const token = signToken(user.id);
-    setAuthCookie(res, token);
-    setImpersonatorCookie(res, '');
-    res.status(201).json({ user });
+    const user = rows[0];
+
+    // Enable email OTP by default for password users
+    await enableEmailOtp(user.id);
+
+    const ipAddress = getClientIp(req);
+
+    // Send email verification
+    const appBaseUrl = resolveAppBaseUrl(req);
+    const { token } = await createEmailVerificationToken(user.id, user.email);
+    const { verifyUrl } = await sendEmailVerificationEmail(user, token, appBaseUrl);
+
+    // Clear rate limits on successful registration
+    await clearRateLimit('login_ip', ipAddress);
+    await clearRateLimit('login_user', payload.email.toLowerCase());
+
+    await logSecurityEvent({
+      userId: user.id,
+      eventType: SecurityEventTypes.ACCOUNT_CREATED,
+      eventCategory: SecurityEventCategories.ACCOUNT,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+      details: { authProvider: 'local' }
+    });
+
+    res.status(201).json({
+      message: 'Account created. Please verify your email before signing in.',
+      email: user.email,
+      ...(isMailgunConfigured() || process.env.NODE_ENV === 'production' ? {} : { verifyUrl })
+    });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
     }
     console.error('[register]', err);
-    res.status(500).json({ message: 'Unable to register right now' });
+    res.status(500).json({ message: 'Unable to register right now', code: 'SERVER_ERROR' });
   }
 });
 
-router.post('/login', async (req, res) => {
+/**
+ * POST /api/auth/login
+ * Authenticate with email/password
+ * May return MFA challenge if required
+ */
+router.post('/login', loginRateLimiter(), async (req, res) => {
   try {
     const payload = loginSchema.parse(req.body);
+    const ipAddress = getClientIp(req);
+    const deviceInfo = extractDeviceInfo(req);
+
     const user = await findUserByEmail(payload.email);
-    if (!user) return res.status(401).json({ message: 'Invalid email or password' });
 
-    const passwordRow = await query('SELECT password_hash FROM users WHERE id = $1 LIMIT 1', [user.id]);
-    const passwordHash = passwordRow.rows[0]?.password_hash;
-    const isValid = passwordHash && (await bcrypt.compare(payload.password, passwordHash));
-    if (!isValid) return res.status(401).json({ message: 'Invalid email or password' });
+    if (!user) {
+      await recordFailedLoginAttempt(req);
+      await logLoginAttempt({
+        success: false,
+        failureReason: 'user_not_found',
+        ipAddress,
+        userAgent: req.headers['user-agent'],
+        deviceId: deviceInfo.deviceId
+      });
+      return res.status(401).json({ message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
+    }
 
-    // Check if client account is activated (only applies to clients who completed onboarding)
+    // Check if account is locked
+    const lockStatus = await isUserLocked(user.id);
+    if (lockStatus.locked) {
+      await logLoginAttempt({
+        userId: user.id,
+        success: false,
+        failureReason: 'account_locked',
+        ipAddress,
+        userAgent: req.headers['user-agent'],
+        deviceId: deviceInfo.deviceId
+      });
+      return res.status(423).json({
+        message: 'Account temporarily locked due to too many failed attempts.',
+        retryAfter: lockStatus.retryAfter,
+        code: 'ACCOUNT_LOCKED'
+      });
+    }
+
+    // Verify password
+    const isValid = user.password_hash && (await verifyPassword(payload.password, user.password_hash));
+    if (!isValid) {
+      await recordFailedLoginAttempt(req);
+      const { locked } = await recordFailedLogin(user.id);
+
+      await logLoginAttempt({
+        userId: user.id,
+        success: false,
+        failureReason: 'invalid_password',
+        ipAddress,
+        userAgent: req.headers['user-agent'],
+        deviceId: deviceInfo.deviceId
+      });
+
+      if (locked) {
+        return res.status(423).json({
+          message: 'Account locked due to too many failed attempts.',
+          code: 'ACCOUNT_LOCKED'
+        });
+      }
+
+      return res.status(401).json({ message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
+    }
+
+    // Check if email verified (local accounts)
+    if ((user.auth_provider || 'local') === 'local' && !user.email_verified_at) {
+      return res.status(403).json({
+        message: 'Please verify your email before signing in.',
+        code: 'EMAIL_NOT_VERIFIED'
+      });
+    }
+
+    // Check if client account is activated
     if (user.role === 'client' && user.onboarding_completed_at && !user.activated_at) {
       return res.status(403).json({
-        message: 'Your account is currently being set up by our team. We will notify you when it is ready to access. Thank you for your patience!',
+        message:
+          'Your account is currently being set up by our team. We will notify you when it is ready to access. Thank you for your patience!',
         code: 'ACCOUNT_PENDING_ACTIVATION'
       });
     }
 
-    const token = signToken(user.id);
-    setAuthCookie(res, token);
+    // Check if password needs rehash (bcrypt → argon2)
+    if (needsRehash(user.password_hash)) {
+      const newHash = await hashPassword(payload.password);
+      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
+    }
+
+    // Check if MFA is required
+    const mfaCheck = await isMfaRequired({
+      userId: user.id,
+      authProvider: user.auth_provider || 'local',
+      deviceInfo,
+      ipAddress,
+      countryCode: null // Would come from IP geolocation service
+    });
+
+    if (mfaCheck.required) {
+      // Create MFA challenge
+      const challenge = await createEmailOtpChallenge(user.id, user.email, {
+        ipAddress,
+        userAgent: req.headers['user-agent'],
+        triggerReason: mfaCheck.reason
+      });
+
+      return res.status(200).json({
+        requiresMfa: true,
+        mfaType: 'email_otp',
+        challengeId: challenge.challengeId,
+        maskedEmail: challenge.maskedEmail,
+        expiresAt: challenge.expiresAt,
+        reason: mfaCheck.reason,
+        code: 'MFA_REQUIRED'
+      });
+    }
+
+    // No MFA required - create session
+    const session = await createAuthenticatedSession(user, deviceInfo, {
+      trustDevice: payload.trustDevice,
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Set cookies
+    setRefreshCookie(res, session.refreshToken);
     setImpersonatorCookie(res, '');
-    res.json({ user, impersonator: null });
+
+    // Clear rate limits
+    await clearRateLimit('login_ip', ipAddress);
+    await clearRateLimit('login_user', payload.email.toLowerCase());
+    await resetFailedLogins(user.id);
+
+    // Trust device if requested
+    if (payload.trustDevice) {
+      await trustDevice(user.id, deviceInfo, { ipAddress, userAgent: req.headers['user-agent'] });
+    }
+
+    await logLoginAttempt({
+      userId: user.id,
+      success: true,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      deviceId: deviceInfo.deviceId,
+      method: 'password'
+    });
+
+    res.json({
+      user: session.user,
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn,
+      impersonator: null
+    });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
     }
     console.error('[login]', err);
-    res.status(500).json({ message: 'Unable to login right now' });
+    res.status(500).json({ message: 'Unable to login right now', code: 'SERVER_ERROR' });
   }
 });
 
-router.post('/forgot-password', async (req, res) => {
+/**
+ * POST /api/auth/mfa/verify
+ * Verify MFA code and complete login
+ */
+router.post('/mfa/verify', async (req, res) => {
+  try {
+    const payload = mfaVerifySchema.parse(req.body);
+    const ipAddress = getClientIp(req);
+
+    const result = await verifyOtp(payload.challengeId, payload.code, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    if (!result.success) {
+      const errorMessages = {
+        challenge_not_found: 'Verification session expired. Please login again.',
+        already_verified: 'Code already used. Please login again.',
+        expired: 'Code expired. Please request a new one.',
+        max_attempts_exceeded: 'Too many attempts. Please login again.',
+        invalid_code: `Invalid code. ${result.attemptsRemaining} attempts remaining.`
+      };
+
+      return res.status(400).json({
+        message: errorMessages[result.error] || 'Verification failed',
+        error: result.error,
+        attemptsRemaining: result.attemptsRemaining,
+        code: 'MFA_FAILED'
+      });
+    }
+
+    // MFA verified - create session
+    const user = await findUserById(result.userId);
+    if (!user) {
+      return res.status(401).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+
+    const deviceInfo = extractDeviceInfo(req);
+    const session = await createAuthenticatedSession(user, deviceInfo, {
+      trustDevice: payload.trustDevice,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      mfaVerified: true
+    });
+
+    // Set cookies
+    setRefreshCookie(res, session.refreshToken);
+    setImpersonatorCookie(res, '');
+
+    // Trust device if requested
+    if (payload.trustDevice) {
+      await trustDevice(user.id, deviceInfo, { ipAddress, userAgent: req.headers['user-agent'] });
+    }
+
+    // Clear rate limits
+    await clearRateLimit('login_ip', ipAddress);
+    await clearRateLimit('login_user', user.email);
+    await resetFailedLogins(user.id);
+
+    res.json({
+      user: session.user,
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn,
+      impersonator: null
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
+    }
+    console.error('[mfa/verify]', err);
+    res.status(500).json({ message: 'Unable to verify code right now', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/mfa/resend
+ * Resend MFA code
+ */
+router.post('/mfa/resend', async (req, res) => {
+  try {
+    const { challengeId } = req.body;
+    if (!challengeId) {
+      return res.status(400).json({ message: 'Challenge ID required', code: 'MISSING_CHALLENGE' });
+    }
+
+    // Get the challenge to find the user
+    const { rows } = await query(
+      `SELECT mc.user_id, u.email
+       FROM mfa_challenges mc
+       JOIN users u ON u.id = mc.user_id
+       WHERE mc.id = $1`,
+      [challengeId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(400).json({ message: 'Challenge not found', code: 'CHALLENGE_NOT_FOUND' });
+    }
+
+    const ipAddress = getClientIp(req);
+    const result = await resendOtp(challengeId, rows[0].email, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    if (!result.success) {
+      return res.status(400).json({
+        message: 'Unable to resend code. Please login again.',
+        error: result.error,
+        code: 'RESEND_FAILED'
+      });
+    }
+
+    res.json({
+      message: 'Code sent',
+      expiresAt: result.expiresAt
+    });
+  } catch (err) {
+    console.error('[mfa/resend]', err);
+    res.status(500).json({ message: 'Unable to resend code', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/refresh
+ * Exchange refresh token for new access token
+ */
+router.post('/refresh', async (req, res) => {
+  try {
+    console.log('[auth:refresh] Attempting to refresh session...');
+    const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
+    console.log(`[auth:refresh] Refresh token cookie: ${refreshToken ? 'present' : 'missing'}`);
+    if (!refreshToken) {
+      return res.status(401).json({ message: 'No refresh token', code: 'NO_REFRESH_TOKEN' });
+    }
+
+    const ipAddress = getClientIp(req);
+    const result = await refreshAuthenticatedSession(refreshToken, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    if (result.error) {
+      clearAuthCookies(res);
+
+      const errorMessages = {
+        invalid_token: 'Session expired. Please login again.',
+        session_revoked: 'Session was terminated. Please login again.',
+        refresh_expired: 'Session expired. Please login again.',
+        session_expired: 'Session expired. Please login again.'
+      };
+
+      return res.status(401).json({
+        message: errorMessages[result.error] || 'Session invalid',
+        error: result.error,
+        code: 'REFRESH_FAILED'
+      });
+    }
+
+    // Set new refresh token cookie
+    setRefreshCookie(res, result.refreshToken);
+
+    console.log(`[auth:refresh] Success! User: ${result.user?.email}`);
+    res.json({
+      accessToken: result.accessToken,
+      expiresIn: result.expiresIn,
+      user: result.user
+    });
+  } catch (err) {
+    console.error('[auth:refresh] Error:', err);
+    clearAuthCookies(res);
+    res.status(500).json({ message: 'Unable to refresh session', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * GET /api/auth/verify-email
+ * Verify email with token
+ */
+router.get('/verify-email', async (req, res) => {
+  try {
+    const token = String(req.query?.token || '');
+    const baseUrl = resolveAppBaseUrl(req);
+    if (!token) {
+      return res.redirect(`${baseUrl}/pages/login?verified=0`);
+    }
+
+    const record = await findValidEmailVerificationToken(token);
+    if (!record) {
+      return res.redirect(`${baseUrl}/pages/login?verified=0`);
+    }
+
+    await markEmailVerified(record);
+
+    await logSecurityEvent({
+      userId: record.user_id,
+      eventType: SecurityEventTypes.EMAIL_VERIFIED,
+      eventCategory: SecurityEventCategories.ACCOUNT,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      success: true
+    });
+
+    res.redirect(`${baseUrl}/pages/login?verified=1`);
+  } catch (err) {
+    console.error('[verify-email]', err);
+    const baseUrl = resolveAppBaseUrl(req);
+    res.redirect(`${baseUrl}/pages/login?verified=0`);
+  }
+});
+
+/**
+ * POST /api/auth/resend-verification
+ * Resend verification email
+ */
+router.post('/resend-verification', passwordResetRateLimiter(), async (req, res) => {
+  try {
+    const { email } = emailVerificationSchema.parse(req.body);
+    const user = await findUserByEmail(email);
+    const appBaseUrl = resolveAppBaseUrl(req);
+
+    const genericResponse = {
+      message: 'If an account exists with that email, a verification email was sent.'
+    };
+
+    if (!user || user.email_verified_at) {
+      return res.json(genericResponse);
+    }
+
+    const { token } = await createEmailVerificationToken(user.id, user.email);
+    await sendEmailVerificationEmail(user, token, appBaseUrl);
+
+    await logSecurityEvent({
+      userId: user.id,
+      eventType: SecurityEventTypes.EMAIL_CHANGED,
+      eventCategory: SecurityEventCategories.ACCOUNT,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      success: true,
+      details: { action: 'resend_verification' }
+    });
+
+    res.json(genericResponse);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
+    }
+    console.error('[resend-verification]', err);
+    res.status(500).json({ message: 'Unable to resend verification email', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/logout
+ * End current session
+ */
+router.post('/logout', async (req, res) => {
+  try {
+    // Try to get session from access token to properly revoke it
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      const accessToken = authHeader.substring(7);
+      const payload = verifyAccessToken(accessToken);
+      if (payload?.sessionId && payload?.userId) {
+        await endSession(payload.sessionId, payload.userId, {
+          ipAddress: getClientIp(req),
+          userAgent: req.headers['user-agent']
+        });
+      }
+    }
+
+    clearAuthCookies(res);
+    res.status(204).send();
+  } catch (err) {
+    console.error('[logout]', err);
+    clearAuthCookies(res);
+    res.status(204).send();
+  }
+});
+
+/**
+ * POST /api/auth/logout-all
+ * End all sessions for current user
+ */
+router.post('/logout-all', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      clearAuthCookies(res);
+      return res.status(204).send();
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+
+    if (payload?.userId) {
+      const keepCurrent = req.body?.keepCurrent === true;
+      await endAllSessions(
+        payload.userId,
+        {
+          ipAddress: getClientIp(req),
+          userAgent: req.headers['user-agent']
+        },
+        keepCurrent ? payload.sessionId : null
+      );
+    }
+
+    if (!req.body?.keepCurrent) {
+      clearAuthCookies(res);
+    }
+
+    res.json({ message: 'All sessions terminated' });
+  } catch (err) {
+    console.error('[logout-all]', err);
+    clearAuthCookies(res);
+    res.status(500).json({ message: 'Unable to logout', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/forgot-password
+ * Request password reset
+ */
+router.post('/forgot-password', passwordResetRateLimiter(), async (req, res) => {
   try {
     const { email } = passwordResetRequestSchema.parse(req.body);
     const user = await findUserByEmail(email);
     const appBaseUrl = resolveAppBaseUrl(req);
+    const ipAddress = getClientIp(req);
+
     const genericResponse = {
       message: 'If an account exists with that email, we sent password reset instructions.'
     };
+
+    await logSecurityEvent({
+      userId: user?.id,
+      eventType: SecurityEventTypes.PASSWORD_RESET_REQUESTED,
+      eventCategory: SecurityEventCategories.AUTHENTICATION,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+      details: { emailProvided: email }
+    });
 
     if (!user) {
       return res.json(genericResponse);
     }
 
-    const { token } = await createPasswordResetToken(user.id);
+    const { token, expiresAt } = await createPasswordResetToken(user.id);
     const { resetUrl } = await sendPasswordResetEmail(user, token, appBaseUrl);
     const responsePayload = { ...genericResponse };
 
@@ -326,61 +1246,297 @@ router.post('/forgot-password', async (req, res) => {
     res.json(responsePayload);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
     }
     console.error('[forgot-password]', err);
-    res.status(500).json({ message: 'Unable to process password reset right now' });
+    res.status(500).json({ message: 'Unable to process password reset right now', code: 'SERVER_ERROR' });
   }
 });
 
+/**
+ * POST /api/auth/reset-password
+ * Complete password reset
+ */
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, password } = passwordResetSchema.parse(req.body);
     const record = await findValidResetToken(token);
-    if (!record) return res.status(400).json({ message: 'Reset link is invalid or expired' });
+
+    if (!record) {
+      return res.status(400).json({ message: 'Reset link is invalid or expired', code: 'INVALID_TOKEN' });
+    }
 
     const user = await findUserById(record.user_id);
     if (!user) {
       await markResetTokenUsed(record);
-      return res.status(404).json({ message: 'User for this reset link could not be found' });
+      return res.status(404).json({ message: 'User for this reset link could not be found', code: 'USER_NOT_FOUND' });
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
-    await query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [passwordHash, record.user_id]);
+    // Validate password strength
+    const passwordValidation = validatePassword(password, {
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name
+    });
+
+    if (!passwordValidation.valid) {
+      return res.status(400).json({
+        message: passwordValidation.errors[0],
+        errors: passwordValidation.errors,
+        code: 'WEAK_PASSWORD'
+      });
+    }
+
+    // Hash with Argon2
+    const passwordHash = await hashPassword(password);
+    await query('UPDATE users SET password_hash = $1, updated_at = NOW(), password_changed_at = NOW() WHERE id = $2', [
+      passwordHash,
+      record.user_id
+    ]);
     await markResetTokenUsed(record);
 
-    const tokenJwt = signToken(user.id);
-    setAuthCookie(res, tokenJwt);
+    const ipAddress = getClientIp(req);
+    const deviceInfo = extractDeviceInfo(req);
+
+    // Revoke all other sessions (security best practice)
+    await onPasswordChange(user.id, null, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Create new session
+    const session = await createAuthenticatedSession(user, deviceInfo, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    setRefreshCookie(res, session.refreshToken);
     setImpersonatorCookie(res, '');
 
-    res.json({ message: 'Password updated successfully', user });
+    await logSecurityEvent({
+      userId: user.id,
+      eventType: SecurityEventTypes.PASSWORD_RESET_COMPLETED,
+      eventCategory: SecurityEventCategories.AUTHENTICATION,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      deviceId: deviceInfo.deviceId,
+      success: true
+    });
+
+    res.json({
+      message: 'Password updated successfully',
+      user: session.user,
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn
+    });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload' });
+      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
     }
     console.error('[reset-password]', err);
-    res.status(500).json({ message: 'Unable to reset password right now' });
+    res.status(500).json({ message: 'Unable to reset password right now', code: 'SERVER_ERROR' });
   }
 });
 
-router.post('/logout', (req, res) => {
-  clearAuthCookie(res);
-  res.status(204).send();
+/**
+ * GET /api/auth/password-requirements
+ * Get password policy for display
+ */
+router.get('/password-requirements', (req, res) => {
+  res.json(getPasswordRequirements());
 });
 
+/**
+ * GET /api/auth/sessions
+ * List active sessions for current user
+ */
+router.get('/sessions', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const sessions = await listUserSessions(payload.userId, payload.sessionId);
+    res.json({ sessions });
+  } catch (err) {
+    console.error('[sessions]', err);
+    res.status(500).json({ message: 'Unable to list sessions', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * DELETE /api/auth/sessions/:id
+ * Revoke a specific session
+ */
+router.delete('/sessions/:id', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const result = await revokeUserSession(payload.userId, req.params.id, {
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    });
+
+    if (result.error) {
+      return res.status(result.error === 'forbidden' ? 403 : 404).json({
+        message: result.error === 'forbidden' ? 'Not authorized to revoke this session' : 'Session not found',
+        code: result.error.toUpperCase()
+      });
+    }
+
+    res.json({ message: 'Session revoked' });
+  } catch (err) {
+    console.error('[sessions/delete]', err);
+    res.status(500).json({ message: 'Unable to revoke session', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * GET /api/auth/devices
+ * List trusted devices for current user
+ */
+router.get('/devices', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const devices = await getUserTrustedDevices(payload.userId);
+    res.json({ devices });
+  } catch (err) {
+    console.error('[devices]', err);
+    res.status(500).json({ message: 'Unable to list devices', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * DELETE /api/auth/devices/:id
+ * Revoke a trusted device
+ */
+router.delete('/devices/:id', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const success = await revokeDeviceTrust(payload.userId, req.params.id, {
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    });
+
+    if (!success) {
+      return res.status(404).json({ message: 'Device not found', code: 'NOT_FOUND' });
+    }
+
+    res.json({ message: 'Device removed from trusted list' });
+  } catch (err) {
+    console.error('[devices/delete]', err);
+    res.status(500).json({ message: 'Unable to remove device', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * GET /api/auth/mfa/settings
+ * Get MFA settings for current user
+ */
+router.get('/mfa/settings', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Not authenticated', code: 'NO_TOKEN' });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const payload = verifyAccessToken(accessToken);
+    if (!payload) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_INVALID' });
+    }
+
+    const settings = await getMfaSettings(payload.userId);
+    res.json(settings);
+  } catch (err) {
+    console.error('[mfa/settings]', err);
+    res.status(500).json({ message: 'Unable to get MFA settings', code: 'SERVER_ERROR' });
+  }
+});
+
+/**
+ * POST /api/auth/impersonate
+ * Admin impersonation (for support)
+ */
 router.post('/impersonate', isAdminOrEditor, async (req, res) => {
   try {
     const targetId = req.body?.user_id;
-    if (!targetId) return res.status(400).json({ message: 'Missing user_id' });
+    if (!targetId) {
+      return res.status(400).json({ message: 'Missing user_id', code: 'MISSING_USER_ID' });
+    }
+
     const target = await findUserById(targetId);
-    if (!target) return res.status(404).json({ message: 'User not found' });
-    const token = signToken(target.id);
-    setAuthCookie(res, token);
+    if (!target) {
+      return res.status(404).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+
+    const ipAddress = getClientIp(req);
+    const deviceInfo = extractDeviceInfo(req);
+
+    // Create session for target user
+    const session = await createAuthenticatedSession(target, deviceInfo, {
+      ipAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    setRefreshCookie(res, session.refreshToken);
     setImpersonatorCookie(res, req.user?.id || '');
-    res.json({ user: target, impersonator: req.user?.id || null });
+
+    await logSecurityEvent({
+      userId: target.id,
+      eventType: SecurityEventTypes.IMPERSONATION_START,
+      eventCategory: SecurityEventCategories.ACCESS,
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      success: true,
+      details: { impersonatedBy: req.user?.id }
+    });
+
+    res.json({
+      user: session.user,
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn,
+      impersonator: req.user?.id || null
+    });
   } catch (err) {
     console.error('[impersonate]', err);
-    res.status(500).json({ message: 'Unable to impersonate' });
+    res.status(500).json({ message: 'Unable to impersonate', code: 'SERVER_ERROR' });
   }
 });
 

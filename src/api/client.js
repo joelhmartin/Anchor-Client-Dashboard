@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+import { getAccessToken } from './tokenStore';
+
 const API_BASE = import.meta.env.VITE_APP_API_BASE || '/api';
 
 const client = axios.create({
@@ -20,6 +22,10 @@ client.interceptors.request.use((config) => {
       delete headers['x-acting-user'];
       config.headers = headers;
     }
+  }
+  const token = getAccessToken();
+  if (token) {
+    config.headers = { ...(config.headers || {}), Authorization: `Bearer ${token}` };
   }
   return config;
 });
