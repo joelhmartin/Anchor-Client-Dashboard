@@ -1,3 +1,11 @@
+-- ============================================================================
+-- DATABASE SCHEMA - Anchor Client Dashboard
+-- ============================================================================
+-- ⚠️ MAINTENANCE REMINDER: When modifying this schema (adding tables, columns,
+-- or indexes), ALWAYS update the Database Schema Map in SKILLS.md to keep
+-- documentation synchronized.
+-- ============================================================================
+
 -- Enable UUIDs and create users table
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS citext;
