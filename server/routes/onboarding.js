@@ -686,12 +686,11 @@ router.post('/:token/activate', async (req, res) => {
     const firstName = nameParts.shift() || String(display_name).trim();
     const lastName = nameParts.join(' ');
 
-    await query('UPDATE users SET first_name = $1, last_name = $2, password_hash = $3, updated_at = NOW() WHERE id = $4', [
-      firstName,
-      lastName,
-      await bcrypt.hash(String(password), 12),
-      record.user_id
-    ]);
+    // Also set email_verified_at since they came through a secure token link sent to their email
+    await query(
+      `UPDATE users SET first_name = $1, last_name = $2, password_hash = $3, email_verified_at = COALESCE(email_verified_at, NOW()), updated_at = NOW() WHERE id = $4`,
+      [firstName, lastName, await bcrypt.hash(String(password), 12), record.user_id]
+    );
 
     // Revoke ALL onboarding tokens for this user (disables live links)
     await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL', [record.user_id]);
