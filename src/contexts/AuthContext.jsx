@@ -93,6 +93,16 @@ export function AuthProvider({ children }) {
         updateActingClient(null);
         return res.user;
       },
+      verifyMfa: async (payload) => {
+        const res = await authApi.verifyMfa(payload);
+        if (res?.accessToken) {
+          setAccessToken(res.accessToken);
+        }
+        setUser(res.user || null);
+        setImpersonator(null);
+        updateActingClient(null);
+        return res.user;
+      },
       logout: async () => {
         await authApi.logout();
         clearAccessToken();

@@ -30,7 +30,7 @@ import Button from '@mui/material/Button';
 export default function AuthLogin() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login } = useAuth();
+  const { login, verifyMfa } = useAuth();
   const toast = useToast();
 
   const [checked, setChecked] = useState(true);
@@ -106,13 +106,13 @@ export default function AuthLogin() {
     if (!mfaChallenge?.challengeId) return;
     setMfaSubmitting(true);
     try {
-      const res = await authApi.verifyMfa({
+      const user = await verifyMfa({
         challengeId: mfaChallenge.challengeId,
         code: mfaCode,
         trustDevice: checked
       });
-      const role = res?.user?.effective_role || res?.user?.role;
-      const onboardingPending = role === 'client' && !res?.user?.onboarding_completed_at;
+      const role = user?.effective_role || user?.role;
+      const onboardingPending = role === 'client' && !user?.onboarding_completed_at;
       const target = onboardingPending ? '/onboarding' : location.state?.from?.pathname || '/';
       navigate(target, { replace: true });
     } catch (err) {
