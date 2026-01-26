@@ -79,7 +79,7 @@ function getAutoStarRating(category) {
  * 4 = Great lead (very_good)
  * 5 = Converted (agreed to service)
  */
-function getCategoryFromRating(score) {
+export function getCategoryFromRating(score) {
   switch (score) {
     case 1:
       return 'spam';

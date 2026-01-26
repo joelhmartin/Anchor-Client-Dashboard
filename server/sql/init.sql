@@ -31,9 +31,6 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   looker_url TEXT,
   client_package TEXT,
-  -- Google OAuth (per-client)
-  google_client_id TEXT,
-  google_client_secret TEXT,
   -- Client contact + routing info (client-provided)
   call_tracking_main_number TEXT,
   front_desk_emails TEXT,
@@ -579,8 +576,6 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_account_id TEXT;
-ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_client_id TEXT;
-ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_client_secret TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_status TEXT;
 -- Access steps enabled/disabled (admin-configured)
@@ -616,6 +611,76 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_uses_hipaa BO
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_connected_crm BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_custom BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_notes TEXT;
+-- Remove deprecated per-client OAuth fields (replaced by oauth_* tables)
+ALTER TABLE client_profiles DROP COLUMN IF EXISTS google_client_id;
+ALTER TABLE client_profiles DROP COLUMN IF EXISTS google_client_secret;
+
+-- OAuth Providers (app-level credentials per platform)
+CREATE TABLE IF NOT EXISTS oauth_providers (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  client_id TEXT NOT NULL,
+  client_secret TEXT NOT NULL,
+  redirect_uri TEXT,
+  auth_url TEXT,
+  token_url TEXT,
+  scopes JSONB NOT NULL DEFAULT '[]',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_providers_provider ON oauth_providers(provider);
+
+-- OAuth Connections (per client, per provider login)
+CREATE TABLE IF NOT EXISTS oauth_connections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  client_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  provider_account_id TEXT NOT NULL,
+  provider_account_name TEXT,
+  access_token TEXT,
+  refresh_token TEXT,
+  token_type TEXT,
+  scope_granted JSONB NOT NULL DEFAULT '[]',
+  expires_at TIMESTAMPTZ,
+  is_connected BOOLEAN NOT NULL DEFAULT TRUE,
+  revoked_at TIMESTAMPTZ,
+  last_refreshed_at TIMESTAMPTZ,
+  last_error TEXT,
+  external_metadata JSONB NOT NULL DEFAULT '{}',
+  -- Security recommendations (store encrypted tokens when possible)
+  encrypted_access_token TEXT,
+  encrypted_refresh_token TEXT,
+  token_hash TEXT,
+  kms_key_id TEXT,
+  last_rotated_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_connections_client ON oauth_connections(client_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_connections_provider ON oauth_connections(provider);
+
+-- OAuth Resources (pages/locations/profiles under a connection)
+CREATE TABLE IF NOT EXISTS oauth_resources (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  client_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  oauth_connection_id UUID NOT NULL REFERENCES oauth_connections(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  resource_type TEXT NOT NULL CHECK (
+    resource_type IN ('google_location', 'facebook_page', 'instagram_account', 'tiktok_account')
+  ),
+  resource_id TEXT NOT NULL,
+  resource_name TEXT NOT NULL,
+  resource_username TEXT,
+  resource_url TEXT,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_resources_connection_resource ON oauth_resources(oauth_connection_id, resource_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_resources_client ON oauth_resources(client_id);
 -- Client onboarding draft (save & continue later)
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_json JSONB;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS onboarding_draft_saved_at TIMESTAMPTZ;

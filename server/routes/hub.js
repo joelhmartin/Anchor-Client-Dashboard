@@ -30,6 +30,8 @@ import {
   pullCallsFromCtm,
   buildCallsFromCache,
   postSaleToCTM,
+  classifyContent,
+  getCategoryFromRating,
   fetchPhoneInteractionSources,
   enrichCallerType,
   normalizePhoneNumber,
@@ -1678,8 +1680,6 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
       ga4_access_understood,
       google_ads_access_provided,
       google_ads_access_understood,
-      google_client_id,
-      google_client_secret,
       meta_access_provided,
       meta_access_understood,
       website_forms_details_provided,
@@ -1734,8 +1734,6 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
       ga4_access_understood === undefined ? null : Boolean(ga4_access_understood),
       google_ads_access_provided === undefined ? null : Boolean(google_ads_access_provided),
       google_ads_access_understood === undefined ? null : Boolean(google_ads_access_understood),
-      google_client_id || null,
-      google_client_secret || null,
       meta_access_provided === undefined ? null : Boolean(meta_access_provided),
       meta_access_understood === undefined ? null : Boolean(meta_access_understood),
       website_forms_details_provided === undefined ? null : Boolean(website_forms_details_provided),
@@ -1765,19 +1763,17 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
                ga4_access_understood=COALESCE($26, ga4_access_understood),
                google_ads_access_provided=COALESCE($27, google_ads_access_provided),
                google_ads_access_understood=COALESCE($28, google_ads_access_understood),
-               google_client_id=COALESCE($29, google_client_id),
-               google_client_secret=COALESCE($30, google_client_secret),
-               meta_access_provided=COALESCE($31, meta_access_provided),
-               meta_access_understood=COALESCE($32, meta_access_understood),
-               website_forms_details_provided=COALESCE($33, website_forms_details_provided),
-               website_forms_details_understood=COALESCE($34, website_forms_details_understood),
-               website_forms_uses_third_party=COALESCE($35, website_forms_uses_third_party),
-               website_forms_uses_hipaa=COALESCE($36, website_forms_uses_hipaa),
-               website_forms_connected_crm=COALESCE($37, website_forms_connected_crm),
-               website_forms_custom=COALESCE($38, website_forms_custom),
-               website_forms_notes=COALESCE($39, website_forms_notes),
+               meta_access_provided=COALESCE($29, meta_access_provided),
+               meta_access_understood=COALESCE($30, meta_access_understood),
+               website_forms_details_provided=COALESCE($31, website_forms_details_provided),
+               website_forms_details_understood=COALESCE($32, website_forms_details_understood),
+               website_forms_uses_third_party=COALESCE($33, website_forms_uses_third_party),
+               website_forms_uses_hipaa=COALESCE($34, website_forms_uses_hipaa),
+               website_forms_connected_crm=COALESCE($35, website_forms_connected_crm),
+               website_forms_custom=COALESCE($36, website_forms_custom),
+               website_forms_notes=COALESCE($37, website_forms_notes),
                updated_at=NOW()
-         WHERE user_id=$40`,
+         WHERE user_id=$38`,
         params
       );
     } else {
@@ -1791,14 +1787,13 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
            website_access_provided,website_access_understood,
            ga4_access_provided,ga4_access_understood,
            google_ads_access_provided,google_ads_access_understood,
-           google_client_id,google_client_secret,
            meta_access_provided,meta_access_understood,
            website_forms_details_provided,website_forms_details_understood,
            website_forms_uses_third_party,website_forms_uses_hipaa,website_forms_connected_crm,website_forms_custom,
            website_forms_notes,
            user_id
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)`,
         params
       );
     }
@@ -3048,6 +3043,102 @@ router.delete('/calls/:id/score', async (req, res) => {
     console.error('[calls:score:clear]', err);
     logEvent('calls:score', 'Failed to clear score', { user: targetUserId, callId, error: err.message });
     res.status(500).json({ message: 'Unable to clear score' });
+  }
+});
+
+// POST /clients/:id/reclassify-leads - Re-run AI classification against cached call transcripts/messages
+// Admin/editor only. Does NOT pull CTM again; only updates call_logs.meta.
+router.post('/clients/:id/reclassify-leads', isAdminOrEditor, async (req, res) => {
+  const clientId = req.params.id;
+  const { limit = 200, force = true } = req.body || {};
+
+  const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 200));
+  const forceAll = force === true;
+
+  try {
+    const profileRes = await query('SELECT ai_prompt FROM client_profiles WHERE user_id=$1 LIMIT 1', [clientId]);
+    const prompt = profileRes.rows[0]?.ai_prompt || DEFAULT_AI_PROMPT;
+
+    // Pull the most recent calls for this client.
+    const { rows } = await query(
+      `SELECT call_id, score, meta
+       FROM call_logs
+       WHERE (owner_user_id=$1 OR user_id=$1)
+       ORDER BY started_at DESC NULLS LAST
+       LIMIT $2`,
+      [clientId, safeLimit]
+    );
+
+    let updated = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    for (const row of rows) {
+      const callId = row.call_id;
+      const meta = row.meta || {};
+
+      const hasExisting =
+        Boolean(meta?.category) && (typeof meta?.classification_summary === 'string' && meta.classification_summary.trim().length > 0);
+      if (!forceAll && hasExisting) {
+        skipped += 1;
+        continue;
+      }
+
+      const transcript =
+        meta?.transcript ||
+        meta?.transcription_text ||
+        meta?.transcription?.text ||
+        meta?.transcript_text ||
+        '';
+      const message = meta?.message || meta?.notes || '';
+
+      // If we have no content, skip rather than writing empty summaries.
+      if (!String(transcript || message).trim()) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        const ai = await classifyContent(prompt, transcript, message);
+
+        // Preserve CTM score-derived category if there is a rating
+        const score = Number(row.score || 0);
+        const ratingCategory = score > 0 ? getCategoryFromRating(score) : null;
+        const finalCategory = ratingCategory || ai.category || ai.classification || 'unreviewed';
+
+        const nextMeta = {
+          ...meta,
+          category: finalCategory,
+          classification: ai.classification || meta.classification,
+          classification_summary: ai.summary || meta.classification_summary,
+          reclassified_at: new Date().toISOString()
+        };
+
+        await query(
+          `UPDATE call_logs
+           SET meta=$1::jsonb
+           WHERE call_id=$2 AND (owner_user_id=$3 OR user_id=$3)`,
+          [JSON.stringify(nextMeta), callId, clientId]
+        );
+        updated += 1;
+      } catch (err) {
+        errors += 1;
+        console.error('[calls:reclassify] error', { callId, err: err.message });
+      }
+    }
+
+    res.json({
+      message: 'Reclassification completed',
+      updated,
+      skipped,
+      errors,
+      scanned: rows.length,
+      limit: safeLimit,
+      forced: forceAll
+    });
+  } catch (err) {
+    console.error('[calls:reclassify]', err);
+    res.status(500).json({ message: 'Reclassification failed: ' + (err.message || 'Unknown error') });
   }
 });
 
@@ -5313,6 +5404,382 @@ Write the complete blog post content in HTML:`;
   } catch (err) {
     logEvent('blog:ai:draft', 'Error generating draft', { error: err.message, userId });
     res.status(500).json({ message: 'Unable to generate blog draft' });
+  }
+});
+
+// ============================================================================
+// OAuth Provider Management (App-level, Admin-only)
+// ============================================================================
+
+// List all OAuth providers
+router.get('/oauth-providers', requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await query('SELECT * FROM oauth_providers ORDER BY provider');
+    // Don't expose client_secret in list view
+    const safe = rows.map(({ client_secret, ...rest }) => ({ ...rest, has_secret: !!client_secret }));
+    res.json({ providers: safe });
+  } catch (err) {
+    console.error('[oauth-providers:list]', err);
+    res.status(500).json({ message: 'Failed to fetch OAuth providers' });
+  }
+});
+
+// Get single OAuth provider (with secret for editing)
+router.get('/oauth-providers/:id', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT * FROM oauth_providers WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ message: 'Provider not found' });
+    res.json({ provider: rows[0] });
+  } catch (err) {
+    console.error('[oauth-providers:get]', err);
+    res.status(500).json({ message: 'Failed to fetch OAuth provider' });
+  }
+});
+
+// Create OAuth provider
+router.post('/oauth-providers', requireAdmin, async (req, res) => {
+  try {
+    const { provider, client_id, client_secret, redirect_uri, auth_url, token_url, scopes, notes } = req.body;
+    if (!provider || !client_id || !client_secret) {
+      return res.status(400).json({ message: 'provider, client_id, and client_secret are required' });
+    }
+    const { rows } = await query(
+      `INSERT INTO oauth_providers (provider, client_id, client_secret, redirect_uri, auth_url, token_url, scopes, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [provider, client_id, client_secret, redirect_uri || null, auth_url || null, token_url || null, scopes || [], notes || null]
+    );
+    res.json({ provider: rows[0] });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ message: 'Provider already exists' });
+    }
+    console.error('[oauth-providers:create]', err);
+    res.status(500).json({ message: 'Failed to create OAuth provider' });
+  }
+});
+
+// Update OAuth provider
+router.put('/oauth-providers/:id', requireAdmin, async (req, res) => {
+  try {
+    const { provider, client_id, client_secret, redirect_uri, auth_url, token_url, scopes, is_active, notes } = req.body;
+    const { rows } = await query(
+      `UPDATE oauth_providers 
+       SET provider = COALESCE($1, provider),
+           client_id = COALESCE($2, client_id),
+           client_secret = COALESCE($3, client_secret),
+           redirect_uri = $4,
+           auth_url = $5,
+           token_url = $6,
+           scopes = COALESCE($7, scopes),
+           is_active = COALESCE($8, is_active),
+           notes = $9,
+           updated_at = NOW()
+       WHERE id = $10
+       RETURNING *`,
+      [
+        provider,
+        client_id,
+        client_secret,
+        redirect_uri || null,
+        auth_url || null,
+        token_url || null,
+        scopes,
+        is_active,
+        notes || null,
+        req.params.id
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Provider not found' });
+    res.json({ provider: rows[0] });
+  } catch (err) {
+    console.error('[oauth-providers:update]', err);
+    res.status(500).json({ message: 'Failed to update OAuth provider' });
+  }
+});
+
+// Delete OAuth provider
+router.delete('/oauth-providers/:id', requireAdmin, async (req, res) => {
+  try {
+    const { rowCount } = await query('DELETE FROM oauth_providers WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ message: 'Provider not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[oauth-providers:delete]', err);
+    res.status(500).json({ message: 'Failed to delete OAuth provider' });
+  }
+});
+
+// ============================================================================
+// OAuth Connections (Per-client)
+// ============================================================================
+
+// List OAuth connections for a client
+router.get('/clients/:clientId/oauth-connections', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT oc.*, 
+              (SELECT COUNT(*) FROM oauth_resources WHERE oauth_connection_id = oc.id) as resource_count
+       FROM oauth_connections oc 
+       WHERE oc.client_id = $1 
+       ORDER BY oc.provider, oc.created_at DESC`,
+      [req.params.clientId]
+    );
+    // Don't expose tokens in list
+    const safe = rows.map(({ access_token, refresh_token, encrypted_access_token, encrypted_refresh_token, ...rest }) => ({
+      ...rest,
+      has_tokens: !!(access_token || encrypted_access_token)
+    }));
+    res.json({ connections: safe });
+  } catch (err) {
+    console.error('[oauth-connections:list]', err);
+    res.status(500).json({ message: 'Failed to fetch OAuth connections' });
+  }
+});
+
+// Create OAuth connection for a client
+router.post('/clients/:clientId/oauth-connections', isAdminOrEditor, async (req, res) => {
+  try {
+    const clientId = req.params.clientId;
+    const {
+      provider,
+      provider_account_id,
+      provider_account_name,
+      access_token,
+      refresh_token,
+      token_type,
+      scope_granted,
+      expires_at,
+      external_metadata
+    } = req.body;
+
+    if (!provider || !provider_account_id) {
+      return res.status(400).json({ message: 'provider and provider_account_id are required' });
+    }
+
+    const { rows } = await query(
+      `INSERT INTO oauth_connections 
+       (client_id, provider, provider_account_id, provider_account_name, access_token, refresh_token, 
+        token_type, scope_granted, expires_at, external_metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        clientId,
+        provider,
+        provider_account_id,
+        provider_account_name || null,
+        access_token || null,
+        refresh_token || null,
+        token_type || 'Bearer',
+        scope_granted || [],
+        expires_at || null,
+        external_metadata || {}
+      ]
+    );
+    res.json({ connection: rows[0] });
+  } catch (err) {
+    console.error('[oauth-connections:create]', err);
+    res.status(500).json({ message: 'Failed to create OAuth connection' });
+  }
+});
+
+// Update OAuth connection
+router.put('/oauth-connections/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    const { provider_account_name, access_token, refresh_token, scope_granted, expires_at, is_connected, last_error, external_metadata } =
+      req.body;
+
+    const { rows } = await query(
+      `UPDATE oauth_connections 
+       SET provider_account_name = COALESCE($1, provider_account_name),
+           access_token = COALESCE($2, access_token),
+           refresh_token = COALESCE($3, refresh_token),
+           scope_granted = COALESCE($4, scope_granted),
+           expires_at = COALESCE($5, expires_at),
+           is_connected = COALESCE($6, is_connected),
+           last_error = $7,
+           external_metadata = COALESCE($8, external_metadata),
+           updated_at = NOW()
+       WHERE id = $9
+       RETURNING *`,
+      [
+        provider_account_name,
+        access_token,
+        refresh_token,
+        scope_granted,
+        expires_at,
+        is_connected,
+        last_error || null,
+        external_metadata,
+        req.params.id
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Connection not found' });
+    res.json({ connection: rows[0] });
+  } catch (err) {
+    console.error('[oauth-connections:update]', err);
+    res.status(500).json({ message: 'Failed to update OAuth connection' });
+  }
+});
+
+// Revoke/disconnect OAuth connection
+router.post('/oauth-connections/:id/revoke', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `UPDATE oauth_connections 
+       SET is_connected = FALSE, revoked_at = NOW(), updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Connection not found' });
+    res.json({ connection: rows[0] });
+  } catch (err) {
+    console.error('[oauth-connections:revoke]', err);
+    res.status(500).json({ message: 'Failed to revoke OAuth connection' });
+  }
+});
+
+// Delete OAuth connection
+router.delete('/oauth-connections/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rowCount } = await query('DELETE FROM oauth_connections WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ message: 'Connection not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[oauth-connections:delete]', err);
+    res.status(500).json({ message: 'Failed to delete OAuth connection' });
+  }
+});
+
+// ============================================================================
+// OAuth Resources (Pages/Locations under a connection)
+// ============================================================================
+
+// List resources for a connection
+router.get('/oauth-connections/:connectionId/resources', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT * FROM oauth_resources WHERE oauth_connection_id = $1 ORDER BY is_primary DESC, resource_name', [
+      req.params.connectionId
+    ]);
+    res.json({ resources: rows });
+  } catch (err) {
+    console.error('[oauth-resources:list]', err);
+    res.status(500).json({ message: 'Failed to fetch OAuth resources' });
+  }
+});
+
+// List all resources for a client (across all connections)
+router.get('/clients/:clientId/oauth-resources', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT r.*, c.provider_account_name as connection_name
+       FROM oauth_resources r
+       JOIN oauth_connections c ON r.oauth_connection_id = c.id
+       WHERE r.client_id = $1
+       ORDER BY r.provider, r.is_primary DESC, r.resource_name`,
+      [req.params.clientId]
+    );
+    res.json({ resources: rows });
+  } catch (err) {
+    console.error('[oauth-resources:list-client]', err);
+    res.status(500).json({ message: 'Failed to fetch OAuth resources' });
+  }
+});
+
+// Create OAuth resource
+router.post('/oauth-connections/:connectionId/resources', isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.connectionId;
+
+    // Get connection to inherit client_id and provider
+    const connResult = await query('SELECT client_id, provider FROM oauth_connections WHERE id = $1', [connectionId]);
+    if (!connResult.rows.length) return res.status(404).json({ message: 'Connection not found' });
+    const { client_id, provider } = connResult.rows[0];
+
+    const { resource_type, resource_id, resource_name, resource_username, resource_url, is_primary } = req.body;
+
+    if (!resource_type || !resource_id || !resource_name) {
+      return res.status(400).json({ message: 'resource_type, resource_id, and resource_name are required' });
+    }
+
+    // If setting as primary, unset other primaries for this connection
+    if (is_primary) {
+      await query('UPDATE oauth_resources SET is_primary = FALSE WHERE oauth_connection_id = $1', [connectionId]);
+    }
+
+    const { rows } = await query(
+      `INSERT INTO oauth_resources 
+       (client_id, oauth_connection_id, provider, resource_type, resource_id, resource_name, resource_username, resource_url, is_primary)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        client_id,
+        connectionId,
+        provider,
+        resource_type,
+        resource_id,
+        resource_name,
+        resource_username || null,
+        resource_url || null,
+        is_primary || false
+      ]
+    );
+    res.json({ resource: rows[0] });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ message: 'Resource already exists for this connection' });
+    }
+    console.error('[oauth-resources:create]', err);
+    res.status(500).json({ message: 'Failed to create OAuth resource' });
+  }
+});
+
+// Update OAuth resource
+router.put('/oauth-resources/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    const { resource_name, resource_username, resource_url, is_primary, is_enabled } = req.body;
+
+    // If setting as primary, unset other primaries
+    if (is_primary === true) {
+      const resourceResult = await query('SELECT oauth_connection_id FROM oauth_resources WHERE id = $1', [req.params.id]);
+      if (resourceResult.rows.length) {
+        await query('UPDATE oauth_resources SET is_primary = FALSE WHERE oauth_connection_id = $1 AND id != $2', [
+          resourceResult.rows[0].oauth_connection_id,
+          req.params.id
+        ]);
+      }
+    }
+
+    const { rows } = await query(
+      `UPDATE oauth_resources 
+       SET resource_name = COALESCE($1, resource_name),
+           resource_username = COALESCE($2, resource_username),
+           resource_url = COALESCE($3, resource_url),
+           is_primary = COALESCE($4, is_primary),
+           is_enabled = COALESCE($5, is_enabled),
+           updated_at = NOW()
+       WHERE id = $6
+       RETURNING *`,
+      [resource_name, resource_username, resource_url, is_primary, is_enabled, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Resource not found' });
+    res.json({ resource: rows[0] });
+  } catch (err) {
+    console.error('[oauth-resources:update]', err);
+    res.status(500).json({ message: 'Failed to update OAuth resource' });
+  }
+});
+
+// Delete OAuth resource
+router.delete('/oauth-resources/:id', isAdminOrEditor, async (req, res) => {
+  try {
+    const { rowCount } = await query('DELETE FROM oauth_resources WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ message: 'Resource not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[oauth-resources:delete]', err);
+    res.status(500).json({ message: 'Failed to delete OAuth resource' });
   }
 });
 

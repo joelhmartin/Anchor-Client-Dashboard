@@ -51,6 +51,13 @@ import ErrorIcon from '@mui/icons-material/Error';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import AddIcon from '@mui/icons-material/Add';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import StarIcon from '@mui/icons-material/Star';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import Accordion from '@mui/material/Accordion';
+import AccordionSummary from '@mui/material/AccordionSummary';
+import AccordionDetails from '@mui/material/AccordionDetails';
 import Tooltip from '@mui/material/Tooltip';
 import Chip from '@mui/material/Chip';
 import TablePagination from '@mui/material/TablePagination';
@@ -59,8 +66,31 @@ import MainCard from 'ui-component/cards/MainCard';
 import { fetchEmailLogs, fetchEmailLogDetail, fetchEmailStats, EMAIL_TYPE_LABELS, STATUS_COLORS } from 'api/emailLogs';
 import useAuth from 'hooks/useAuth';
 import useTableSearch from 'hooks/useTableSearch';
-import { createClient, fetchClients, updateClient, deleteClient, fetchClientDetail, sendClientOnboardingEmail, activateClient, getClientOnboardingLink } from 'api/clients';
+import {
+  createClient,
+  fetchClients,
+  updateClient,
+  deleteClient,
+  fetchClientDetail,
+  sendClientOnboardingEmail,
+  activateClient,
+  getClientOnboardingLink
+} from 'api/clients';
 import { requestPasswordReset } from 'api/auth';
+import {
+  fetchOAuthProviders,
+  fetchOAuthConnections,
+  createOAuthConnection,
+  updateOAuthConnection,
+  revokeOAuthConnection,
+  deleteOAuthConnection,
+  fetchOAuthResources,
+  createOAuthResource,
+  updateOAuthResource,
+  deleteOAuthResource,
+  OAUTH_PROVIDERS,
+  getResourceTypesForProvider
+} from 'api/oauth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
 import client from 'api/client';
@@ -168,6 +198,18 @@ export default function AdminHub() {
   const [emailLogsFilters, setEmailLogsFilters] = useState({ emailType: 'all', status: 'all', search: '' });
   const [emailLogDetail, setEmailLogDetail] = useState({ open: false, log: null, loading: false });
   const [emailStats, setEmailStats] = useState(null);
+
+  // OAuth / Integrations State
+  const [oauthConnections, setOauthConnections] = useState([]);
+  const [oauthConnectionsLoading, setOauthConnectionsLoading] = useState(false);
+  const [oauthConnectionsLoaded, setOauthConnectionsLoaded] = useState(false); // Track if we've loaded for current client
+  const [oauthResources, setOauthResources] = useState({}); // keyed by connection ID
+  const [oauthResourcesLoading, setOauthResourcesLoading] = useState({});
+  const [oauthConnectionDialog, setOauthConnectionDialog] = useState({ open: false, connection: null });
+  const [oauthResourceDialog, setOauthResourceDialog] = useState({ open: false, connectionId: null, resource: null });
+  const [savingOauth, setSavingOauth] = useState(false);
+  const [expandedConnection, setExpandedConnection] = useState(null);
+  const [reclassifyDialog, setReclassifyDialog] = useState({ open: false, limit: 200, force: true, loading: false });
 
   const effectiveRole = user?.effective_role || user?.role;
   const isSuperAdmin = effectiveRole === 'superadmin';
@@ -499,7 +541,7 @@ export default function AdminHub() {
       });
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
-      await startOnboardingFlow(res.client.id);
+        await startOnboardingFlow(res.client.id);
       } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
@@ -517,7 +559,12 @@ export default function AdminHub() {
         const existingIdFromApi = err?.response?.data?.existing_user_id || null;
         const existingClient =
           clients.find((c) => c.id === existingIdFromApi) ||
-          clients.find((c) => String(c.email || '').trim().toLowerCase() === normalizedEmail) ||
+          clients.find(
+            (c) =>
+              String(c.email || '')
+                .trim()
+                .toLowerCase() === normalizedEmail
+          ) ||
           null;
 
         if (existingClient?.id) {
@@ -588,6 +635,189 @@ export default function AdminHub() {
     }
   };
 
+  // OAuth / Integrations functions
+  const loadOAuthConnections = useCallback(async (clientId) => {
+    if (!clientId) return;
+    setOauthConnectionsLoading(true);
+    try {
+      const conns = await fetchOAuthConnections(clientId);
+      setOauthConnections(conns);
+    } catch (err) {
+      reportError(err, 'Unable to load OAuth connections');
+    } finally {
+      setOauthConnectionsLoading(false);
+      setOauthConnectionsLoaded(true);
+    }
+  }, []);
+
+  // Load OAuth connections when switching to Integrations tab (only once per client)
+  useEffect(() => {
+    if (activeTab === 3 && editing?.id && !oauthConnectionsLoaded && !oauthConnectionsLoading) {
+      loadOAuthConnections(editing.id);
+    }
+  }, [activeTab, editing?.id, oauthConnectionsLoaded, oauthConnectionsLoading, loadOAuthConnections]);
+
+  const loadOAuthResourcesForConnection = useCallback(async (connectionId) => {
+    if (!connectionId) return;
+    setOauthResourcesLoading((prev) => ({ ...prev, [connectionId]: true }));
+    try {
+      const resources = await fetchOAuthResources(connectionId);
+      setOauthResources((prev) => ({ ...prev, [connectionId]: resources }));
+    } catch (err) {
+      reportError(err, 'Unable to load OAuth resources');
+    } finally {
+      setOauthResourcesLoading((prev) => ({ ...prev, [connectionId]: false }));
+    }
+  }, []);
+
+  const handleAddOAuthConnection = () => {
+    setOauthConnectionDialog({
+      open: true,
+      connection: {
+        provider: 'google',
+        provider_account_id: '',
+        provider_account_name: '',
+        access_token: '',
+        refresh_token: '',
+        scope_granted: []
+      }
+    });
+  };
+
+  const handleEditOAuthConnection = (connection) => {
+    setOauthConnectionDialog({ open: true, connection });
+  };
+
+  const handleSaveOAuthConnection = async () => {
+    if (!oauthConnectionDialog.connection || !editing?.id) return;
+    setSavingOauth(true);
+    try {
+      const conn = oauthConnectionDialog.connection;
+      if (conn.id) {
+        await updateOAuthConnection(conn.id, conn);
+        toast.success('Connection updated');
+      } else {
+        await createOAuthConnection(editing.id, conn);
+        toast.success('Connection created');
+      }
+      await loadOAuthConnections(editing.id);
+      setOauthConnectionDialog({ open: false, connection: null });
+    } catch (err) {
+      reportError(err, 'Failed to save connection');
+    } finally {
+      setSavingOauth(false);
+    }
+  };
+
+  const handleRevokeOAuthConnection = async (connectionId) => {
+    if (!window.confirm('Revoke this connection? This will disconnect it but not delete it.')) return;
+    try {
+      await revokeOAuthConnection(connectionId);
+      toast.success('Connection revoked');
+      await loadOAuthConnections(editing?.id);
+    } catch (err) {
+      reportError(err, 'Failed to revoke connection');
+    }
+  };
+
+  const handleDeleteOAuthConnection = async (connectionId) => {
+    if (!window.confirm('Delete this connection and all its resources? This cannot be undone.')) return;
+    try {
+      await deleteOAuthConnection(connectionId);
+      toast.success('Connection deleted');
+      await loadOAuthConnections(editing?.id);
+    } catch (err) {
+      reportError(err, 'Failed to delete connection');
+    }
+  };
+
+  const handleAddOAuthResource = (connectionId) => {
+    const conn = oauthConnections.find((c) => c.id === connectionId);
+    const resourceTypes = conn ? getResourceTypesForProvider(conn.provider) : [];
+    setOauthResourceDialog({
+      open: true,
+      connectionId,
+      resource: {
+        resource_type: resourceTypes[0]?.value || '',
+        resource_id: '',
+        resource_name: '',
+        resource_username: '',
+        resource_url: '',
+        is_primary: false
+      }
+    });
+  };
+
+  const handleEditOAuthResource = (connectionId, resource) => {
+    setOauthResourceDialog({ open: true, connectionId, resource });
+  };
+
+  const handleSaveOAuthResource = async () => {
+    if (!oauthResourceDialog.resource || !oauthResourceDialog.connectionId) return;
+    setSavingOauth(true);
+    try {
+      const res = oauthResourceDialog.resource;
+      if (res.id) {
+        await updateOAuthResource(res.id, res);
+        toast.success('Resource updated');
+      } else {
+        await createOAuthResource(oauthResourceDialog.connectionId, res);
+        toast.success('Resource added');
+      }
+      await loadOAuthResourcesForConnection(oauthResourceDialog.connectionId);
+      setOauthResourceDialog({ open: false, connectionId: null, resource: null });
+    } catch (err) {
+      reportError(err, 'Failed to save resource');
+    } finally {
+      setSavingOauth(false);
+    }
+  };
+
+  const handleTogglePrimaryResource = async (resourceId, isPrimary) => {
+    try {
+      await updateOAuthResource(resourceId, { is_primary: isPrimary });
+      // Refresh resources for all expanded connections
+      for (const connId of Object.keys(oauthResources)) {
+        await loadOAuthResourcesForConnection(connId);
+      }
+    } catch (err) {
+      reportError(err, 'Failed to update resource');
+    }
+  };
+
+  const handleDeleteOAuthResource = async (resourceId, connectionId) => {
+    if (!window.confirm('Delete this resource?')) return;
+    try {
+      await deleteOAuthResource(resourceId);
+      toast.success('Resource deleted');
+      await loadOAuthResourcesForConnection(connectionId);
+    } catch (err) {
+      reportError(err, 'Failed to delete resource');
+    }
+  };
+
+  const handleOpenReclassify = () => {
+    setReclassifyDialog((prev) => ({ ...prev, open: true }));
+  };
+
+  const handleRunReclassify = async () => {
+    if (!editing?.id) return;
+    setReclassifyDialog((prev) => ({ ...prev, loading: true }));
+    try {
+      const resp = await client
+        .post(`/hub/clients/${editing.id}/reclassify-leads`, {
+          limit: reclassifyDialog.limit,
+          force: reclassifyDialog.force
+        })
+        .then((r) => r.data);
+      toast.success(`Reclassified ${resp.updated} lead(s)`);
+      setReclassifyDialog((prev) => ({ ...prev, open: false, loading: false }));
+    } catch (err) {
+      reportError(err, 'Failed to reclassify leads');
+      setReclassifyDialog((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
   const startEdit = (clientData) => {
     const displayName = [clientData.first_name, clientData.last_name].filter(Boolean).join(' ').trim();
     const accessRequirements = {
@@ -602,6 +832,11 @@ export default function AdminHub() {
     if (clientData.monday_board_id) {
       loadGroups(clientData.monday_board_id);
     }
+    // Reset OAuth state for new client
+    setOauthConnections([]);
+    setOauthConnectionsLoaded(false);
+    setOauthResources({});
+    setExpandedConnection(null);
     setActiveTab(0);
     setSuccess('');
     setError('');
@@ -636,8 +871,6 @@ export default function AdminHub() {
         ga4_access_understood: editing.ga4_access_understood,
         google_ads_access_provided: editing.google_ads_access_provided,
         google_ads_access_understood: editing.google_ads_access_understood,
-        google_client_id: editing.google_client_id,
-        google_client_secret: editing.google_client_secret,
         meta_access_provided: editing.meta_access_provided,
         meta_access_understood: editing.meta_access_understood,
         website_forms_details_provided: editing.website_forms_details_provided,
@@ -904,7 +1137,7 @@ export default function AdminHub() {
       setActivatingClientId('');
     }
   };
- 
+
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
@@ -927,7 +1160,7 @@ export default function AdminHub() {
           >
             <MenuItem value="">
               <em>Not set</em>
-              </MenuItem>
+            </MenuItem>
             {CLIENT_PACKAGE_OPTIONS.map((pkg) => (
               <MenuItem key={pkg} value={pkg}>
                 {pkg}
@@ -1118,16 +1351,6 @@ export default function AdminHub() {
         <br />
         1★ = Spam | 2★ = Not a fit | 3★ = Solid lead | 0★ = Voicemail/Unanswered/Neutral | 5★ = Manual only (booked appointment)
       </Typography>
-      <Typography variant="subtitle2" sx={{ mt: 1 }}>
-        Google OAuth (Client)
-      </Typography>
-      <TextField label="Google Client ID" value={editing.google_client_id || ''} onChange={handleEditChange('google_client_id')} />
-      <TextField
-        label="Google Client Secret"
-        value={editing.google_client_secret || ''}
-        onChange={handleEditChange('google_client_secret')}
-        type="password"
-      />
       <TextField label="CTM Account Number" value={editing.ctm_account_number || ''} onChange={handleEditChange('ctm_account_number')} />
       <TextField label="CTM API Key" value={editing.ctm_api_key || ''} onChange={handleEditChange('ctm_api_key')} />
       <TextField label="CTM API Secret" value={editing.ctm_api_secret || ''} onChange={handleEditChange('ctm_api_secret')} />
@@ -1293,6 +1516,134 @@ export default function AdminHub() {
     </Stack>
   );
 
+  const renderIntegrationsTab = () => (
+    <Stack spacing={2} sx={{ mt: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Typography variant="subtitle1">OAuth Connections</Typography>
+        <Stack direction="row" spacing={1}>
+          <Button size="small" variant="outlined" onClick={handleOpenReclassify}>
+            Reclassify Leads
+          </Button>
+          <Button size="small" startIcon={<AddIcon />} onClick={handleAddOAuthConnection}>
+            Add Connection
+          </Button>
+        </Stack>
+      </Box>
+      {oauthConnectionsLoading && <CircularProgress size={20} />}
+      {!oauthConnectionsLoading && oauthConnections.length === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          No OAuth connections yet. Add a connection to link Google, Facebook, Instagram, or TikTok accounts.
+        </Typography>
+      )}
+      {oauthConnections.map((conn) => {
+        const providerConfig = OAUTH_PROVIDERS[conn.provider] || { label: conn.provider, color: '#666' };
+        const isExpanded = expandedConnection === conn.id;
+        const resources = oauthResources[conn.id] || [];
+        const resourcesLoading = oauthResourcesLoading[conn.id];
+        return (
+          <Accordion
+            key={conn.id}
+            expanded={isExpanded}
+            onChange={(_, expanded) => {
+              setExpandedConnection(expanded ? conn.id : null);
+              if (expanded && !oauthResources[conn.id]) {
+                loadOAuthResourcesForConnection(conn.id);
+              }
+            }}
+          >
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
+                <Chip label={providerConfig.label} size="small" sx={{ bgcolor: providerConfig.color, color: '#fff', fontWeight: 500 }} />
+                <Typography sx={{ flex: 1 }}>{conn.provider_account_name || conn.provider_account_id}</Typography>
+                {conn.is_connected ? (
+                  <Chip label="Connected" size="small" color="success" variant="outlined" />
+                ) : (
+                  <Chip label="Disconnected" size="small" color="error" variant="outlined" />
+                )}
+                <Typography variant="caption" color="text.secondary">
+                  {conn.resource_count || 0} resource(s)
+                </Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={2}>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Button size="small" variant="outlined" onClick={() => handleEditOAuthConnection(conn)}>
+                    Edit
+                  </Button>
+                  {conn.is_connected && (
+                    <Button size="small" color="warning" startIcon={<LinkOffIcon />} onClick={() => handleRevokeOAuthConnection(conn.id)}>
+                      Revoke
+                    </Button>
+                  )}
+                  <Button size="small" color="error" startIcon={<DeleteOutlineIcon />} onClick={() => handleDeleteOAuthConnection(conn.id)}>
+                    Delete
+                  </Button>
+                </Box>
+                <Divider />
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="subtitle2">Resources (Pages / Locations)</Typography>
+                  <Button size="small" startIcon={<AddIcon />} onClick={() => handleAddOAuthResource(conn.id)}>
+                    Add Resource
+                  </Button>
+                </Box>
+                {resourcesLoading && <CircularProgress size={16} />}
+                {!resourcesLoading && resources.length === 0 && (
+                  <Typography variant="body2" color="text.secondary">
+                    No resources added yet.
+                  </Typography>
+                )}
+                {resources.map((res) => (
+                  <Box
+                    key={res.id}
+                    sx={{
+                      p: 1,
+                      border: '1px solid',
+                      borderColor: res.is_primary ? 'primary.main' : 'divider',
+                      borderRadius: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1
+                    }}
+                  >
+                    {res.is_primary && (
+                      <Tooltip title="Primary resource">
+                        <StarIcon color="primary" fontSize="small" />
+                      </Tooltip>
+                    )}
+                    <Box sx={{ flex: 1 }}>
+                      <Typography variant="body2" fontWeight={res.is_primary ? 600 : 400}>
+                        {res.resource_name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {res.resource_type} • {res.resource_id}
+                      </Typography>
+                    </Box>
+                    <Stack direction="row" spacing={0.5}>
+                      {!res.is_primary && (
+                        <Tooltip title="Set as primary">
+                          <IconButton size="small" onClick={() => handleTogglePrimaryResource(res.id, true)}>
+                            <StarIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      <IconButton size="small" onClick={() => handleEditOAuthResource(conn.id, res)}>
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton size="small" color="error" onClick={() => handleDeleteOAuthResource(res.id, conn.id)}>
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                  </Box>
+                ))}
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
+        );
+      })}
+    </Stack>
+  );
+
   const updateReview = async (docId, action) => {
     if (!editing) return;
     try {
@@ -1348,11 +1699,7 @@ export default function AdminHub() {
         {success && <Alert severity="success">{success}</Alert>}
 
         {/* Top-level Hub Navigation */}
-        <Tabs
-          value={hubSection}
-          onChange={(e, v) => setHubSection(v)}
-          sx={{ borderBottom: 1, borderColor: 'divider' }}
-        >
+        <Tabs value={hubSection} onChange={(e, v) => setHubSection(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tab icon={<PeopleOutlineIcon />} iconPosition="start" label="Users & Clients" />
           <Tab icon={<MailOutlineIcon />} iconPosition="start" label="Email Logs" />
         </Tabs>
@@ -1360,355 +1707,361 @@ export default function AdminHub() {
         {/* Users & Clients Section */}
         {hubSection === 0 && (
           <>
-        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
-          <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-            <Typography variant="h5" sx={{ mb: 2 }}>
-              Add User
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={4}>
-                <FormControl fullWidth>
-                  <InputLabel htmlFor="new-email">Email</InputLabel>
-                  <OutlinedInput
-                    id="new-email"
-                    value={newClient.email}
-                    onChange={(e) => setNewClient((p) => ({ ...p, email: e.target.value }))}
-                    label="Email"
-                    type="email"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <FormControl fullWidth>
-                  <InputLabel htmlFor="new-name">Name</InputLabel>
-                  <OutlinedInput
-                    id="new-name"
-                    value={newClient.name}
-                    onChange={(e) => setNewClient((p) => ({ ...p, name: e.target.value }))}
-                    label="Name"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <FormControl fullWidth>
-                  <InputLabel id="new-role-label">Role</InputLabel>
-                  <Select
-                    labelId="new-role-label"
-                    value={newClient.role}
-                    label="Role"
-                    onChange={(e) => setNewClient((p) => ({ ...p, role: e.target.value }))}
-                  >
-                    {newRolesOptions.map((r) => (
-                      <MenuItem key={r} value={r}>
-                        {r.charAt(0).toUpperCase() + r.slice(1)}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center' }}>
-                <Button variant="contained" fullWidth disableElevation onClick={handleAddClient} disabled={savingNew || !newClient.email}>
-                  {savingNew ? 'Saving…' : 'Save'}
-                </Button>
-              </Grid>
-            </Grid>
-          </Box>
-        </Box>
-
-        {isAdmin && (
-          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
-            <Box sx={{ p: 2 }}>
-              <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                spacing={1}
-                alignItems={{ xs: 'stretch', sm: 'center' }}
-                justifyContent="space-between"
-              >
-                <Typography variant="h5">Staff</Typography>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  {loading && <CircularProgress size={20} />}
-                  <TextField
-                    size="small"
-                    placeholder="Search staff…"
-                    value={adminsQuery}
-                    onChange={(e) => setAdminsQuery(e.target.value)}
-                  />
-                </Stack>
-              </Stack>
-            </Box>
-            <Divider />
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Display Name</TableCell>
-                    <TableCell>Email</TableCell>
-                    <TableCell>Role</TableCell>
-                    <TableCell align="right">Action</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredAdmins.map((c) => (
-                    <TableRow key={c.id} hover>
-                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                      <TableCell>{c.email}</TableCell>
-                      <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
-                      <TableCell align="right">
-                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                          <Tooltip title="Edit">
-                            <IconButton size="small" onClick={() => startEdit(c)}>
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          {isAdmin && (
-                            <Tooltip title="Delete">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  color="error"
-                                  onClick={() => confirmDeleteClient(c.id)}
-                                  disabled={deletingClientId === c.id}
-                                >
-                                  {deletingClientId === c.id ? (
-                                    <CircularProgress size={18} color="inherit" />
-                                  ) : (
-                                    <DeleteOutlineIcon fontSize="small" />
-                                  )}
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          )}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!filteredAdmins.length && !loading && (
-                    <TableRow>
-                      <TableCell colSpan={4} align="center">
-                        No staff yet.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Box>
-        )}
-
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-          <Box sx={{ p: 2 }}>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={1}
-              alignItems={{ xs: 'stretch', sm: 'center' }}
-              justifyContent="space-between"
-            >
-            <Typography variant="h5">Clients</Typography>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
-            {loading && <CircularProgress size={20} />}
-                <TextField
-                  size="small"
-                  placeholder="Search clients…"
-                  value={clientsQuery}
-                  onChange={(e) => setClientsQuery(e.target.value)}
-                />
-                {isAdmin && (
-                  <>
-                    <Select
-                      size="small"
-                      value={bulkAction}
-                      onChange={(e) => setBulkAction(e.target.value)}
-                      displayEmpty
-                      renderValue={(v) => (v ? (v === 'send_onboarding' ? 'Send onboarding email' : 'Delete') : 'Bulk Actions')}
-                      sx={{ minWidth: 220 }}
-                      disabled={!selectedClientIds.length}
-                    >
-                      <MenuItem value="">
-                        <em>Bulk Actions</em>
-                      </MenuItem>
-                      <MenuItem value="send_onboarding">Send onboarding email</MenuItem>
-                      <MenuItem value="delete">Delete</MenuItem>
-                    </Select>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      disableElevation
-                      onClick={handleApplyBulkAction}
-                      disabled={!selectedClientIds.length || !bulkAction || bulkDeleting || bulkSendingOnboarding}
-                    >
-                      Apply
-                    </Button>
-                  </>
-                )}
-              </Stack>
-            </Stack>
-            {selectedClientIds.length > 0 && (
-              <Typography variant="caption" color="text.secondary">
-                Selected: {selectedClientIds.length}
-              </Typography>
-            )}
-          </Box>
-          <Divider />
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell padding="checkbox">
-                    <Checkbox
-                      size="small"
-                      checked={filteredClients.length > 0 && filteredClients.every((c) => selectedClientIds.includes(c.id))}
-                      indeterminate={
-                        filteredClients.some((c) => selectedClientIds.includes(c.id)) &&
-                        !filteredClients.every((c) => selectedClientIds.includes(c.id))
-                      }
-                      onChange={toggleSelectAllFilteredClients}
-                      disabled={!isAdmin}
-                    />
-                  </TableCell>
-                  <TableCell>Display Name</TableCell>
-                  <TableCell>Email</TableCell>
-                  <TableCell>Role</TableCell>
-                  <TableCell>Onboarding</TableCell>
-                  <TableCell align="right">Action</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredClients.map((c) => (
-                    <TableRow key={c.id} hover>
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        size="small"
-                        checked={selectedClientIds.includes(c.id)}
-                        onChange={() => toggleSelectClient(c.id)}
-                        disabled={!isAdmin}
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
+              <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+                <Typography variant="h5" sx={{ mb: 2 }}>
+                  Add User
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={4}>
+                    <FormControl fullWidth>
+                      <InputLabel htmlFor="new-email">Email</InputLabel>
+                      <OutlinedInput
+                        id="new-email"
+                        value={newClient.email}
+                        onChange={(e) => setNewClient((p) => ({ ...p, email: e.target.value }))}
+                        label="Email"
+                        type="email"
                       />
-                    </TableCell>
-                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                      <TableCell>{c.email}</TableCell>
-                    <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                      <TableCell>
-                      {c.role === 'client' ? (
-                        c.onboarding_completed_at ? (
-                          c.activated_at ? (
-                            <Typography
-                              variant="caption"
-                              sx={{ fontWeight: 600, color: 'success.main' }}
-                              title={`Activated: ${new Date(c.activated_at).toLocaleString()}`}
-                            >
-                              Active
-                            </Typography>
-                          ) : (
-                            <Typography
-                              variant="caption"
-                              sx={{ fontWeight: 600, color: 'info.main' }}
-                              title={`Onboarding completed: ${new Date(c.onboarding_completed_at).toLocaleString()}`}
-                            >
-                              Pending Activation
-                            </Typography>
-                          )
-                        ) : (
-                          <Typography variant="caption" sx={{ fontWeight: 600, color: 'warning.main' }}>
-                            Onboarding
-                          </Typography>
-                        )
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">
-                          —
-                          </Typography>
-                        )}
-                      </TableCell>
-                    <TableCell align="right">
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
-                        <Tooltip title="Edit">
-                          <IconButton size="small" onClick={() => startEdit(c)}>
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        {isAdmin && (
-                          <Tooltip title="Delete">
-                            <span>
-                              <IconButton
-                                size="small"
-                                color="error"
-                                onClick={() => confirmDeleteClient(c.id)}
-                                disabled={deletingClientId === c.id}
-                              >
-                                {deletingClientId === c.id ? (
-                                  <CircularProgress size={18} color="inherit" />
-                                ) : (
-                                  <DeleteOutlineIcon fontSize="small" />
-                                )}
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        )}
-                        {c.role === 'client' && !c.onboarding_completed_at && (
-                          <>
-                            <Tooltip title="Copy onboarding link">
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => handleCopyOnboardingLink(c.id)}
-                                  disabled={copyingLinkForId === c.id}
-                                >
-                                  {copyingLinkForId === c.id ? (
-                                    <CircularProgress size={18} color="inherit" />
-                                  ) : (
-                                    <ContentCopyIcon fontSize="small" />
-                                  )}
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <FormControl fullWidth>
+                      <InputLabel htmlFor="new-name">Name</InputLabel>
+                      <OutlinedInput
+                        id="new-name"
+                        value={newClient.name}
+                        onChange={(e) => setNewClient((p) => ({ ...p, name: e.target.value }))}
+                        label="Name"
+                      />
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <FormControl fullWidth>
+                      <InputLabel id="new-role-label">Role</InputLabel>
+                      <Select
+                        labelId="new-role-label"
+                        value={newClient.role}
+                        label="Role"
+                        onChange={(e) => setNewClient((p) => ({ ...p, role: e.target.value }))}
+                      >
+                        {newRolesOptions.map((r) => (
+                          <MenuItem key={r} value={r}>
+                            {r.charAt(0).toUpperCase() + r.slice(1)}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      disableElevation
+                      onClick={handleAddClient}
+                      disabled={savingNew || !newClient.email}
+                    >
+                      {savingNew ? 'Saving…' : 'Save'}
+                    </Button>
+                  </Grid>
+                </Grid>
+              </Box>
+            </Box>
+
+            {isAdmin && (
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
+                <Box sx={{ p: 2 }}>
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    alignItems={{ xs: 'stretch', sm: 'center' }}
+                    justifyContent="space-between"
+                  >
+                    <Typography variant="h5">Staff</Typography>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      {loading && <CircularProgress size={20} />}
+                      <TextField
+                        size="small"
+                        placeholder="Search staff…"
+                        value={adminsQuery}
+                        onChange={(e) => setAdminsQuery(e.target.value)}
+                      />
+                    </Stack>
+                  </Stack>
+                </Box>
+                <Divider />
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Display Name</TableCell>
+                        <TableCell>Email</TableCell>
+                        <TableCell>Role</TableCell>
+                        <TableCell align="right">Action</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {filteredAdmins.map((c) => (
+                        <TableRow key={c.id} hover>
+                          <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                          <TableCell>{c.email}</TableCell>
+                          <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
+                          <TableCell align="right">
+                            <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                              <Tooltip title="Edit">
+                                <IconButton size="small" onClick={() => startEdit(c)}>
+                                  <EditIcon fontSize="small" />
                                 </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={() => handleSendOnboardingEmailNow(c.id)}
-                              disabled={sendingOnboardingForId === c.id}
-                            >
-                              {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
-                            </Button>
-                          </>
-                        )}
-                        {c.role === 'client' && c.onboarding_completed_at && !c.activated_at && (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="secondary"
-                            onClick={() => handleActivateClient(c.id)}
-                            disabled={activatingClientId === c.id}
-                          >
-                            {activatingClientId === c.id ? 'Activating…' : 'Activate'}
-                          </Button>
-                        )}
-                        {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            disableElevation
-                            onClick={() => {
-                              if (c.role === 'client' && !c.onboarding_completed_at) return;
-                              setActingClient(c.id);
-                              navigate('/portal');
-                            }}
-                          >
-                            Jump to View
-                          </Button>
-                        )}
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!filteredClients.length && !loading && (
-                  <TableRow>
-                    <TableCell colSpan={8} align="center">
-                      No clients yet.
-                    </TableCell>
-                  </TableRow>
+                              </Tooltip>
+                              {isAdmin && (
+                                <Tooltip title="Delete">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      color="error"
+                                      onClick={() => confirmDeleteClient(c.id)}
+                                      disabled={deletingClientId === c.id}
+                                    >
+                                      {deletingClientId === c.id ? (
+                                        <CircularProgress size={18} color="inherit" />
+                                      ) : (
+                                        <DeleteOutlineIcon fontSize="small" />
+                                      )}
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              )}
+                            </Stack>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {!filteredAdmins.length && !loading && (
+                        <TableRow>
+                          <TableCell colSpan={4} align="center">
+                            No staff yet.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+              <Box sx={{ p: 2 }}>
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  spacing={1}
+                  alignItems={{ xs: 'stretch', sm: 'center' }}
+                  justifyContent="space-between"
+                >
+                  <Typography variant="h5">Clients</Typography>
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
+                    {loading && <CircularProgress size={20} />}
+                    <TextField
+                      size="small"
+                      placeholder="Search clients…"
+                      value={clientsQuery}
+                      onChange={(e) => setClientsQuery(e.target.value)}
+                    />
+                    {isAdmin && (
+                      <>
+                        <Select
+                          size="small"
+                          value={bulkAction}
+                          onChange={(e) => setBulkAction(e.target.value)}
+                          displayEmpty
+                          renderValue={(v) => (v ? (v === 'send_onboarding' ? 'Send onboarding email' : 'Delete') : 'Bulk Actions')}
+                          sx={{ minWidth: 220 }}
+                          disabled={!selectedClientIds.length}
+                        >
+                          <MenuItem value="">
+                            <em>Bulk Actions</em>
+                          </MenuItem>
+                          <MenuItem value="send_onboarding">Send onboarding email</MenuItem>
+                          <MenuItem value="delete">Delete</MenuItem>
+                        </Select>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          disableElevation
+                          onClick={handleApplyBulkAction}
+                          disabled={!selectedClientIds.length || !bulkAction || bulkDeleting || bulkSendingOnboarding}
+                        >
+                          Apply
+                        </Button>
+                      </>
+                    )}
+                  </Stack>
+                </Stack>
+                {selectedClientIds.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    Selected: {selectedClientIds.length}
+                  </Typography>
                 )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Box>
+              </Box>
+              <Divider />
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          checked={filteredClients.length > 0 && filteredClients.every((c) => selectedClientIds.includes(c.id))}
+                          indeterminate={
+                            filteredClients.some((c) => selectedClientIds.includes(c.id)) &&
+                            !filteredClients.every((c) => selectedClientIds.includes(c.id))
+                          }
+                          onChange={toggleSelectAllFilteredClients}
+                          disabled={!isAdmin}
+                        />
+                      </TableCell>
+                      <TableCell>Display Name</TableCell>
+                      <TableCell>Email</TableCell>
+                      <TableCell>Role</TableCell>
+                      <TableCell>Onboarding</TableCell>
+                      <TableCell align="right">Action</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {filteredClients.map((c) => (
+                      <TableRow key={c.id} hover>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={selectedClientIds.includes(c.id)}
+                            onChange={() => toggleSelectClient(c.id)}
+                            disabled={!isAdmin}
+                          />
+                        </TableCell>
+                        <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                        <TableCell>{c.email}</TableCell>
+                        <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
+                        <TableCell>
+                          {c.role === 'client' ? (
+                            c.onboarding_completed_at ? (
+                              c.activated_at ? (
+                                <Typography
+                                  variant="caption"
+                                  sx={{ fontWeight: 600, color: 'success.main' }}
+                                  title={`Activated: ${new Date(c.activated_at).toLocaleString()}`}
+                                >
+                                  Active
+                                </Typography>
+                              ) : (
+                                <Typography
+                                  variant="caption"
+                                  sx={{ fontWeight: 600, color: 'info.main' }}
+                                  title={`Onboarding completed: ${new Date(c.onboarding_completed_at).toLocaleString()}`}
+                                >
+                                  Pending Activation
+                                </Typography>
+                              )
+                            ) : (
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: 'warning.main' }}>
+                                Onboarding
+                              </Typography>
+                            )
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              —
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                            <Tooltip title="Edit">
+                              <IconButton size="small" onClick={() => startEdit(c)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            {isAdmin && (
+                              <Tooltip title="Delete">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    color="error"
+                                    onClick={() => confirmDeleteClient(c.id)}
+                                    disabled={deletingClientId === c.id}
+                                  >
+                                    {deletingClientId === c.id ? (
+                                      <CircularProgress size={18} color="inherit" />
+                                    ) : (
+                                      <DeleteOutlineIcon fontSize="small" />
+                                    )}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
+                            {c.role === 'client' && !c.onboarding_completed_at && (
+                              <>
+                                <Tooltip title="Copy onboarding link">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => handleCopyOnboardingLink(c.id)}
+                                      disabled={copyingLinkForId === c.id}
+                                    >
+                                      {copyingLinkForId === c.id ? (
+                                        <CircularProgress size={18} color="inherit" />
+                                      ) : (
+                                        <ContentCopyIcon fontSize="small" />
+                                      )}
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() => handleSendOnboardingEmailNow(c.id)}
+                                  disabled={sendingOnboardingForId === c.id}
+                                >
+                                  {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
+                                </Button>
+                              </>
+                            )}
+                            {c.role === 'client' && c.onboarding_completed_at && !c.activated_at && (
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="secondary"
+                                onClick={() => handleActivateClient(c.id)}
+                                disabled={activatingClientId === c.id}
+                              >
+                                {activatingClientId === c.id ? 'Activating…' : 'Activate'}
+                              </Button>
+                            )}
+                            {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
+                              <Button
+                                size="small"
+                                variant="contained"
+                                disableElevation
+                                onClick={() => {
+                                  if (c.role === 'client' && !c.onboarding_completed_at) return;
+                                  setActingClient(c.id);
+                                  navigate('/portal');
+                                }}
+                              >
+                                Jump to View
+                              </Button>
+                            )}
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!filteredClients.length && !loading && (
+                      <TableRow>
+                        <TableCell colSpan={8} align="center">
+                          No clients yet.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
           </>
         )}
 
@@ -1722,8 +2075,12 @@ export default function AdminHub() {
                   <Stack direction="row" spacing={1} alignItems="center">
                     <CheckCircleIcon color="success" />
                     <Box>
-                      <Typography variant="h4" color="success.main">{emailStatsSummary.sent}</Typography>
-                      <Typography variant="caption" color="text.secondary">Sent (30d)</Typography>
+                      <Typography variant="h4" color="success.main">
+                        {emailStatsSummary.sent}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Sent (30d)
+                      </Typography>
                     </Box>
                   </Stack>
                 </CardContent>
@@ -1733,8 +2090,12 @@ export default function AdminHub() {
                   <Stack direction="row" spacing={1} alignItems="center">
                     <ErrorIcon color="error" />
                     <Box>
-                      <Typography variant="h4" color="error.main">{emailStatsSummary.failed}</Typography>
-                      <Typography variant="caption" color="text.secondary">Failed (30d)</Typography>
+                      <Typography variant="h4" color="error.main">
+                        {emailStatsSummary.failed}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Failed (30d)
+                      </Typography>
                     </Box>
                   </Stack>
                 </CardContent>
@@ -1744,8 +2105,12 @@ export default function AdminHub() {
                   <Stack direction="row" spacing={1} alignItems="center">
                     <ScheduleIcon color="warning" />
                     <Box>
-                      <Typography variant="h4" color="warning.main">{emailStatsSummary.pending}</Typography>
-                      <Typography variant="caption" color="text.secondary">Pending</Typography>
+                      <Typography variant="h4" color="warning.main">
+                        {emailStatsSummary.pending}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Pending
+                      </Typography>
                     </Box>
                   </Stack>
                 </CardContent>
@@ -1777,7 +2142,9 @@ export default function AdminHub() {
                 >
                   <MenuItem value="all">All Types</MenuItem>
                   {Object.entries(EMAIL_TYPE_LABELS).map(([key, label]) => (
-                    <MenuItem key={key} value={key}>{label}</MenuItem>
+                    <MenuItem key={key} value={key}>
+                      {label}
+                    </MenuItem>
                   ))}
                 </Select>
               </FormControl>
@@ -1821,11 +2188,7 @@ export default function AdminHub() {
                           <Typography variant="body2">{formatEmailDate(log.created_at)}</Typography>
                         </TableCell>
                         <TableCell>
-                          <Chip
-                            label={EMAIL_TYPE_LABELS[log.email_type] || log.email_type}
-                            size="small"
-                            variant="outlined"
-                          />
+                          <Chip label={EMAIL_TYPE_LABELS[log.email_type] || log.email_type} size="small" variant="outlined" />
                         </TableCell>
                         <TableCell>
                           <Typography variant="body2" fontWeight={500}>
@@ -1844,11 +2207,7 @@ export default function AdminHub() {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            icon={
-                              log.status === 'sent' ? <CheckCircleIcon /> :
-                              log.status === 'failed' ? <ErrorIcon /> :
-                              <ScheduleIcon />
-                            }
+                            icon={log.status === 'sent' ? <CheckCircleIcon /> : log.status === 'failed' ? <ErrorIcon /> : <ScheduleIcon />}
                             label={STATUS_COLORS[log.status]?.label || log.status}
                             size="small"
                             color={STATUS_COLORS[log.status]?.color || 'default'}
@@ -1903,9 +2262,13 @@ export default function AdminHub() {
             {emailLogDetail.log && (
               <Chip
                 icon={
-                  emailLogDetail.log.status === 'sent' ? <CheckCircleIcon /> :
-                  emailLogDetail.log.status === 'failed' ? <ErrorIcon /> :
-                  <ScheduleIcon />
+                  emailLogDetail.log.status === 'sent' ? (
+                    <CheckCircleIcon />
+                  ) : emailLogDetail.log.status === 'failed' ? (
+                    <ErrorIcon />
+                  ) : (
+                    <ScheduleIcon />
+                  )
                 }
                 label={STATUS_COLORS[emailLogDetail.log.status]?.label || emailLogDetail.log.status}
                 size="small"
@@ -1924,7 +2287,9 @@ export default function AdminHub() {
             <Stack spacing={3}>
               {/* Basic Info */}
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Email Type</Typography>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Email Type
+                </Typography>
                 <Chip
                   label={EMAIL_TYPE_LABELS[emailLogDetail.log.email_type] || emailLogDetail.log.email_type}
                   size="small"
@@ -1934,24 +2299,34 @@ export default function AdminHub() {
               <Divider />
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}>
-                  <Typography variant="subtitle2" color="text.secondary">Recipient</Typography>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Recipient
+                  </Typography>
                   <Typography>{emailLogDetail.log.recipient_name || '—'}</Typography>
-                  <Typography variant="body2" color="text.secondary">{emailLogDetail.log.recipient_email}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {emailLogDetail.log.recipient_email}
+                  </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6}>
-                  <Typography variant="subtitle2" color="text.secondary">Sent At</Typography>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Sent At
+                  </Typography>
                   <Typography>{formatEmailDate(emailLogDetail.log.sent_at || emailLogDetail.log.created_at)}</Typography>
                 </Grid>
               </Grid>
               {emailLogDetail.log.cc_emails?.length > 0 && (
                 <Box>
-                  <Typography variant="subtitle2" color="text.secondary">CC</Typography>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    CC
+                  </Typography>
                   <Typography variant="body2">{emailLogDetail.log.cc_emails.join(', ')}</Typography>
                 </Box>
               )}
               <Divider />
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Subject</Typography>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Subject
+                </Typography>
                 <Typography>{emailLogDetail.log.subject}</Typography>
               </Box>
 
@@ -1966,7 +2341,9 @@ export default function AdminHub() {
               {/* Mailgun Info */}
               {emailLogDetail.log.mailgun_id && (
                 <Box>
-                  <Typography variant="subtitle2" color="text.secondary">Mailgun ID</Typography>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Mailgun ID
+                  </Typography>
                   <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
                     {emailLogDetail.log.mailgun_id}
                   </Typography>
@@ -1977,18 +2354,16 @@ export default function AdminHub() {
 
               {/* Email Content */}
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>Email Content</Typography>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Email Content
+                </Typography>
                 {emailLogDetail.log.html_body ? (
                   <Paper variant="outlined" sx={{ p: 2, maxHeight: 400, overflow: 'auto' }}>
                     <div dangerouslySetInnerHTML={{ __html: emailLogDetail.log.html_body }} />
                   </Paper>
                 ) : emailLogDetail.log.text_body ? (
                   <Paper variant="outlined" sx={{ p: 2, maxHeight: 400, overflow: 'auto' }}>
-                    <Typography
-                      variant="body2"
-                      component="pre"
-                      sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', m: 0 }}
-                    >
+                    <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', m: 0 }}>
                       {emailLogDetail.log.text_body}
                     </Typography>
                   </Paper>
@@ -2002,7 +2377,9 @@ export default function AdminHub() {
               {/* Metadata */}
               {emailLogDetail.log.metadata && Object.keys(emailLogDetail.log.metadata).length > 0 && (
                 <Box>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Metadata</Typography>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Metadata
+                  </Typography>
                   <Paper variant="outlined" sx={{ p: 1.5 }}>
                     <Typography
                       variant="body2"
@@ -2020,20 +2397,28 @@ export default function AdminHub() {
               <Grid container spacing={2}>
                 {emailLogDetail.log.triggered_by_email && (
                   <Grid item xs={12} sm={6}>
-                    <Typography variant="subtitle2" color="text.secondary">Triggered By</Typography>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      Triggered By
+                    </Typography>
                     <Typography>
                       {emailLogDetail.log.triggered_by_first_name} {emailLogDetail.log.triggered_by_last_name}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">{emailLogDetail.log.triggered_by_email}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {emailLogDetail.log.triggered_by_email}
+                    </Typography>
                   </Grid>
                 )}
                 {emailLogDetail.log.client_email && (
                   <Grid item xs={12} sm={6}>
-                    <Typography variant="subtitle2" color="text.secondary">Related Client</Typography>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      Related Client
+                    </Typography>
                     <Typography>
                       {emailLogDetail.log.client_first_name} {emailLogDetail.log.client_last_name}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">{emailLogDetail.log.client_email}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {emailLogDetail.log.client_email}
+                    </Typography>
                   </Grid>
                 )}
               </Grid>
@@ -2041,9 +2426,7 @@ export default function AdminHub() {
           ) : null}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEmailLogDetail({ open: false, log: null, loading: false })}>
-            Close
-          </Button>
+          <Button onClick={() => setEmailLogDetail({ open: false, log: null, loading: false })}>Close</Button>
         </DialogActions>
       </Dialog>
 
@@ -2068,11 +2451,13 @@ export default function AdminHub() {
               <Tab label="Client Details" />
               <Tab label="Client Assets" />
               <Tab label="Client Documents" />
+              <Tab label="Integrations" />
             </Tabs>
             <Box sx={{ flex: 1, overflowY: 'auto' }}>
               {activeTab === 0 && renderDetailsTab()}
               {activeTab === 1 && renderBrandAssetsTab()}
               {activeTab === 2 && renderDocumentsTab()}
+              {activeTab === 3 && renderIntegrationsTab()}
             </Box>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
               {editing?.role === 'client' && !editing?.onboarding_completed_at && (
@@ -2234,8 +2619,8 @@ export default function AdminHub() {
                     <Grid container spacing={1}>
                       {ACCESS_STEP_OPTIONS.map((option) => (
                         <Grid item xs={12} sm={6} key={option.key}>
-                    <FormControlLabel
-                      control={
+                          <FormControlLabel
+                            control={
                               <Checkbox
                                 checked={editing?.[option.key] !== false}
                                 onChange={toggleAccessRequirement(option.key)}
@@ -2306,6 +2691,241 @@ export default function AdminHub() {
               </Button>
             </>
           )}
+        </DialogActions>
+      </Dialog>
+
+      {/* OAuth Connection Dialog */}
+      <Dialog
+        open={oauthConnectionDialog.open}
+        onClose={() => setOauthConnectionDialog({ open: false, connection: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{oauthConnectionDialog.connection?.id ? 'Edit Connection' : 'Add OAuth Connection'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Provider"
+              select
+              value={oauthConnectionDialog.connection?.provider || 'google'}
+              onChange={(e) =>
+                setOauthConnectionDialog((prev) => ({
+                  ...prev,
+                  connection: { ...prev.connection, provider: e.target.value }
+                }))
+              }
+              disabled={!!oauthConnectionDialog.connection?.id}
+            >
+              {Object.entries(OAUTH_PROVIDERS).map(([value, config]) => (
+                <MenuItem key={value} value={value}>
+                  {config.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="Account ID"
+              value={oauthConnectionDialog.connection?.provider_account_id || ''}
+              onChange={(e) =>
+                setOauthConnectionDialog((prev) => ({
+                  ...prev,
+                  connection: { ...prev.connection, provider_account_id: e.target.value }
+                }))
+              }
+              placeholder="e.g., 123456789 (from the platform)"
+              required
+            />
+            <TextField
+              label="Account Name"
+              value={oauthConnectionDialog.connection?.provider_account_name || ''}
+              onChange={(e) =>
+                setOauthConnectionDialog((prev) => ({
+                  ...prev,
+                  connection: { ...prev.connection, provider_account_name: e.target.value }
+                }))
+              }
+              placeholder="Display name for this connection"
+            />
+            <TextField
+              label="Access Token"
+              value={oauthConnectionDialog.connection?.access_token || ''}
+              onChange={(e) =>
+                setOauthConnectionDialog((prev) => ({
+                  ...prev,
+                  connection: { ...prev.connection, access_token: e.target.value }
+                }))
+              }
+              type="password"
+              placeholder="OAuth access token"
+            />
+            <TextField
+              label="Refresh Token"
+              value={oauthConnectionDialog.connection?.refresh_token || ''}
+              onChange={(e) =>
+                setOauthConnectionDialog((prev) => ({
+                  ...prev,
+                  connection: { ...prev.connection, refresh_token: e.target.value }
+                }))
+              }
+              type="password"
+              placeholder="OAuth refresh token (if available)"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOauthConnectionDialog({ open: false, connection: null })}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveOAuthConnection}
+            disabled={savingOauth || !oauthConnectionDialog.connection?.provider_account_id}
+          >
+            {savingOauth ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* OAuth Resource Dialog */}
+      <Dialog
+        open={oauthResourceDialog.open}
+        onClose={() => setOauthResourceDialog({ open: false, connectionId: null, resource: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{oauthResourceDialog.resource?.id ? 'Edit Resource' : 'Add Resource'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {(() => {
+              const conn = oauthConnections.find((c) => c.id === oauthResourceDialog.connectionId);
+              const resourceTypes = conn ? getResourceTypesForProvider(conn.provider) : [];
+              return (
+                <TextField
+                  label="Resource Type"
+                  select
+                  value={oauthResourceDialog.resource?.resource_type || ''}
+                  onChange={(e) =>
+                    setOauthResourceDialog((prev) => ({
+                      ...prev,
+                      resource: { ...prev.resource, resource_type: e.target.value }
+                    }))
+                  }
+                  disabled={!!oauthResourceDialog.resource?.id}
+                >
+                  {resourceTypes.map((type) => (
+                    <MenuItem key={type.value} value={type.value}>
+                      {type.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              );
+            })()}
+            <TextField
+              label="Resource ID"
+              value={oauthResourceDialog.resource?.resource_id || ''}
+              onChange={(e) =>
+                setOauthResourceDialog((prev) => ({
+                  ...prev,
+                  resource: { ...prev.resource, resource_id: e.target.value }
+                }))
+              }
+              placeholder="e.g., page ID or location ID"
+              required
+            />
+            <TextField
+              label="Resource Name"
+              value={oauthResourceDialog.resource?.resource_name || ''}
+              onChange={(e) =>
+                setOauthResourceDialog((prev) => ({
+                  ...prev,
+                  resource: { ...prev.resource, resource_name: e.target.value }
+                }))
+              }
+              placeholder="Display name"
+              required
+            />
+            <TextField
+              label="Username / Handle"
+              value={oauthResourceDialog.resource?.resource_username || ''}
+              onChange={(e) =>
+                setOauthResourceDialog((prev) => ({
+                  ...prev,
+                  resource: { ...prev.resource, resource_username: e.target.value }
+                }))
+              }
+              placeholder="e.g., @username (optional)"
+            />
+            <TextField
+              label="Resource URL"
+              value={oauthResourceDialog.resource?.resource_url || ''}
+              onChange={(e) =>
+                setOauthResourceDialog((prev) => ({
+                  ...prev,
+                  resource: { ...prev.resource, resource_url: e.target.value }
+                }))
+              }
+              placeholder="https://... (optional)"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={oauthResourceDialog.resource?.is_primary || false}
+                  onChange={(e) =>
+                    setOauthResourceDialog((prev) => ({
+                      ...prev,
+                      resource: { ...prev.resource, is_primary: e.target.checked }
+                    }))
+                  }
+                />
+              }
+              label="Set as primary resource for this connection"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOauthResourceDialog({ open: false, connectionId: null, resource: null })}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveOAuthResource}
+            disabled={savingOauth || !oauthResourceDialog.resource?.resource_id || !oauthResourceDialog.resource?.resource_name}
+          >
+            {savingOauth ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reclassify Leads Dialog */}
+      <Dialog open={reclassifyDialog.open} onClose={() => setReclassifyDialog((p) => ({ ...p, open: false }))} maxWidth="xs" fullWidth>
+        <DialogTitle>Reclassify Leads</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Alert severity="warning">
+              This will re-run AI classification on cached call transcripts/messages and update lead categories/summaries in the database.
+              CTM star ratings (if present) will still determine the final category.
+            </Alert>
+            <TextField
+              label="How many recent calls?"
+              type="number"
+              value={reclassifyDialog.limit}
+              onChange={(e) => setReclassifyDialog((p) => ({ ...p, limit: Number(e.target.value || 0) }))}
+              inputProps={{ min: 1, max: 5000 }}
+              helperText="Max 5000"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={reclassifyDialog.force}
+                  onChange={(e) => setReclassifyDialog((p) => ({ ...p, force: e.target.checked }))}
+                />
+              }
+              label="Force reclassify even if already classified"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReclassifyDialog((p) => ({ ...p, open: false }))} disabled={reclassifyDialog.loading}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleRunReclassify} disabled={reclassifyDialog.loading}>
+            {reclassifyDialog.loading ? 'Reclassifying…' : 'Run Reclassify'}
+          </Button>
         </DialogActions>
       </Dialog>
     </MainCard>
