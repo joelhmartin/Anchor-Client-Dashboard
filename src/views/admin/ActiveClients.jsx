@@ -78,7 +78,7 @@ function ActiveClientRow({ client, onArchive }) {
           {journeySummary ? (
             <Stack spacing={0.5}>
               <Chip
-                label={(journeySummary.status || 'pending').replace('_', ' ')}
+                label={(journeySummary.status || 'pending').replace(/_/g, ' ')}
                 size="small"
                 color={journeySummary.paused ? 'warning' : 'success'}
               />
@@ -193,7 +193,7 @@ function ActiveClientRow({ client, onArchive }) {
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="subtitle2">Client Journey</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Status: {(journeySummary.status || 'pending').replace('_', ' ')}
+                    Status: {(journeySummary.status || 'pending').replace(/_/g, ' ')}
                     {journeySummary.next_action_at && ` · Next action ${new Date(journeySummary.next_action_at).toLocaleString()}`}
                   </Typography>
                   {journeyConcerns.length > 0 && (

@@ -2069,7 +2069,7 @@ export default function ClientPortal() {
                       return (
                         <Chip
                           key={cat}
-                          label={`${cat.replace('_', ' ')}: ${count}`}
+                          label={`${cat.replace(/_/g, ' ')}: ${count}`}
                           size="small"
                           sx={{
                             bgcolor: catColor.bg,
@@ -2328,7 +2328,7 @@ export default function ClientPortal() {
                   onClick={() => setCallFilters((prev) => ({ ...prev, category: prev.category === cat ? 'all' : cat }))}
                   sx={{ textTransform: 'none' }}
                 >
-                  {cat.replace('_', ' ').toUpperCase()} ({callCategories[cat] || 0})
+                  {cat.replace(/_/g, ' ').toUpperCase()} ({callCategories[cat] || 0})
                 </Button>
               ))}
             </Box>
@@ -2375,7 +2375,7 @@ export default function ClientPortal() {
                         call.classification_summary ? (
                           <Box sx={{ maxWidth: 320, p: 0.5 }}>
                             <Typography sx={{ fontWeight: 600, color: 'white', fontSize: '0.75rem', mb: 0.5 }}>
-                              {(call.category || 'unreviewed').replace('_', ' ').toUpperCase()}
+                              {(call.category || 'unreviewed').replace(/_/g, ' ').toUpperCase()}
                             </Typography>
                             <Typography sx={{ color: 'rgba(255,255,255,0.9)', fontSize: '0.75rem' }}>
                               {call.classification_summary}
@@ -2415,7 +2415,7 @@ export default function ClientPortal() {
                             {/* Classification - Clickable to change */}
                             <Tooltip title="Click to change">
                               <Chip
-                                label={(call.category || 'unreviewed').replace('_', ' ').toUpperCase()}
+                                label={(call.category || 'unreviewed').replace(/_/g, ' ').toUpperCase()}
                                 size="small"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -2597,7 +2597,7 @@ export default function ClientPortal() {
                               arrow
                             >
                               <Chip
-                                label={(call.category || 'unreviewed').replace('_', ' ')}
+                                label={(call.category || 'unreviewed').replace(/_/g, ' ')}
                                 size="small"
                                 sx={{
                                   bgcolor: categoryColor.bg,
@@ -2994,7 +2994,7 @@ export default function ClientPortal() {
                                   </Typography>
                                   {journey.status && (
                                     <Chip
-                                      label={journey.status.replace('_', ' ')}
+                                      label={journey.status.replace(/_/g, ' ')}
                                       size="small"
                                       variant="outlined"
                                       sx={{ textTransform: 'capitalize', fontSize: '0.7rem' }}
@@ -4195,7 +4195,7 @@ export default function ClientPortal() {
                             return (
                               <Chip
                                 key={cat}
-                                label={cat.replace('_', ' ').toUpperCase()}
+                                label={cat.replace(/_/g, ' ').toUpperCase()}
                                 size="small"
                                 onClick={() => handleUpdateCategory(lead.id, cat)}
                                 sx={{
@@ -4663,7 +4663,7 @@ export default function ClientPortal() {
                 sx={{ gap: 1 }}
               >
                 <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: catColor.border }} />
-                {cat.replace('_', ' ').toUpperCase()}
+                {cat.replace(/_/g, ' ').toUpperCase()}
               </MenuItem>
             );
           }
