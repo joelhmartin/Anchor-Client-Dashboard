@@ -626,7 +626,7 @@ ALTER TABLE client_profiles DROP COLUMN IF EXISTS google_client_secret;
 -- OAuth Providers (app-level credentials per platform)
 CREATE TABLE IF NOT EXISTS oauth_providers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok', 'wordpress')),
   client_id TEXT NOT NULL,
   client_secret TEXT NOT NULL,
   redirect_uri TEXT,
@@ -644,7 +644,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_providers_provider ON oauth_provider
 CREATE TABLE IF NOT EXISTS oauth_connections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   client_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok', 'wordpress')),
   provider_account_id TEXT NOT NULL,
   provider_account_name TEXT,
   access_token TEXT,
@@ -674,9 +674,9 @@ CREATE TABLE IF NOT EXISTS oauth_resources (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   client_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   oauth_connection_id UUID NOT NULL REFERENCES oauth_connections(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok')),
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'facebook', 'instagram', 'tiktok', 'wordpress')),
   resource_type TEXT NOT NULL CHECK (
-    resource_type IN ('google_location', 'facebook_page', 'instagram_account', 'tiktok_account')
+    resource_type IN ('google_location', 'facebook_page', 'instagram_account', 'tiktok_account', 'wordpress_site')
   ),
   resource_id TEXT NOT NULL,
   resource_name TEXT NOT NULL,

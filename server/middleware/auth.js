@@ -19,11 +19,16 @@ export async function requireAuth(req, res, next) {
   try {
     let payload = null;
 
-    // Check Authorization header (preferred)
+    // Check Authorization header (preferred for API calls)
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
       const accessToken = authHeader.substring(7);
       payload = verifyAccessToken(accessToken);
+    }
+
+    // Fallback: Check session cookie (for browser navigation, e.g., OAuth redirects)
+    if (!payload && req.cookies?.session) {
+      payload = verifyAccessToken(req.cookies.session);
     }
 
     // Token not found or invalid

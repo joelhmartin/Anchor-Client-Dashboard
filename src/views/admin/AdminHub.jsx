@@ -108,6 +108,20 @@ import { getErrorMessage } from 'utils/errors';
 import AnchorStepIcon from 'ui-component/extended/AnchorStepIcon';
 import Button from '@mui/material/Button';
 
+// OAuth provider icons
+import GoogleIcon from 'assets/images/icons/google.svg';
+import FacebookIcon from 'assets/images/icons/facebook.svg';
+import TikTokIcon from 'assets/images/icons/tiktok.svg';
+import WordPressIcon from 'assets/images/icons/wordpress.svg';
+
+const OAUTH_PROVIDER_ICONS = {
+  google: GoogleIcon,
+  facebook: FacebookIcon,
+  instagram: FacebookIcon, // Instagram uses Facebook OAuth
+  tiktok: TikTokIcon,
+  wordpress: WordPressIcon
+};
+
 const EMPTY_SERVICE_LIST = Object.freeze([]);
 const CLIENT_PACKAGE_OPTIONS = ['Essentials', 'Growth', 'Accelerate', 'Custom'];
 const EMPTY_SUBTYPE_LIST = Object.freeze([]);
@@ -3075,8 +3089,13 @@ export default function AdminHub() {
                     py: 1.5
                   }}
                 >
-                  {oauthConnectionDialog.connection?.provider === 'google' && (
-                    <Box component="img" src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" sx={{ width: 20, height: 20, mr: 1.5 }} />
+                  {OAUTH_PROVIDER_ICONS[oauthConnectionDialog.connection?.provider] && (
+                    <Box 
+                      component="img" 
+                      src={OAUTH_PROVIDER_ICONS[oauthConnectionDialog.connection?.provider]} 
+                      alt="" 
+                      sx={{ width: 20, height: 20, mr: 1.5, filter: oauthConnectionDialog.connection?.provider === 'tiktok' ? 'invert(1)' : 'none' }} 
+                    />
                   )}
                   Sign in with {oauthConnectionDialog.connection?.provider === 'instagram' ? 'Facebook (for Instagram)' : OAUTH_PROVIDERS[oauthConnectionDialog.connection?.provider]?.label}
                 </Button>

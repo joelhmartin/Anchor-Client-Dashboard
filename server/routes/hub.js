@@ -82,6 +82,13 @@ import {
   fetchTikTokProfile,
   fetchTikTokAccountInfo,
   refreshTikTokAccessToken,
+  // WordPress
+  getWordPressOAuthConfig,
+  buildWordPressAuthUrl,
+  exchangeWordPressCodeForTokens,
+  fetchWordPressProfile,
+  fetchWordPressSites,
+  refreshWordPressAccessToken,
   // Shared
   setOAuthCookies,
   getOAuthCookies,
@@ -6207,6 +6214,152 @@ router.get('/oauth-connections/:id/tiktok-account', requireAuth, isAdminOrEditor
   } catch (err) {
     console.error('[oauth:tiktok:account]', err);
     res.status(500).json({ message: 'Failed to fetch TikTok account info' });
+  }
+});
+
+// ============================================================================
+// WordPress OAuth Connect Flow
+// ============================================================================
+
+/**
+ * GET /hub/oauth/wordpress/connect
+ * Initiate WordPress OAuth flow for a client
+ * Query params: clientId (required)
+ */
+router.get('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    
+    if (!clientId) {
+      return res.status(400).json({ message: 'clientId is required' });
+    }
+
+    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    if (!clientCheck.rows.length) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const baseUrl = resolveBaseUrl(req);
+    const redirectUri = `${baseUrl}/api/hub/oauth/wordpress/callback`;
+    
+    const config = getWordPressOAuthConfig(redirectUri);
+    
+    if (!config.clientId || !config.clientSecret) {
+      console.error('[oauth:wordpress:connect] Missing WORDPRESS_CLIENT_ID or WORDPRESS_CLIENT_SECRET');
+      return res.status(500).json({ message: 'WordPress OAuth not configured. Check server environment variables.' });
+    }
+
+    const state = createOauthState();
+
+    // WordPress doesn't use PKCE
+    setOAuthCookies(res, 'wordpress', {
+      state,
+      verifier: '', // Not used for WordPress
+      clientId
+    });
+
+    const authUrl = buildWordPressAuthUrl(config, { state });
+    
+    console.log(`[oauth:wordpress:connect] Redirecting to WordPress OAuth for client ${clientId}`);
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth:wordpress:connect]', err);
+    res.status(500).json({ message: 'Failed to start OAuth flow' });
+  }
+});
+
+/**
+ * GET /hub/oauth/wordpress/callback
+ * Handle WordPress OAuth callback
+ */
+router.get('/oauth/wordpress/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:wordpress:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:wordpress:callback] Missing code or state');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'wordpress');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:wordpress:callback] State mismatch');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.clientId) {
+      console.log('[oauth:wordpress:callback] Missing clientId in cookies');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'wordpress');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/wordpress/callback`;
+    const config = getWordPressOAuthConfig(redirectUri);
+    
+    console.log('[oauth:wordpress:callback] Exchanging code for tokens...');
+    const tokens = await exchangeWordPressCodeForTokens(config, code);
+    
+    console.log('[oauth:wordpress:callback] Fetching WordPress profile...');
+    const profile = await fetchWordPressProfile(tokens.access_token, tokens);
+    
+    console.log(`[oauth:wordpress:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'wordpress', tokens, profile);
+    console.log(`[oauth:wordpress:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=wordpress&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:wordpress:callback]', err);
+    clearOAuthCookies(res, 'wordpress');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/wordpress-sites
+ * Fetch WordPress sites for an OAuth connection
+ */
+router.get('/oauth-connections/:id/wordpress-sites', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'wordpress']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'WordPress connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:wordpress:sites] Token expired, refreshing...`);
+      accessToken = await refreshWordPressAccessToken(connectionId);
+    }
+
+    const sites = await fetchWordPressSites(accessToken);
+    res.json({ sites });
+  } catch (err) {
+    console.error('[oauth:wordpress:sites]', err);
+    res.status(500).json({ message: 'Failed to fetch WordPress sites' });
   }
 });
 

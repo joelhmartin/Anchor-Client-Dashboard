@@ -121,6 +121,24 @@ export function fetchTikTokAccount(connectionId) {
 }
 
 // ============================================================================
+// OAuth Connect Flow - WordPress
+// ============================================================================
+
+/**
+ * Get the URL to initiate WordPress OAuth for a client
+ */
+export function getWordPressOAuthConnectUrl(clientId) {
+  return `/api/hub/oauth/wordpress/connect?clientId=${clientId}`;
+}
+
+/**
+ * Fetch WordPress sites for an OAuth connection
+ */
+export function fetchWordPressSites(connectionId) {
+  return client.get(`/hub/oauth-connections/${connectionId}/wordpress-sites`).then((res) => res.data.sites || []);
+}
+
+// ============================================================================
 // Generic OAuth Connect Helper
 // ============================================================================
 
@@ -136,6 +154,8 @@ export function getOAuthConnectUrl(provider, clientId) {
       return getFacebookOAuthConnectUrl(clientId);
     case 'tiktok':
       return getTikTokOAuthConnectUrl(clientId);
+    case 'wordpress':
+      return getWordPressOAuthConnectUrl(clientId);
     default:
       throw new Error(`Unsupported OAuth provider: ${provider}`);
   }
@@ -173,14 +193,16 @@ export const OAUTH_PROVIDERS = {
   google: { label: 'Google', color: '#4285F4' },
   facebook: { label: 'Facebook', color: '#1877F2' },
   instagram: { label: 'Instagram', color: '#E4405F' },
-  tiktok: { label: 'TikTok', color: '#000000' }
+  tiktok: { label: 'TikTok', color: '#000000' },
+  wordpress: { label: 'WordPress', color: '#21759B' }
 };
 
 export const RESOURCE_TYPES = {
   google_location: { label: 'Google Business Location', provider: 'google' },
   facebook_page: { label: 'Facebook Page', provider: 'facebook' },
   instagram_account: { label: 'Instagram Account', provider: 'instagram' },
-  tiktok_account: { label: 'TikTok Account', provider: 'tiktok' }
+  tiktok_account: { label: 'TikTok Account', provider: 'tiktok' },
+  wordpress_site: { label: 'WordPress Site', provider: 'wordpress' }
 };
 
 export function getResourceTypesForProvider(provider) {

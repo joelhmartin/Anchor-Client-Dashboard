@@ -63,6 +63,21 @@ const TIKTOK_SCOPES = [
 ];
 
 // ============================================================================
+// WordPress OAuth Configuration (WordPress.com / Jetpack)
+// ============================================================================
+const WORDPRESS_AUTH_URL = 'https://public-api.wordpress.com/oauth2/authorize';
+const WORDPRESS_TOKEN_URL = 'https://public-api.wordpress.com/oauth2/token';
+const WORDPRESS_API_URL = 'https://public-api.wordpress.com/rest/v1.1';
+const WORDPRESS_API_V2_URL = 'https://public-api.wordpress.com/wp/v2';
+
+// WordPress scopes for site management and posting
+const WORDPRESS_SCOPES = [
+  'global',  // Access to all sites the user has access to
+  'posts',   // Create, edit, delete posts
+  'media'    // Upload media
+];
+
+// ============================================================================
 // Cookie prefixes for OAuth state
 // ============================================================================
 const OAUTH_STATE_PREFIX = 'oauth_int_state_';
@@ -144,6 +159,20 @@ export function getTikTokOAuthConfig(redirectUri) {
   };
 }
 
+/**
+ * Get WordPress OAuth config (WordPress.com / Jetpack connected sites)
+ */
+export function getWordPressOAuthConfig(redirectUri) {
+  return {
+    clientId: process.env.WORDPRESS_CLIENT_ID,
+    clientSecret: process.env.WORDPRESS_CLIENT_SECRET,
+    redirectUri,
+    authUrl: WORDPRESS_AUTH_URL,
+    tokenUrl: WORDPRESS_TOKEN_URL,
+    scopes: WORDPRESS_SCOPES
+  };
+}
+
 // ============================================================================
 // Authorization URL Builders
 // ============================================================================
@@ -195,6 +224,21 @@ export function buildTikTokAuthUrl(config, { state, codeChallenge }) {
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256'
+  });
+
+  return `${config.authUrl}?${params.toString()}`;
+}
+
+/**
+ * Build the WordPress OAuth authorization URL
+ */
+export function buildWordPressAuthUrl(config, { state }) {
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: 'code',
+    scope: config.scopes.join(' '),
+    state
   });
 
   return `${config.authUrl}?${params.toString()}`;
@@ -307,6 +351,40 @@ export async function exchangeTikTokCodeForTokens(config, code, codeVerifier) {
   return data.data || data;
 }
 
+/**
+ * Exchange authorization code for tokens (WordPress)
+ */
+export async function exchangeWordPressCodeForTokens(config, code) {
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    code,
+    grant_type: 'authorization_code',
+    redirect_uri: config.redirectUri
+  });
+
+  const response = await fetch(config.tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error('[oauthIntegration:exchangeWordPressCode] Failed:', text);
+    throw new Error(`WordPress token exchange failed: ${text}`);
+  }
+
+  const data = await response.json();
+  
+  if (data.error) {
+    throw new Error(`WordPress OAuth error: ${data.error_description || data.error}`);
+  }
+
+  // WordPress returns: access_token, blog_id, blog_url, token_type
+  return data;
+}
+
 // ============================================================================
 // Profile Fetching Functions
 // ============================================================================
@@ -380,6 +458,34 @@ export async function fetchTikTokProfile(accessToken) {
     name: data.display_name || data.username || data.open_id,
     username: data.username,
     picture: data.avatar_url || ''
+  };
+}
+
+/**
+ * Fetch WordPress user profile and primary site info
+ * WordPress OAuth returns blog_id and blog_url with the token
+ */
+export async function fetchWordPressProfile(accessToken, tokenData = {}) {
+  // Fetch user info from WordPress.com API
+  const res = await fetch(`${WORDPRESS_API_URL}/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch WordPress profile: ${text}`);
+  }
+
+  const data = await res.json();
+  
+  return {
+    id: String(data.ID),
+    email: data.email || '',
+    name: data.display_name || data.username,
+    username: data.username,
+    picture: data.avatar_URL || '',
+    primaryBlogId: tokenData.blog_id || data.primary_blog,
+    primaryBlogUrl: tokenData.blog_url || data.primary_blog_url
   };
 }
 
@@ -569,6 +675,112 @@ export async function fetchTikTokAccountInfo(accessToken) {
   };
 }
 
+// ============================================================================
+// WordPress Resource Functions
+// ============================================================================
+
+/**
+ * Fetch WordPress sites the user has access to
+ */
+export async function fetchWordPressSites(accessToken) {
+  const res = await fetch(`${WORDPRESS_API_URL}/me/sites`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[oauthIntegration:fetchWordPressSites] Failed:', text);
+    if (res.status === 404 || res.status === 403) {
+      return [];
+    }
+    throw new Error(`Failed to fetch WordPress sites: ${text}`);
+  }
+
+  const data = await res.json();
+  return (data.sites || []).map((site) => ({
+    id: String(site.ID),
+    blogId: site.ID,
+    name: site.name,
+    description: site.description,
+    url: site.URL,
+    adminUrl: site.admin_URL,
+    icon: site.icon?.img || '',
+    isPrivate: site.is_private,
+    isJetpack: site.jetpack,
+    capabilities: site.capabilities || {},
+    plan: site.plan?.product_name_short || 'Free'
+  }));
+}
+
+/**
+ * Fetch WordPress site info by ID
+ */
+export async function fetchWordPressSiteInfo(accessToken, siteId) {
+  const res = await fetch(`${WORDPRESS_API_URL}/sites/${siteId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[oauthIntegration:fetchWordPressSiteInfo] Failed:', text);
+    throw new Error(`Failed to fetch WordPress site info: ${text}`);
+  }
+
+  const site = await res.json();
+  return {
+    id: String(site.ID),
+    blogId: site.ID,
+    name: site.name,
+    description: site.description,
+    url: site.URL,
+    adminUrl: site.admin_URL,
+    icon: site.icon?.img || '',
+    isPrivate: site.is_private,
+    isJetpack: site.jetpack,
+    postCount: site.post_count,
+    capabilities: site.capabilities || {}
+  };
+}
+
+/**
+ * Create a blog post on a WordPress site
+ */
+export async function createWordPressPost(accessToken, siteId, postData) {
+  const res = await fetch(`${WORDPRESS_API_URL}/sites/${siteId}/posts/new`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      title: postData.title,
+      content: postData.content,
+      status: postData.status || 'draft', // draft, publish, pending, private
+      excerpt: postData.excerpt || '',
+      categories: postData.categories || [],
+      tags: postData.tags || [],
+      featured_image: postData.featuredImage || '',
+      format: postData.format || 'standard'
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[oauthIntegration:createWordPressPost] Failed:', text);
+    throw new Error(`Failed to create WordPress post: ${text}`);
+  }
+
+  const post = await res.json();
+  return {
+    id: post.ID,
+    title: post.title,
+    url: post.URL,
+    shortUrl: post.short_URL,
+    status: post.status,
+    date: post.date
+  };
+}
+
 /**
  * Set OAuth cookies for state management
  */
@@ -623,6 +835,8 @@ function getDefaultScopesForProvider(provider) {
       return FACEBOOK_SCOPES;
     case 'tiktok':
       return TIKTOK_SCOPES;
+    case 'wordpress':
+      return WORDPRESS_SCOPES;
     default:
       return [];
   }
@@ -879,6 +1093,69 @@ export async function refreshTikTokAccessToken(connectionId) {
 }
 
 /**
+ * Refresh WordPress access token
+ * Note: WordPress.com tokens don't expire by default, but we support refresh for Jetpack sites
+ */
+export async function refreshWordPressAccessToken(connectionId) {
+  const { rows } = await query(
+    'SELECT access_token, refresh_token FROM oauth_connections WHERE id = $1',
+    [connectionId]
+  );
+
+  if (!rows.length) {
+    throw new Error('Connection not found');
+  }
+
+  // WordPress.com tokens typically don't expire, so we might just need to validate
+  // If there's a refresh token (Jetpack), try to refresh
+  if (rows[0].refresh_token) {
+    const params = new URLSearchParams({
+      client_id: process.env.WORDPRESS_CLIENT_ID,
+      client_secret: process.env.WORDPRESS_CLIENT_SECRET,
+      grant_type: 'refresh_token',
+      refresh_token: rows[0].refresh_token
+    });
+
+    const response = await fetch(WORDPRESS_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      await query(
+        `UPDATE oauth_connections SET is_connected = false, last_error = $2, updated_at = NOW() WHERE id = $1`,
+        [connectionId, `Token refresh failed: ${text}`]
+      );
+      throw new Error(`WordPress token refresh failed: ${text}`);
+    }
+
+    const tokens = await response.json();
+    const expiresAt = tokens.expires_in
+      ? new Date(Date.now() + tokens.expires_in * 1000)
+      : null;
+
+    await query(
+      `UPDATE oauth_connections SET 
+        access_token = $2, 
+        refresh_token = COALESCE($3, refresh_token),
+        expires_at = $4, 
+        is_connected = true,
+        last_error = NULL,
+        updated_at = NOW() 
+       WHERE id = $1`,
+      [connectionId, tokens.access_token, tokens.refresh_token, expiresAt]
+    );
+
+    return tokens.access_token;
+  }
+
+  // If no refresh token, just return the existing access token (WordPress.com tokens are long-lived)
+  return rows[0].access_token;
+}
+
+/**
  * Generic refresh function that routes to provider-specific refresh
  */
 export async function refreshAccessToken(connectionId, provider) {
@@ -890,6 +1167,8 @@ export async function refreshAccessToken(connectionId, provider) {
       return refreshFacebookAccessToken(connectionId);
     case 'tiktok':
       return refreshTikTokAccessToken(connectionId);
+    case 'wordpress':
+      return refreshWordPressAccessToken(connectionId);
     default:
       throw new Error(`Unsupported provider: ${provider}`);
   }
