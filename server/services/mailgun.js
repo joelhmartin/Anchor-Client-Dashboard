@@ -264,7 +264,9 @@ export async function fetchEmailLogs({
   const result = await query(
     `SELECT 
       id, email_type, recipient_email, recipient_name, subject, status,
-      mailgun_id, error_message, triggered_by_id, client_id, created_at, sent_at
+      mailgun_id, error_message, triggered_by_id, client_id, created_at, sent_at,
+      delivered_at, opened_at, open_count, clicked_at, click_count,
+      bounced_at, bounce_type, bounce_code, complained_at, unsubscribed_at
     FROM email_logs
     ${whereClause}
     ORDER BY created_at DESC

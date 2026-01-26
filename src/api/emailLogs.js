@@ -69,7 +69,34 @@ export const EMAIL_TYPE_LABELS = {
  */
 export const STATUS_COLORS = {
   pending: { color: 'warning', label: 'Pending' },
-  sent: { color: 'success', label: 'Sent' },
-  failed: { color: 'error', label: 'Failed' }
+  sent: { color: 'info', label: 'Sent' },
+  delivered: { color: 'success', label: 'Delivered' },
+  failed: { color: 'error', label: 'Failed' },
+  bounced: { color: 'error', label: 'Bounced' },
+  complained: { color: 'error', label: 'Spam Complaint' }
+};
+
+/**
+ * Get the best status for display (prioritize delivery over sent)
+ */
+export function getEffectiveStatus(log) {
+  if (log.bounced_at) return 'bounced';
+  if (log.complained_at) return 'complained';
+  if (log.status === 'failed') return 'failed';
+  if (log.delivered_at) return 'delivered';
+  if (log.sent_at || log.status === 'sent') return 'sent';
+  return log.status || 'pending';
+}
+
+/**
+ * Tracking event icons and labels
+ */
+export const TRACKING_EVENTS = {
+  delivered: { label: 'Delivered', icon: 'CheckCircle', color: 'success' },
+  opened: { label: 'Opened', icon: 'Visibility', color: 'info' },
+  clicked: { label: 'Clicked', icon: 'TouchApp', color: 'primary' },
+  bounced: { label: 'Bounced', icon: 'Error', color: 'error' },
+  complained: { label: 'Spam Report', icon: 'Report', color: 'error' },
+  unsubscribed: { label: 'Unsubscribed', icon: 'Unsubscribe', color: 'warning' }
 };
 

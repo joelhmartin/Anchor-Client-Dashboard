@@ -5707,7 +5707,7 @@ router.post('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, r
     }
 
     // Verify client exists
-    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    const clientCheck = await query('SELECT id FROM users WHERE id = $1', [clientId]);
     if (!clientCheck.rows.length) {
       return res.status(404).json({ message: 'Client not found' });
     }
@@ -5909,7 +5909,7 @@ router.post('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req,
       return res.status(400).json({ message: 'clientId is required' });
     }
 
-    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    const clientCheck = await query('SELECT id FROM users WHERE id = $1', [clientId]);
     if (!clientCheck.rows.length) {
       return res.status(404).json({ message: 'Client not found' });
     }
@@ -6088,7 +6088,7 @@ router.post('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, r
       return res.status(400).json({ message: 'clientId is required' });
     }
 
-    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    const clientCheck = await query('SELECT id FROM users WHERE id = $1', [clientId]);
     if (!clientCheck.rows.length) {
       return res.status(404).json({ message: 'Client not found' });
     }
@@ -6235,7 +6235,7 @@ router.post('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req
       return res.status(400).json({ message: 'clientId is required' });
     }
 
-    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    const clientCheck = await query('SELECT id FROM users WHERE id = $1', [clientId]);
     if (!clientCheck.rows.length) {
       return res.status(404).json({ message: 'Client not found' });
     }

@@ -55,6 +55,12 @@ import AddIcon from '@mui/icons-material/Add';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import StarIcon from '@mui/icons-material/Star';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import TouchAppIcon from '@mui/icons-material/TouchApp';
+import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
+import ReportIcon from '@mui/icons-material/Report';
+import SecurityIcon from '@mui/icons-material/Security';
+import VerifiedIcon from '@mui/icons-material/Verified';
+import CancelIcon from '@mui/icons-material/Cancel';
 import Accordion from '@mui/material/Accordion';
 import AccordionSummary from '@mui/material/AccordionSummary';
 import AccordionDetails from '@mui/material/AccordionDetails';
@@ -63,7 +69,7 @@ import Chip from '@mui/material/Chip';
 import TablePagination from '@mui/material/TablePagination';
 
 import MainCard from 'ui-component/cards/MainCard';
-import { fetchEmailLogs, fetchEmailLogDetail, fetchEmailStats, EMAIL_TYPE_LABELS, STATUS_COLORS } from 'api/emailLogs';
+import { fetchEmailLogs, fetchEmailLogDetail, fetchEmailStats, EMAIL_TYPE_LABELS, STATUS_COLORS, getEffectiveStatus } from 'api/emailLogs';
 import useAuth from 'hooks/useAuth';
 import useTableSearch from 'hooks/useTableSearch';
 import {
@@ -2484,6 +2490,7 @@ export default function AdminHub() {
                       <TableCell>Recipient</TableCell>
                       <TableCell>Subject</TableCell>
                       <TableCell>Status</TableCell>
+                      <TableCell>Tracking</TableCell>
                       <TableCell align="right">Action</TableCell>
                     </TableRow>
                   </TableHead>
@@ -2512,13 +2519,33 @@ export default function AdminHub() {
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Chip
-                            icon={log.status === 'sent' ? <CheckCircleIcon /> : log.status === 'failed' ? <ErrorIcon /> : <ScheduleIcon />}
-                            label={STATUS_COLORS[log.status]?.label || log.status}
-                            size="small"
-                            color={STATUS_COLORS[log.status]?.color || 'default'}
-                            variant="outlined"
-                          />
+                          {(() => {
+                            const effectiveStatus = getEffectiveStatus(log);
+                            const statusIcon = effectiveStatus === 'delivered' ? <CheckCircleIcon /> 
+                              : effectiveStatus === 'sent' ? <MarkEmailReadIcon />
+                              : effectiveStatus === 'bounced' || effectiveStatus === 'failed' ? <ErrorIcon />
+                              : effectiveStatus === 'complained' ? <ReportIcon />
+                              : <ScheduleIcon />;
+                            return (
+                              <Chip
+                                icon={statusIcon}
+                                label={STATUS_COLORS[effectiveStatus]?.label || effectiveStatus}
+                                size="small"
+                                color={STATUS_COLORS[effectiveStatus]?.color || 'default'}
+                                variant="outlined"
+                              />
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell>
+                          <Stack direction="row" spacing={0.5}>
+                            <Tooltip title={log.opened_at ? `Opened ${log.open_count || 1}x` : 'Not opened'}>
+                              <VisibilityIcon fontSize="small" color={log.opened_at ? 'info' : 'disabled'} />
+                            </Tooltip>
+                            <Tooltip title={log.clicked_at ? `Clicked ${log.click_count || 1}x` : 'No clicks'}>
+                              <TouchAppIcon fontSize="small" color={log.clicked_at ? 'primary' : 'disabled'} />
+                            </Tooltip>
+                          </Stack>
                         </TableCell>
                         <TableCell align="right">
                           <Tooltip title="View Details">
@@ -2531,7 +2558,7 @@ export default function AdminHub() {
                     ))}
                     {!emailLogs.length && !emailLogsLoading && (
                       <TableRow>
-                        <TableCell colSpan={6} align="center">
+                        <TableCell colSpan={7} align="center">
                           <Typography color="text.secondary" sx={{ py: 3 }}>
                             No email logs found
                           </Typography>
@@ -2637,11 +2664,221 @@ export default function AdminHub() {
               </Box>
 
               {/* Error Message if failed */}
-              {emailLogDetail.log.status === 'failed' && emailLogDetail.log.error_message && (
+              {(emailLogDetail.log.status === 'failed' || emailLogDetail.log.bounced_at) && emailLogDetail.log.error_message && (
                 <Alert severity="error">
                   <Typography variant="subtitle2">Error Message</Typography>
                   <Typography variant="body2">{emailLogDetail.log.error_message}</Typography>
+                  {emailLogDetail.log.bounce_type && (
+                    <Typography variant="caption" color="text.secondary">
+                      Bounce type: {emailLogDetail.log.bounce_type} {emailLogDetail.log.bounce_code && `(${emailLogDetail.log.bounce_code})`}
+                    </Typography>
+                  )}
                 </Alert>
+              )}
+
+              {/* Delivery & Tracking Section */}
+              <Divider />
+              <Box>
+                <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <MarkEmailReadIcon fontSize="small" /> Delivery & Tracking
+                </Typography>
+                <Grid container spacing={2}>
+                  {/* Delivery Status */}
+                  <Grid item xs={6} sm={3}>
+                    <Stack alignItems="center" spacing={0.5}>
+                      {emailLogDetail.log.delivered_at ? (
+                        <CheckCircleIcon color="success" />
+                      ) : emailLogDetail.log.bounced_at ? (
+                        <ErrorIcon color="error" />
+                      ) : (
+                        <ScheduleIcon color="disabled" />
+                      )}
+                      <Typography variant="caption" fontWeight="medium">Delivered</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {emailLogDetail.log.delivered_at
+                          ? new Date(emailLogDetail.log.delivered_at).toLocaleString()
+                          : emailLogDetail.log.bounced_at
+                          ? 'Bounced'
+                          : 'Pending'}
+                      </Typography>
+                    </Stack>
+                  </Grid>
+
+                  {/* Opened */}
+                  <Grid item xs={6} sm={3}>
+                    <Stack alignItems="center" spacing={0.5}>
+                      <VisibilityIcon color={emailLogDetail.log.opened_at ? 'info' : 'disabled'} />
+                      <Typography variant="caption" fontWeight="medium">Opened</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {emailLogDetail.log.opened_at
+                          ? `${emailLogDetail.log.open_count || 1}x — ${new Date(emailLogDetail.log.opened_at).toLocaleString()}`
+                          : '—'}
+                      </Typography>
+                    </Stack>
+                  </Grid>
+
+                  {/* Clicked */}
+                  <Grid item xs={6} sm={3}>
+                    <Stack alignItems="center" spacing={0.5}>
+                      <TouchAppIcon color={emailLogDetail.log.clicked_at ? 'primary' : 'disabled'} />
+                      <Typography variant="caption" fontWeight="medium">Clicked</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {emailLogDetail.log.clicked_at
+                          ? `${emailLogDetail.log.click_count || 1}x — ${new Date(emailLogDetail.log.clicked_at).toLocaleString()}`
+                          : '—'}
+                      </Typography>
+                    </Stack>
+                  </Grid>
+
+                  {/* Spam / Complaints */}
+                  <Grid item xs={6} sm={3}>
+                    <Stack alignItems="center" spacing={0.5}>
+                      <ReportIcon color={emailLogDetail.log.complained_at ? 'error' : 'disabled'} />
+                      <Typography variant="caption" fontWeight="medium">Spam Report</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {emailLogDetail.log.complained_at
+                          ? new Date(emailLogDetail.log.complained_at).toLocaleString()
+                          : '—'}
+                      </Typography>
+                    </Stack>
+                  </Grid>
+                </Grid>
+              </Box>
+
+              {/* Authentication / Security Status (DKIM, DMARC, SPF) */}
+              {emailLogDetail.log.delivery_status && Object.keys(emailLogDetail.log.delivery_status).length > 0 && (
+                <Box>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <SecurityIcon fontSize="small" /> Authentication & Delivery Details
+                  </Typography>
+                  <Paper variant="outlined" sx={{ p: 2 }}>
+                    <Grid container spacing={2}>
+                      {/* TLS Encryption */}
+                      {emailLogDetail.log.delivery_status.tls !== undefined && (
+                        <Grid item xs={6} sm={4}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            {emailLogDetail.log.delivery_status.tls ? (
+                              <VerifiedIcon color="success" fontSize="small" />
+                            ) : (
+                              <CancelIcon color="warning" fontSize="small" />
+                            )}
+                            <Box>
+                              <Typography variant="caption" fontWeight="medium">TLS</Typography>
+                              <Typography variant="caption" display="block" color="text.secondary">
+                                {emailLogDetail.log.delivery_status.tls ? 'Encrypted' : 'Not encrypted'}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                        </Grid>
+                      )}
+
+                      {/* Certificate Verified */}
+                      {emailLogDetail.log.delivery_status.certificate_verified !== undefined && (
+                        <Grid item xs={6} sm={4}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            {emailLogDetail.log.delivery_status.certificate_verified ? (
+                              <VerifiedIcon color="success" fontSize="small" />
+                            ) : (
+                              <CancelIcon color="warning" fontSize="small" />
+                            )}
+                            <Box>
+                              <Typography variant="caption" fontWeight="medium">Certificate</Typography>
+                              <Typography variant="caption" display="block" color="text.secondary">
+                                {emailLogDetail.log.delivery_status.certificate_verified ? 'Verified' : 'Not verified'}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                        </Grid>
+                      )}
+
+                      {/* UTF-8 */}
+                      {emailLogDetail.log.delivery_status.utf8 !== undefined && (
+                        <Grid item xs={6} sm={4}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            {emailLogDetail.log.delivery_status.utf8 ? (
+                              <VerifiedIcon color="success" fontSize="small" />
+                            ) : (
+                              <CancelIcon color="disabled" fontSize="small" />
+                            )}
+                            <Box>
+                              <Typography variant="caption" fontWeight="medium">UTF-8</Typography>
+                              <Typography variant="caption" display="block" color="text.secondary">
+                                {emailLogDetail.log.delivery_status.utf8 ? 'Enabled' : 'Disabled'}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                        </Grid>
+                      )}
+
+                      {/* MX Host */}
+                      {emailLogDetail.log.delivery_status.mx_host && (
+                        <Grid item xs={12} sm={6}>
+                          <Typography variant="caption" fontWeight="medium">MX Host</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                            {emailLogDetail.log.delivery_status.mx_host}
+                          </Typography>
+                        </Grid>
+                      )}
+
+                      {/* Session Seconds */}
+                      {emailLogDetail.log.delivery_status.session_seconds !== undefined && (
+                        <Grid item xs={6} sm={3}>
+                          <Typography variant="caption" fontWeight="medium">Session Time</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            {emailLogDetail.log.delivery_status.session_seconds}s
+                          </Typography>
+                        </Grid>
+                      )}
+
+                      {/* Attempt Number */}
+                      {emailLogDetail.log.delivery_status.attempt_no !== undefined && (
+                        <Grid item xs={6} sm={3}>
+                          <Typography variant="caption" fontWeight="medium">Attempt</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            #{emailLogDetail.log.delivery_status.attempt_no}
+                          </Typography>
+                        </Grid>
+                      )}
+
+                      {/* Delivery Code & Message */}
+                      {emailLogDetail.log.delivery_status.code && (
+                        <Grid item xs={12}>
+                          <Typography variant="caption" fontWeight="medium">Response Code</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                            {emailLogDetail.log.delivery_status.code}
+                            {emailLogDetail.log.delivery_status.message && ` — ${emailLogDetail.log.delivery_status.message}`}
+                          </Typography>
+                        </Grid>
+                      )}
+
+                      {/* Envelope Info */}
+                      {emailLogDetail.log.delivery_status.envelope && (
+                        <Grid item xs={12}>
+                          <Typography variant="caption" fontWeight="medium">Envelope</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                            {emailLogDetail.log.delivery_status.envelope.sending_ip && `IP: ${emailLogDetail.log.delivery_status.envelope.sending_ip}`}
+                            {emailLogDetail.log.delivery_status.envelope.transport && ` | Transport: ${emailLogDetail.log.delivery_status.envelope.transport}`}
+                          </Typography>
+                        </Grid>
+                      )}
+
+                      {/* Client Info (from open/click) */}
+                      {emailLogDetail.log.delivery_status.client_info && (
+                        <Grid item xs={12}>
+                          <Typography variant="caption" fontWeight="medium">Last Interaction</Typography>
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            {emailLogDetail.log.delivery_status.device_type && `${emailLogDetail.log.delivery_status.device_type} — `}
+                            {emailLogDetail.log.delivery_status.client_info?.['client-os'] || ''}{' '}
+                            {emailLogDetail.log.delivery_status.client_info?.['client-name'] || ''}
+                            {emailLogDetail.log.delivery_status.geolocation && (
+                              <> ({emailLogDetail.log.delivery_status.geolocation.city}, {emailLogDetail.log.delivery_status.geolocation.country})</>
+                            )}
+                          </Typography>
+                        </Grid>
+                      )}
+                    </Grid>
+                  </Paper>
+                </Box>
               )}
 
               {/* Mailgun Info */}

@@ -17,6 +17,7 @@ import tasksRouter from './routes/tasks.js';
 import formsRouter from './routes/forms.js';
 import formsPublicRouter from './routes/formsPublic.js';
 import reviewsRouter from './routes/reviews.js';
+import webhooksRouter from './routes/webhooks.js';
 import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
 import { purgeArchivedTasks } from './services/taskCleanup.js';
 import { processSubmissionJobs } from './services/formSubmissionJobs.js';
@@ -131,6 +132,7 @@ app.use('/api/hub', hubRouter);
 app.use('/api/onboarding', onboardingRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/reviews', reviewsRouter);
+app.use('/api/webhooks', webhooksRouter); // Public webhook endpoints (Mailgun, etc.)
 
 // Forms Manager uses Monaco Editor which requires unsafe-inline/eval
 // Apply relaxed CSP only to this route to keep other routes secure

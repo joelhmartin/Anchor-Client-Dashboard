@@ -864,10 +864,38 @@ CREATE TABLE IF NOT EXISTS email_logs (
   client_id UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  sent_at TIMESTAMPTZ
+  sent_at TIMESTAMPTZ,
+  -- Mailgun tracking events
+  delivered_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ,
+  open_count INTEGER NOT NULL DEFAULT 0,
+  clicked_at TIMESTAMPTZ,
+  click_count INTEGER NOT NULL DEFAULT 0,
+  bounced_at TIMESTAMPTZ,
+  bounce_type TEXT,
+  bounce_code TEXT,
+  complained_at TIMESTAMPTZ,
+  unsubscribed_at TIMESTAMPTZ,
+  -- Delivery verification (DKIM, DMARC, SPF)
+  delivery_status JSONB NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_email_logs_created ON email_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_logs_type ON email_logs(email_type);
 CREATE INDEX IF NOT EXISTS idx_email_logs_status ON email_logs(status);
 CREATE INDEX IF NOT EXISTS idx_email_logs_recipient ON email_logs(recipient_email);
 CREATE INDEX IF NOT EXISTS idx_email_logs_client ON email_logs(client_id);
+CREATE INDEX IF NOT EXISTS idx_email_logs_mailgun_id ON email_logs(mailgun_id);
+
+-- Add tracking columns to existing email_logs table
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS open_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS clicked_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS click_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS bounced_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS bounce_type TEXT;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS bounce_code TEXT;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS complained_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ;
+ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS delivery_status JSONB NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_email_logs_mailgun_id ON email_logs(mailgun_id);
