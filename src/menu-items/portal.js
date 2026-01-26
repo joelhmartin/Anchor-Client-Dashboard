@@ -53,13 +53,13 @@ const portalGroup = {
       url: '/portal?tab=documents',
       icon: IconFolder
     },
-    {
-      id: 'portal-reviews',
-      title: 'Reviews',
-      type: 'item',
-      url: '/portal?tab=reviews',
-      icon: IconStar
-    }
+    // {
+    //   id: 'portal-reviews',
+    //   title: 'Reviews',
+    //   type: 'item',
+    //   url: '/portal?tab=reviews',
+    //   icon: IconStar
+    // }
   ]
 };
 
