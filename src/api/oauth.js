@@ -53,11 +53,11 @@ export function deleteOAuthConnection(connectionId) {
 // ============================================================================
 
 /**
- * Get the URL to initiate Google OAuth for a client
- * This redirects to Google, so it should be used with window.location.href
+ * Initiate Google OAuth for a client
+ * Returns { authUrl } - frontend should redirect to this URL
  */
-export function getGoogleOAuthConnectUrl(clientId) {
-  return `/api/hub/oauth/google/connect?clientId=${clientId}`;
+export function initiateGoogleOAuth(clientId) {
+  return client.post('/hub/oauth/google/connect', { clientId }).then((res) => res.data);
 }
 
 /**
@@ -81,11 +81,12 @@ export function fetchGoogleBusinessLocations(connectionId, accountName) {
 // ============================================================================
 
 /**
- * Get the URL to initiate Facebook OAuth for a client
+ * Initiate Facebook OAuth for a client
  * This covers both Facebook Pages and Instagram (via Facebook Graph API)
+ * Returns { authUrl } - frontend should redirect to this URL
  */
-export function getFacebookOAuthConnectUrl(clientId) {
-  return `/api/hub/oauth/facebook/connect?clientId=${clientId}`;
+export function initiateFacebookOAuth(clientId) {
+  return client.post('/hub/oauth/facebook/connect', { clientId }).then((res) => res.data);
 }
 
 /**
@@ -107,10 +108,11 @@ export function fetchInstagramAccounts(connectionId) {
 // ============================================================================
 
 /**
- * Get the URL to initiate TikTok OAuth for a client
+ * Initiate TikTok OAuth for a client
+ * Returns { authUrl } - frontend should redirect to this URL
  */
-export function getTikTokOAuthConnectUrl(clientId) {
-  return `/api/hub/oauth/tiktok/connect?clientId=${clientId}`;
+export function initiateTikTokOAuth(clientId) {
+  return client.post('/hub/oauth/tiktok/connect', { clientId }).then((res) => res.data);
 }
 
 /**
@@ -125,10 +127,11 @@ export function fetchTikTokAccount(connectionId) {
 // ============================================================================
 
 /**
- * Get the URL to initiate WordPress OAuth for a client
+ * Initiate WordPress OAuth for a client
+ * Returns { authUrl } - frontend should redirect to this URL
  */
-export function getWordPressOAuthConnectUrl(clientId) {
-  return `/api/hub/oauth/wordpress/connect?clientId=${clientId}`;
+export function initiateWordPressOAuth(clientId) {
+  return client.post('/hub/oauth/wordpress/connect', { clientId }).then((res) => res.data);
 }
 
 /**
@@ -143,21 +146,23 @@ export function fetchWordPressSites(connectionId) {
 // ============================================================================
 
 /**
- * Get the OAuth connect URL for any supported provider
+ * Initiate OAuth for any supported provider
+ * Returns a promise that resolves to { authUrl }
+ * Frontend should redirect to the returned authUrl
  */
-export function getOAuthConnectUrl(provider, clientId) {
+export function initiateOAuth(provider, clientId) {
   switch (provider) {
     case 'google':
-      return getGoogleOAuthConnectUrl(clientId);
+      return initiateGoogleOAuth(clientId);
     case 'facebook':
     case 'instagram':
-      return getFacebookOAuthConnectUrl(clientId);
+      return initiateFacebookOAuth(clientId);
     case 'tiktok':
-      return getTikTokOAuthConnectUrl(clientId);
+      return initiateTikTokOAuth(clientId);
     case 'wordpress':
-      return getWordPressOAuthConnectUrl(clientId);
+      return initiateWordPressOAuth(clientId);
     default:
-      throw new Error(`Unsupported OAuth provider: ${provider}`);
+      return Promise.reject(new Error(`Unsupported OAuth provider: ${provider}`));
   }
 }
 

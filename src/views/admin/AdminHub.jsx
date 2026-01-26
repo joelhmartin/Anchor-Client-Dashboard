@@ -90,7 +90,7 @@ import {
   deleteOAuthResource,
   OAUTH_PROVIDERS,
   getResourceTypesForProvider,
-  getOAuthConnectUrl,
+  initiateOAuth,
   fetchGoogleBusinessAccounts,
   fetchGoogleBusinessLocations,
   fetchFacebookPages,
@@ -3072,12 +3072,17 @@ export default function AdminHub() {
                 <Button
                   variant="contained"
                   size="large"
-                  onClick={() => {
+                  onClick={async () => {
                     if (editing?.id) {
-                      const provider = oauthConnectionDialog.connection?.provider;
-                      // Instagram uses Facebook OAuth
-                      const oauthProvider = provider === 'instagram' ? 'facebook' : provider;
-                      window.location.href = getOAuthConnectUrl(oauthProvider, editing.id);
+                      try {
+                        const provider = oauthConnectionDialog.connection?.provider;
+                        // Instagram uses Facebook OAuth
+                        const oauthProvider = provider === 'instagram' ? 'facebook' : provider;
+                        const { authUrl } = await initiateOAuth(oauthProvider, editing.id);
+                        window.location.href = authUrl;
+                      } catch (err) {
+                        toast.error(err?.response?.data?.message || err?.message || 'Failed to start OAuth');
+                      }
                     }
                   }}
                   disabled={!editing?.id}

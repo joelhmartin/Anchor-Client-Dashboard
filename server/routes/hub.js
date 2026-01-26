@@ -5693,13 +5693,14 @@ router.delete('/oauth-connections/:id', isAdminOrEditor, async (req, res) => {
 // ============================================================================
 
 /**
- * GET /hub/oauth/google/connect
+ * POST /hub/oauth/google/connect
  * Initiate Google Business Profile OAuth flow for a client
- * Query params: clientId (required)
+ * Body: { clientId } (required)
+ * Returns: { authUrl } - frontend should redirect to this URL
  */
-router.get('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+router.post('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, res) => {
   try {
-    const { clientId } = req.query;
+    const { clientId } = req.body;
     
     if (!clientId) {
       return res.status(400).json({ message: 'clientId is required' });
@@ -5734,11 +5735,11 @@ router.get('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, re
       clientId
     });
 
-    // Build and redirect to Google auth URL
+    // Build Google auth URL
     const authUrl = buildGoogleAuthUrl(config, { state, codeChallenge });
     
-    console.log(`[oauth:google:connect] Redirecting to Google OAuth for client ${clientId}`);
-    res.redirect(authUrl);
+    console.log(`[oauth:google:connect] Generated OAuth URL for client ${clientId}`);
+    res.json({ authUrl });
   } catch (err) {
     console.error('[oauth:google:connect]', err);
     res.status(500).json({ message: 'Failed to start OAuth flow' });
@@ -5900,9 +5901,9 @@ router.get('/oauth-connections/:id/google-locations', requireAuth, isAdminOrEdit
  * Initiate Facebook OAuth flow for a client (also covers Instagram)
  * Query params: clientId (required)
  */
-router.get('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+router.post('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req, res) => {
   try {
-    const { clientId } = req.query;
+    const { clientId } = req.body;
     
     if (!clientId) {
       return res.status(400).json({ message: 'clientId is required' });
@@ -5934,8 +5935,8 @@ router.get('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req, 
 
     const authUrl = buildFacebookAuthUrl(config, { state });
     
-    console.log(`[oauth:facebook:connect] Redirecting to Facebook OAuth for client ${clientId}`);
-    res.redirect(authUrl);
+    console.log(`[oauth:facebook:connect] Generated OAuth URL for client ${clientId}`);
+    res.json({ authUrl });
   } catch (err) {
     console.error('[oauth:facebook:connect]', err);
     res.status(500).json({ message: 'Failed to start OAuth flow' });
@@ -6079,9 +6080,9 @@ router.get('/oauth-connections/:id/instagram-accounts', requireAuth, isAdminOrEd
  * Initiate TikTok OAuth flow for a client
  * Query params: clientId (required)
  */
-router.get('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+router.post('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, res) => {
   try {
-    const { clientId } = req.query;
+    const { clientId } = req.body;
     
     if (!clientId) {
       return res.status(400).json({ message: 'clientId is required' });
@@ -6114,8 +6115,8 @@ router.get('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, re
 
     const authUrl = buildTikTokAuthUrl(config, { state, codeChallenge });
     
-    console.log(`[oauth:tiktok:connect] Redirecting to TikTok OAuth for client ${clientId}`);
-    res.redirect(authUrl);
+    console.log(`[oauth:tiktok:connect] Generated OAuth URL for client ${clientId}`);
+    res.json({ authUrl });
   } catch (err) {
     console.error('[oauth:tiktok:connect]', err);
     res.status(500).json({ message: 'Failed to start OAuth flow' });
@@ -6226,9 +6227,9 @@ router.get('/oauth-connections/:id/tiktok-account', requireAuth, isAdminOrEditor
  * Initiate WordPress OAuth flow for a client
  * Query params: clientId (required)
  */
-router.get('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+router.post('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req, res) => {
   try {
-    const { clientId } = req.query;
+    const { clientId } = req.body;
     
     if (!clientId) {
       return res.status(400).json({ message: 'clientId is required' });
@@ -6260,8 +6261,8 @@ router.get('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req,
 
     const authUrl = buildWordPressAuthUrl(config, { state });
     
-    console.log(`[oauth:wordpress:connect] Redirecting to WordPress OAuth for client ${clientId}`);
-    res.redirect(authUrl);
+    console.log(`[oauth:wordpress:connect] Generated OAuth URL for client ${clientId}`);
+    res.json({ authUrl });
   } catch (err) {
     console.error('[oauth:wordpress:connect]', err);
     res.status(500).json({ message: 'Failed to start OAuth flow' });
