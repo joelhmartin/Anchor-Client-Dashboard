@@ -1,6 +1,8 @@
 # Anchor Client Dashboard - Application Skills & Capabilities
 
-> ⚠️ **MAINTENANCE REMINDER**: When making database schema changes (adding tables, columns, indexes), **ALWAYS update the Database Schema Map section** at the bottom of this file to keep it synchronized with `server/sql/init.sql`.
+> ⚠️ **MAINTENANCE REMINDERS**:
+> - **Database Changes**: When making database schema changes (adding tables, columns, indexes), **ALWAYS update the Database Schema Map section** at the bottom of this file to keep it synchronized with `server/sql/init.sql`.
+> - **Package Installs**: When adding or updating npm packages, **ALWAYS run `yarn install`** to update `yarn.lock`, then commit both `package.json` and `yarn.lock`. Cloud Build uses `--immutable` and will fail if the lockfile is out of sync.
 
 ## Overview
 
