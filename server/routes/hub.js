@@ -572,6 +572,260 @@ router.get('/users/:id/avatar', async (req, res) => {
   }
 });
 
+// ============================================================================
+// OAuth Callbacks (Public - No Auth Required)
+// These routes receive redirects from OAuth providers after user authorization
+// They must be defined BEFORE router.use(requireAuth)
+// ============================================================================
+
+/**
+ * GET /hub/oauth/google/callback
+ * Handle Google OAuth callback from Google after user authorization
+ */
+router.get('/oauth/google/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      console.log(`[oauth:google:callback] OAuth error: ${error}`);
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:google:callback] Missing code or state');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'google');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:google:callback] State mismatch');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.verifier || !cookies.clientId) {
+      console.log('[oauth:google:callback] Missing verifier or clientId in cookies');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'google');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/google/callback`;
+    const config = getGoogleBusinessOAuthConfig(redirectUri);
+    
+    console.log('[oauth:google:callback] Exchanging code for tokens...');
+    const tokens = await exchangeCodeForTokens(config, code, cookies.verifier);
+    
+    console.log('[oauth:google:callback] Fetching Google profile...');
+    const profile = await fetchGoogleProfile(tokens.access_token);
+    
+    console.log(`[oauth:google:callback] Profile: ${profile.email}`);
+    
+    const connection = await saveOAuthConnection(clientId, 'google', tokens, profile);
+    console.log(`[oauth:google:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=google&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:google:callback]', err);
+    clearOAuthCookies(res, 'google');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth/facebook/callback
+ * Handle Facebook OAuth callback
+ */
+router.get('/oauth/facebook/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:facebook:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:facebook:callback] Missing code or state');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'facebook');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:facebook:callback] State mismatch');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.clientId) {
+      console.log('[oauth:facebook:callback] Missing clientId in cookies');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'facebook');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/facebook/callback`;
+    const config = getFacebookOAuthConfig(redirectUri);
+    
+    console.log('[oauth:facebook:callback] Exchanging code for tokens...');
+    const tokens = await exchangeFacebookCodeForTokens(config, code);
+    
+    console.log('[oauth:facebook:callback] Fetching Facebook profile...');
+    const profile = await fetchFacebookProfile(tokens.access_token);
+    
+    console.log(`[oauth:facebook:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'facebook', tokens, profile);
+    console.log(`[oauth:facebook:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=facebook&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:facebook:callback]', err);
+    clearOAuthCookies(res, 'facebook');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth/tiktok/callback
+ * Handle TikTok OAuth callback
+ */
+router.get('/oauth/tiktok/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:tiktok:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:tiktok:callback] Missing code or state');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'tiktok');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:tiktok:callback] State mismatch');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.verifier || !cookies.clientId) {
+      console.log('[oauth:tiktok:callback] Missing verifier or clientId in cookies');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'tiktok');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/tiktok/callback`;
+    const config = getTikTokOAuthConfig(redirectUri);
+    
+    console.log('[oauth:tiktok:callback] Exchanging code for tokens...');
+    const tokens = await exchangeTikTokCodeForTokens(config, code, cookies.verifier);
+    
+    console.log('[oauth:tiktok:callback] Fetching TikTok profile...');
+    const profile = await fetchTikTokProfile(tokens.access_token);
+    
+    console.log(`[oauth:tiktok:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'tiktok', tokens, profile);
+    console.log(`[oauth:tiktok:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=tiktok&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:tiktok:callback]', err);
+    clearOAuthCookies(res, 'tiktok');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth/wordpress/callback
+ * Handle WordPress OAuth callback
+ */
+router.get('/oauth/wordpress/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:wordpress:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:wordpress:callback] Missing code or state');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'wordpress');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:wordpress:callback] State mismatch');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.clientId) {
+      console.log('[oauth:wordpress:callback] Missing clientId in cookies');
+      clearOAuthCookies(res, 'wordpress');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'wordpress');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/wordpress/callback`;
+    const config = getWordPressOAuthConfig(redirectUri);
+    
+    console.log('[oauth:wordpress:callback] Exchanging code for tokens...');
+    const tokens = await exchangeWordPressCodeForTokens(config, code);
+    
+    console.log('[oauth:wordpress:callback] Fetching WordPress profile...');
+    const profile = await fetchWordPressProfile(tokens.access_token, tokens);
+    
+    console.log(`[oauth:wordpress:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'wordpress', tokens, profile);
+    console.log(`[oauth:wordpress:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=wordpress&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:wordpress:callback]', err);
+    clearOAuthCookies(res, 'wordpress');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
 // All routes below require authentication
 router.use(requireAuth);
 
@@ -5747,74 +6001,6 @@ router.post('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, r
 });
 
 /**
- * GET /hub/oauth/google/callback
- * Handle Google OAuth callback, store tokens in oauth_connections
- */
-router.get('/oauth/google/callback', async (req, res) => {
-  const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
-  
-  try {
-    const { code, state, error } = req.query;
-
-    // Handle OAuth errors (user cancelled, etc.)
-    if (error) {
-      console.log(`[oauth:google:callback] OAuth error: ${error}`);
-      clearOAuthCookies(res, 'google');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error)}`);
-    }
-
-    if (!code || !state) {
-      console.log('[oauth:google:callback] Missing code or state');
-      clearOAuthCookies(res, 'google');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
-    }
-
-    // Get stored cookies
-    const cookies = getOAuthCookies(req, 'google');
-    
-    if (!cookies.state || cookies.state !== state) {
-      console.log('[oauth:google:callback] State mismatch');
-      clearOAuthCookies(res, 'google');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
-    }
-
-    if (!cookies.verifier || !cookies.clientId) {
-      console.log('[oauth:google:callback] Missing verifier or clientId in cookies');
-      clearOAuthCookies(res, 'google');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
-    }
-
-    const clientId = cookies.clientId;
-    clearOAuthCookies(res, 'google');
-
-    // Exchange code for tokens
-    const redirectUri = `${baseUrl}/api/hub/oauth/google/callback`;
-    const config = getGoogleBusinessOAuthConfig(redirectUri);
-    
-    console.log('[oauth:google:callback] Exchanging code for tokens...');
-    const tokens = await exchangeCodeForTokens(config, code, cookies.verifier);
-    
-    // Fetch Google profile to get account identifier
-    console.log('[oauth:google:callback] Fetching Google profile...');
-    const profile = await fetchGoogleProfile(tokens.access_token);
-    
-    console.log(`[oauth:google:callback] Profile: ${profile.email}`);
-    
-    // Save/update OAuth connection
-    const connection = await saveOAuthConnection(clientId, 'google', tokens, profile);
-    console.log(`[oauth:google:callback] Saved connection ${connection.id} for client ${clientId}`);
-
-    // Redirect back to admin hub with success message
-    res.redirect(`${adminHubUrl}?oauth=success&provider=google&clientId=${clientId}`);
-  } catch (err) {
-    console.error('[oauth:google:callback]', err);
-    clearOAuthCookies(res, 'google');
-    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
-  }
-});
-
-/**
  * GET /hub/oauth-connections/:id/google-accounts
  * Fetch Google Business accounts for an OAuth connection
  */
@@ -5944,68 +6130,6 @@ router.post('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req,
 });
 
 /**
- * GET /hub/oauth/facebook/callback
- * Handle Facebook OAuth callback
- */
-router.get('/oauth/facebook/callback', async (req, res) => {
-  const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
-  
-  try {
-    const { code, state, error, error_description } = req.query;
-
-    if (error) {
-      console.log(`[oauth:facebook:callback] OAuth error: ${error} - ${error_description}`);
-      clearOAuthCookies(res, 'facebook');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
-    }
-
-    if (!code || !state) {
-      console.log('[oauth:facebook:callback] Missing code or state');
-      clearOAuthCookies(res, 'facebook');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
-    }
-
-    const cookies = getOAuthCookies(req, 'facebook');
-    
-    if (!cookies.state || cookies.state !== state) {
-      console.log('[oauth:facebook:callback] State mismatch');
-      clearOAuthCookies(res, 'facebook');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
-    }
-
-    if (!cookies.clientId) {
-      console.log('[oauth:facebook:callback] Missing clientId in cookies');
-      clearOAuthCookies(res, 'facebook');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
-    }
-
-    const clientId = cookies.clientId;
-    clearOAuthCookies(res, 'facebook');
-
-    const redirectUri = `${baseUrl}/api/hub/oauth/facebook/callback`;
-    const config = getFacebookOAuthConfig(redirectUri);
-    
-    console.log('[oauth:facebook:callback] Exchanging code for tokens...');
-    const tokens = await exchangeFacebookCodeForTokens(config, code);
-    
-    console.log('[oauth:facebook:callback] Fetching Facebook profile...');
-    const profile = await fetchFacebookProfile(tokens.access_token);
-    
-    console.log(`[oauth:facebook:callback] Profile: ${profile.name} (${profile.id})`);
-    
-    const connection = await saveOAuthConnection(clientId, 'facebook', tokens, profile);
-    console.log(`[oauth:facebook:callback] Saved connection ${connection.id} for client ${clientId}`);
-
-    res.redirect(`${adminHubUrl}?oauth=success&provider=facebook&clientId=${clientId}`);
-  } catch (err) {
-    console.error('[oauth:facebook:callback]', err);
-    clearOAuthCookies(res, 'facebook');
-    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
-  }
-});
-
-/**
  * GET /hub/oauth-connections/:id/facebook-pages
  * Fetch Facebook Pages for an OAuth connection
  */
@@ -6124,68 +6248,6 @@ router.post('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, r
 });
 
 /**
- * GET /hub/oauth/tiktok/callback
- * Handle TikTok OAuth callback
- */
-router.get('/oauth/tiktok/callback', async (req, res) => {
-  const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
-  
-  try {
-    const { code, state, error, error_description } = req.query;
-
-    if (error) {
-      console.log(`[oauth:tiktok:callback] OAuth error: ${error} - ${error_description}`);
-      clearOAuthCookies(res, 'tiktok');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
-    }
-
-    if (!code || !state) {
-      console.log('[oauth:tiktok:callback] Missing code or state');
-      clearOAuthCookies(res, 'tiktok');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
-    }
-
-    const cookies = getOAuthCookies(req, 'tiktok');
-    
-    if (!cookies.state || cookies.state !== state) {
-      console.log('[oauth:tiktok:callback] State mismatch');
-      clearOAuthCookies(res, 'tiktok');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
-    }
-
-    if (!cookies.verifier || !cookies.clientId) {
-      console.log('[oauth:tiktok:callback] Missing verifier or clientId in cookies');
-      clearOAuthCookies(res, 'tiktok');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
-    }
-
-    const clientId = cookies.clientId;
-    clearOAuthCookies(res, 'tiktok');
-
-    const redirectUri = `${baseUrl}/api/hub/oauth/tiktok/callback`;
-    const config = getTikTokOAuthConfig(redirectUri);
-    
-    console.log('[oauth:tiktok:callback] Exchanging code for tokens...');
-    const tokens = await exchangeTikTokCodeForTokens(config, code, cookies.verifier);
-    
-    console.log('[oauth:tiktok:callback] Fetching TikTok profile...');
-    const profile = await fetchTikTokProfile(tokens.access_token);
-    
-    console.log(`[oauth:tiktok:callback] Profile: ${profile.name} (${profile.id})`);
-    
-    const connection = await saveOAuthConnection(clientId, 'tiktok', tokens, profile);
-    console.log(`[oauth:tiktok:callback] Saved connection ${connection.id} for client ${clientId}`);
-
-    res.redirect(`${adminHubUrl}?oauth=success&provider=tiktok&clientId=${clientId}`);
-  } catch (err) {
-    console.error('[oauth:tiktok:callback]', err);
-    clearOAuthCookies(res, 'tiktok');
-    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
-  }
-});
-
-/**
  * GET /hub/oauth-connections/:id/tiktok-account
  * Fetch TikTok account info for an OAuth connection
  */
@@ -6266,68 +6328,6 @@ router.post('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req
   } catch (err) {
     console.error('[oauth:wordpress:connect]', err);
     res.status(500).json({ message: 'Failed to start OAuth flow' });
-  }
-});
-
-/**
- * GET /hub/oauth/wordpress/callback
- * Handle WordPress OAuth callback
- */
-router.get('/oauth/wordpress/callback', async (req, res) => {
-  const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
-  
-  try {
-    const { code, state, error, error_description } = req.query;
-
-    if (error) {
-      console.log(`[oauth:wordpress:callback] OAuth error: ${error} - ${error_description}`);
-      clearOAuthCookies(res, 'wordpress');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
-    }
-
-    if (!code || !state) {
-      console.log('[oauth:wordpress:callback] Missing code or state');
-      clearOAuthCookies(res, 'wordpress');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
-    }
-
-    const cookies = getOAuthCookies(req, 'wordpress');
-    
-    if (!cookies.state || cookies.state !== state) {
-      console.log('[oauth:wordpress:callback] State mismatch');
-      clearOAuthCookies(res, 'wordpress');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
-    }
-
-    if (!cookies.clientId) {
-      console.log('[oauth:wordpress:callback] Missing clientId in cookies');
-      clearOAuthCookies(res, 'wordpress');
-      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
-    }
-
-    const clientId = cookies.clientId;
-    clearOAuthCookies(res, 'wordpress');
-
-    const redirectUri = `${baseUrl}/api/hub/oauth/wordpress/callback`;
-    const config = getWordPressOAuthConfig(redirectUri);
-    
-    console.log('[oauth:wordpress:callback] Exchanging code for tokens...');
-    const tokens = await exchangeWordPressCodeForTokens(config, code);
-    
-    console.log('[oauth:wordpress:callback] Fetching WordPress profile...');
-    const profile = await fetchWordPressProfile(tokens.access_token, tokens);
-    
-    console.log(`[oauth:wordpress:callback] Profile: ${profile.name} (${profile.id})`);
-    
-    const connection = await saveOAuthConnection(clientId, 'wordpress', tokens, profile);
-    console.log(`[oauth:wordpress:callback] Saved connection ${connection.id} for client ${clientId}`);
-
-    res.redirect(`${adminHubUrl}?oauth=success&provider=wordpress&clientId=${clientId}`);
-  } catch (err) {
-    console.error('[oauth:wordpress:callback]', err);
-    clearOAuthCookies(res, 'wordpress');
-    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
   }
 });
 
