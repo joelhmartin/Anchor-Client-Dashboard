@@ -95,7 +95,8 @@ import {
   fetchGoogleBusinessLocations,
   fetchFacebookPages,
   fetchInstagramAccounts,
-  fetchTikTokAccount
+  fetchTikTokAccount,
+  fetchWordPressSites
 } from 'api/oauth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
@@ -232,6 +233,8 @@ export default function AdminHub() {
     instagramAccounts: [],
     // TikTok-specific
     tiktokAccount: null,
+    // WordPress-specific
+    wordpressSites: [],
     // Loading states
     resourcesLoading: false
   });
@@ -240,6 +243,23 @@ export default function AdminHub() {
   const isSuperAdmin = effectiveRole === 'superadmin';
   const isAdmin = effectiveRole === 'superadmin' || effectiveRole === 'admin';
   const canAccessHub = isAdmin;
+
+  // Role hierarchy: superadmin > admin > team > client
+  const ROLE_HIERARCHY = { superadmin: 4, admin: 3, team: 2, client: 1 };
+  const getEditableRoles = (currentRole) => {
+    const level = ROLE_HIERARCHY[currentRole] || 0;
+    // Can only assign roles below your level (except superadmin who can assign admin)
+    if (currentRole === 'superadmin') return ['admin', 'team'];
+    if (currentRole === 'admin') return ['team'];
+    return [];
+  };
+  const canEditUserRole = (targetRole) => {
+    const myLevel = ROLE_HIERARCHY[effectiveRole] || 0;
+    const targetLevel = ROLE_HIERARCHY[targetRole] || 0;
+    // Can edit users at a lower level than yourself
+    return myLevel > targetLevel;
+  };
+  const isStaffRole = (role) => ['superadmin', 'admin', 'team'].includes(role);
 
   const reportError = useCallback(
     (err, fallback) => {
@@ -588,7 +608,7 @@ export default function AdminHub() {
       });
       setNewClient({ email: '', name: '', role: 'client' });
       if (res.client.role === 'client') {
-        await startOnboardingFlow(res.client.id);
+      await startOnboardingFlow(res.client.id);
       } else if (res.client.role === 'admin' || res.client.role === 'team') {
         try {
           await requestPasswordReset(res.client.email);
@@ -856,6 +876,7 @@ export default function AdminHub() {
       pages: [],
       instagramAccounts: [],
       tiktokAccount: null,
+      wordpressSites: [],
       resourcesLoading: false
     };
     setFetchResourcesDialog(initialState);
@@ -873,6 +894,9 @@ export default function AdminHub() {
       } else if (provider === 'tiktok') {
         const tiktokAccount = await fetchTikTokAccount(connectionId);
         setFetchResourcesDialog((prev) => ({ ...prev, loading: false, tiktokAccount }));
+      } else if (provider === 'wordpress') {
+        const wordpressSites = await fetchWordPressSites(connectionId);
+        setFetchResourcesDialog((prev) => ({ ...prev, loading: false, wordpressSites }));
       } else {
         setFetchResourcesDialog((prev) => ({ ...prev, loading: false }));
       }
@@ -951,6 +975,15 @@ export default function AdminHub() {
           is_primary: false
         };
         displayName = resource.displayName || resource.username;
+      } else if (resourceType === 'wordpress_site') {
+        payload = {
+          resource_type: 'wordpress_site',
+          resource_id: String(resource.blogId || resource.id),
+          resource_name: resource.name,
+          resource_url: resource.url,
+          is_primary: false
+        };
+        displayName = resource.name;
       }
       
       await createOAuthResource(fetchResourcesDialog.connectionId, payload);
@@ -973,6 +1006,7 @@ export default function AdminHub() {
       pages: [],
       instagramAccounts: [],
       tiktokAccount: null,
+      wordpressSites: [],
       resourcesLoading: false
     });
   };
@@ -1327,6 +1361,51 @@ export default function AdminHub() {
     }
   };
 
+  // Simplified staff edit view (for admin/team users)
+  const renderStaffEditContent = () => {
+    const editableRoles = getEditableRoles(effectiveRole);
+    const canEdit = canEditUserRole(editing?.role);
+
+    return (
+      <Stack spacing={3} sx={{ mt: 2 }}>
+        <TextField label="Name" value={`${editing?.first_name || ''} ${editing?.last_name || ''}`.trim()} disabled fullWidth />
+        <TextField label="Email" value={editing?.email || ''} disabled fullWidth />
+        <TextField
+          label="Role"
+          select
+          value={editing?.role || 'team'}
+          onChange={handleEditChange('role')}
+          disabled={!canEdit}
+          fullWidth
+          helperText={!canEdit ? 'You cannot edit users at or above your role level' : 'Select the user\'s permission level'}
+        >
+          {/* Show current role even if not editable */}
+          {!editableRoles.includes(editing?.role) && (
+            <MenuItem value={editing?.role} disabled>
+              {(editing?.role || 'Unknown').charAt(0).toUpperCase() + (editing?.role || '').slice(1)}
+            </MenuItem>
+          )}
+          {editableRoles.map((role) => (
+            <MenuItem key={role} value={role}>
+              {role.charAt(0).toUpperCase() + role.slice(1)}
+            </MenuItem>
+          ))}
+        </TextField>
+        <Alert severity="info" sx={{ mt: 2 }}>
+          <Typography variant="body2">
+            <strong>Role Permissions:</strong>
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            • <strong>Admin:</strong> Can manage clients, view all data, impersonate clients
+          </Typography>
+          <Typography variant="body2">
+            • <strong>Team:</strong> Can view assigned tasks and limited client data
+          </Typography>
+        </Alert>
+      </Stack>
+    );
+  };
+ 
   const renderDetailsTab = () => (
     <Stack spacing={2} sx={{ mt: 2 }}>
       {editing?.role === 'client' && (
@@ -1349,7 +1428,7 @@ export default function AdminHub() {
           >
             <MenuItem value="">
               <em>Not set</em>
-            </MenuItem>
+              </MenuItem>
             {CLIENT_PACKAGE_OPTIONS.map((pkg) => (
               <MenuItem key={pkg} value={pkg}>
                 {pkg}
@@ -1779,7 +1858,7 @@ export default function AdminHub() {
                         variant="outlined"
                         onClick={() => handleOpenFetchResources(conn.id, conn.provider)}
                       >
-                        Fetch {conn.provider === 'google' ? 'Locations' : conn.provider === 'facebook' ? 'Pages' : 'Account'}
+                        Fetch {conn.provider === 'google' ? 'Locations' : conn.provider === 'facebook' ? 'Pages' : conn.provider === 'wordpress' ? 'Sites' : 'Account'}
                       </Button>
                     )}
                     <Button size="small" startIcon={<AddIcon />} onClick={() => handleAddOAuthResource(conn.id)}>
@@ -1907,53 +1986,53 @@ export default function AdminHub() {
         {/* Users & Clients Section */}
         {hubSection === 0 && (
           <>
-            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
-              <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-                <Typography variant="h5" sx={{ mb: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
+          <Box sx={{ flex: 1, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+            <Typography variant="h5" sx={{ mb: 2 }}>
                   Add User
-                </Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={12} md={4}>
-                    <FormControl fullWidth>
-                      <InputLabel htmlFor="new-email">Email</InputLabel>
-                      <OutlinedInput
-                        id="new-email"
-                        value={newClient.email}
-                        onChange={(e) => setNewClient((p) => ({ ...p, email: e.target.value }))}
-                        label="Email"
-                        type="email"
-                      />
-                    </FormControl>
-                  </Grid>
-                  <Grid item xs={12} md={4}>
-                    <FormControl fullWidth>
-                      <InputLabel htmlFor="new-name">Name</InputLabel>
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth>
+                  <InputLabel htmlFor="new-email">Email</InputLabel>
+                  <OutlinedInput
+                    id="new-email"
+                    value={newClient.email}
+                    onChange={(e) => setNewClient((p) => ({ ...p, email: e.target.value }))}
+                    label="Email"
+                    type="email"
+                  />
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth>
+                  <InputLabel htmlFor="new-name">Name</InputLabel>
                       <OutlinedInput
                         id="new-name"
                         value={newClient.name}
                         onChange={(e) => setNewClient((p) => ({ ...p, name: e.target.value }))}
                         label="Name"
                       />
-                    </FormControl>
-                  </Grid>
-                  <Grid item xs={12} md={2}>
-                    <FormControl fullWidth>
-                      <InputLabel id="new-role-label">Role</InputLabel>
-                      <Select
-                        labelId="new-role-label"
-                        value={newClient.role}
-                        label="Role"
-                        onChange={(e) => setNewClient((p) => ({ ...p, role: e.target.value }))}
-                      >
-                        {newRolesOptions.map((r) => (
-                          <MenuItem key={r} value={r}>
-                            {r.charAt(0).toUpperCase() + r.slice(1)}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Grid>
-                  <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center' }}>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={2}>
+                <FormControl fullWidth>
+                  <InputLabel id="new-role-label">Role</InputLabel>
+                  <Select
+                    labelId="new-role-label"
+                    value={newClient.role}
+                    label="Role"
+                    onChange={(e) => setNewClient((p) => ({ ...p, role: e.target.value }))}
+                  >
+                    {newRolesOptions.map((r) => (
+                      <MenuItem key={r} value={r}>
+                        {r.charAt(0).toUpperCase() + r.slice(1)}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center' }}>
                     <Button
                       variant="contained"
                       fullWidth
@@ -1961,12 +2040,12 @@ export default function AdminHub() {
                       onClick={handleAddClient}
                       disabled={savingNew || !newClient.email}
                     >
-                      {savingNew ? 'Saving…' : 'Save'}
-                    </Button>
-                  </Grid>
-                </Grid>
-              </Box>
-            </Box>
+                  {savingNew ? 'Saving…' : 'Save'}
+                </Button>
+              </Grid>
+            </Grid>
+          </Box>
+        </Box>
 
             {isAdmin && (
               <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, mb: 2 }}>
@@ -2001,40 +2080,53 @@ export default function AdminHub() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {filteredAdmins.map((c) => (
-                        <TableRow key={c.id} hover>
-                          <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                          <TableCell>{c.email}</TableCell>
-                          <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
-                          <TableCell align="right">
-                            <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                              <Tooltip title="Edit">
-                                <IconButton size="small" onClick={() => startEdit(c)}>
-                                  <EditIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                              {isAdmin && (
-                                <Tooltip title="Delete">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      color="error"
-                                      onClick={() => confirmDeleteClient(c.id)}
-                                      disabled={deletingClientId === c.id}
-                                    >
-                                      {deletingClientId === c.id ? (
-                                        <CircularProgress size={18} color="inherit" />
-                                      ) : (
-                                        <DeleteOutlineIcon fontSize="small" />
-                                      )}
+                      {filteredAdmins.map((c) => {
+                        const canEdit = canEditUserRole(c.role);
+                        return (
+                          <TableRow key={c.id} hover>
+                            <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                            <TableCell>{c.email}</TableCell>
+                            <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'admin'}</TableCell>
+                            <TableCell align="right">
+                              <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                                {canEdit ? (
+                                  <Tooltip title="Edit">
+                                    <IconButton size="small" onClick={() => startEdit(c)}>
+                                      <EditIcon fontSize="small" />
                                     </IconButton>
-                                  </span>
-                                </Tooltip>
-                              )}
-                            </Stack>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                                  </Tooltip>
+                                ) : (
+                                  <Tooltip title="Cannot edit users at or above your role level">
+                                    <span>
+                                      <IconButton size="small" disabled>
+                                        <EditIcon fontSize="small" />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                )}
+                                {canEdit && isAdmin && (
+                                  <Tooltip title="Delete">
+                                    <span>
+                                      <IconButton
+                                        size="small"
+                                        color="error"
+                                        onClick={() => confirmDeleteClient(c.id)}
+                                        disabled={deletingClientId === c.id}
+                                      >
+                                        {deletingClientId === c.id ? (
+                                          <CircularProgress size={18} color="inherit" />
+                                        ) : (
+                                          <DeleteOutlineIcon fontSize="small" />
+                                        )}
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                )}
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                       {!filteredAdmins.length && !loading && (
                         <TableRow>
                           <TableCell colSpan={4} align="center">
@@ -2048,7 +2140,7 @@ export default function AdminHub() {
               </Box>
             )}
 
-            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
               <Box sx={{ p: 2 }}>
                 <Stack
                   direction={{ xs: 'column', sm: 'row' }}
@@ -2056,9 +2148,9 @@ export default function AdminHub() {
                   alignItems={{ xs: 'stretch', sm: 'center' }}
                   justifyContent="space-between"
                 >
-                  <Typography variant="h5">Clients</Typography>
+            <Typography variant="h5">Clients</Typography>
                   <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
-                    {loading && <CircularProgress size={20} />}
+            {loading && <CircularProgress size={20} />}
                     <TextField
                       size="small"
                       placeholder="Search clients…"
@@ -2100,12 +2192,12 @@ export default function AdminHub() {
                     Selected: {selectedClientIds.length}
                   </Typography>
                 )}
-              </Box>
-              <Divider />
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
+          </Box>
+          <Divider />
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
                       <TableCell padding="checkbox">
                         <Checkbox
                           size="small"
@@ -2118,16 +2210,16 @@ export default function AdminHub() {
                           disabled={!isAdmin}
                         />
                       </TableCell>
-                      <TableCell>Display Name</TableCell>
-                      <TableCell>Email</TableCell>
-                      <TableCell>Role</TableCell>
+                  <TableCell>Display Name</TableCell>
+                  <TableCell>Email</TableCell>
+                  <TableCell>Role</TableCell>
                       <TableCell>Onboarding</TableCell>
-                      <TableCell align="right">Action</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
+                  <TableCell align="right">Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                     {filteredClients.map((c) => (
-                      <TableRow key={c.id} hover>
+                    <TableRow key={c.id} hover>
                         <TableCell padding="checkbox">
                           <Checkbox
                             size="small"
@@ -2136,10 +2228,10 @@ export default function AdminHub() {
                             disabled={!isAdmin}
                           />
                         </TableCell>
-                        <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
-                        <TableCell>{c.email}</TableCell>
+                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                      <TableCell>{c.email}</TableCell>
                         <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
-                        <TableCell>
+                      <TableCell>
                           {c.role === 'client' ? (
                             c.onboarding_completed_at ? (
                               c.activated_at ? (
@@ -2164,13 +2256,13 @@ export default function AdminHub() {
                                 Onboarding
                               </Typography>
                             )
-                          ) : (
-                            <Typography variant="caption" color="text.secondary">
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
                               —
-                            </Typography>
-                          )}
-                        </TableCell>
-                        <TableCell align="right">
+                          </Typography>
+                        )}
+                      </TableCell>
+                    <TableCell align="right">
                           <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
                             <Tooltip title="Edit">
                               <IconButton size="small" onClick={() => startEdit(c)}>
@@ -2219,7 +2311,7 @@ export default function AdminHub() {
                                   disabled={sendingOnboardingForId === c.id}
                                 >
                                   {sendingOnboardingForId === c.id ? 'Sending…' : 'Send onboarding email'}
-                                </Button>
+                        </Button>
                               </>
                             )}
                             {c.role === 'client' && c.onboarding_completed_at && !c.activated_at && (
@@ -2234,33 +2326,33 @@ export default function AdminHub() {
                               </Button>
                             )}
                             {(c.role !== 'client' || Boolean(c.onboarding_completed_at)) && (
-                              <Button
-                                size="small"
-                                variant="contained"
-                                disableElevation
-                                onClick={() => {
+                        <Button
+                          size="small"
+                          variant="contained"
+                          disableElevation
+                          onClick={() => {
                                   if (c.role === 'client' && !c.onboarding_completed_at) return;
-                                  setActingClient(c.id);
-                                  navigate('/portal');
-                                }}
-                              >
-                                Jump to View
-                              </Button>
+                            setActingClient(c.id);
+                            navigate('/portal');
+                          }}
+                        >
+                          Jump to View
+                        </Button>
                             )}
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))}
                     {!filteredClients.length && !loading && (
-                      <TableRow>
+                  <TableRow>
                         <TableCell colSpan={8} align="center">
-                          No clients yet.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                      No clients yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
             </Box>
           </>
         )}
@@ -2281,8 +2373,8 @@ export default function AdminHub() {
                       <Typography variant="caption" color="text.secondary">
                         Sent (30d)
                       </Typography>
-                    </Box>
-                  </Stack>
+        </Box>
+      </Stack>
                 </CardContent>
               </Card>
               <Card variant="outlined" sx={{ minWidth: 140, flex: 1 }}>
@@ -2639,58 +2731,86 @@ export default function AdminHub() {
         {editing && (
           <Stack spacing={2} sx={{ height: '100%' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="h5">Editing: {editing.first_name || editing.email}</Typography>
+              <Typography variant="h5">
+                {isStaffRole(editing.role) ? 'Edit Staff Member' : 'Editing'}: {editing.first_name || editing.email}
+              </Typography>
               <IconButton onClick={() => setEditing(null)} aria-label="close">
                 ×
               </IconButton>
             </Box>
             <Button variant="text" onClick={() => setEditing(null)} sx={{ alignSelf: 'flex-start' }}>
-              Back to All Clients
+              {isStaffRole(editing.role) ? 'Back to Staff List' : 'Back to All Clients'}
             </Button>
+            {isStaffRole(editing.role) ? (
+              // Simplified staff editing view
+              <Box sx={{ flex: 1, overflowY: 'auto' }}>{renderStaffEditContent()}</Box>
+            ) : (
+              // Full client editing view with tabs
+              <>
             <Tabs value={activeTab} onChange={(_e, v) => setActiveTab(v)} variant="scrollable" allowScrollButtonsMobile>
               <Tab label="Client Details" />
               <Tab label="Client Assets" />
               <Tab label="Client Documents" />
-              <Tab label="Integrations" />
+                  <Tab label="Integrations" />
             </Tabs>
             <Box sx={{ flex: 1, overflowY: 'auto' }}>
               {activeTab === 0 && renderDetailsTab()}
               {activeTab === 1 && renderBrandAssetsTab()}
               {activeTab === 2 && renderDocumentsTab()}
-              {activeTab === 3 && renderIntegrationsTab()}
+                  {activeTab === 3 && renderIntegrationsTab()}
             </Box>
+              </>
+            )}
             <Stack direction="row" spacing={1} justifyContent="flex-end">
-              {editing?.role === 'client' && !editing?.onboarding_completed_at && (
+              {isStaffRole(editing?.role) ? (
+                // Staff editing buttons
                 <>
-                  <Tooltip title="Copy onboarding link to clipboard">
-                    <Button
-                      variant="text"
-                      onClick={() => handleCopyOnboardingLink(editing.id)}
-                      disabled={copyingLinkForId === editing.id}
-                      startIcon={copyingLinkForId === editing.id ? <CircularProgress size={16} /> : <ContentCopyIcon />}
-                    >
-                      {copyingLinkForId === editing.id ? 'Copying…' : 'Copy Link'}
-                    </Button>
-                  </Tooltip>
+                  <Button onClick={() => setEditing(null)} color="secondary">
+                    Cancel
+                  </Button>
                   <Button
-                    variant="outlined"
-                    onClick={() => handleSendOnboardingEmailNow(editing.id)}
-                    disabled={sendingOnboardingForId === editing.id}
+                    variant="contained"
+                    disableElevation
+                    onClick={handleSaveEdit}
+                    disabled={savingEdit || !canEditUserRole(editing?.role)}
                   >
-                    {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
+                    {savingEdit ? 'Saving…' : 'Save Changes'}
                   </Button>
                 </>
-              )}
-              {editing?.role === 'client' && editing?.onboarding_completed_at && !editing?.activated_at && (
-                <Button
-                  variant="contained"
-                  color="secondary"
-                  onClick={() => handleActivateClient(editing.id)}
-                  disabled={activatingClientId === editing.id}
-                >
-                  {activatingClientId === editing.id ? 'Activating…' : 'Activate Account'}
-                </Button>
-              )}
+              ) : (
+                // Client editing buttons
+                <>
+                  {editing?.role === 'client' && !editing?.onboarding_completed_at && (
+                    <>
+                      <Tooltip title="Copy onboarding link to clipboard">
+                        <Button
+                          variant="text"
+                          onClick={() => handleCopyOnboardingLink(editing.id)}
+                          disabled={copyingLinkForId === editing.id}
+                          startIcon={copyingLinkForId === editing.id ? <CircularProgress size={16} /> : <ContentCopyIcon />}
+                        >
+                          {copyingLinkForId === editing.id ? 'Copying…' : 'Copy Link'}
+                        </Button>
+                      </Tooltip>
+                      <Button
+                        variant="outlined"
+                        onClick={() => handleSendOnboardingEmailNow(editing.id)}
+                        disabled={sendingOnboardingForId === editing.id}
+                      >
+                        {sendingOnboardingForId === editing.id ? 'Sending…' : 'Send onboarding email'}
+                      </Button>
+                    </>
+                  )}
+                  {editing?.role === 'client' && editing?.onboarding_completed_at && !editing?.activated_at && (
+                    <Button
+                      variant="contained"
+                      color="secondary"
+                      onClick={() => handleActivateClient(editing.id)}
+                      disabled={activatingClientId === editing.id}
+                    >
+                      {activatingClientId === editing.id ? 'Activating…' : 'Activate Account'}
+                    </Button>
+                  )}
               <Button onClick={() => setEditing(null)} color="secondary">
                 Cancel
               </Button>
@@ -2703,6 +2823,8 @@ export default function AdminHub() {
                 <Button variant="contained" disableElevation onClick={handleSaveEdit} disabled={savingEdit}>
                   {savingEdit ? 'Saving…' : 'Save Changes'}
                 </Button>
+                  )}
+                </>
               )}
             </Stack>
           </Stack>
@@ -2819,8 +2941,8 @@ export default function AdminHub() {
                     <Grid container spacing={1}>
                       {ACCESS_STEP_OPTIONS.map((option) => (
                         <Grid item xs={12} sm={6} key={option.key}>
-                          <FormControlLabel
-                            control={
+                    <FormControlLabel
+                      control={
                               <Checkbox
                                 checked={editing?.[option.key] !== false}
                                 onChange={toggleAccessRequirement(option.key)}
@@ -2924,13 +3046,14 @@ export default function AdminHub() {
             </TextField>
 
             {/* For new connections with OAuth support, show sign-in button */}
-            {!oauthConnectionDialog.connection?.id && ['google', 'facebook', 'instagram', 'tiktok'].includes(oauthConnectionDialog.connection?.provider) && (
+            {!oauthConnectionDialog.connection?.id && ['google', 'facebook', 'instagram', 'tiktok', 'wordpress'].includes(oauthConnectionDialog.connection?.provider) && (
               <Box sx={{ py: 2, textAlign: 'center' }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   {oauthConnectionDialog.connection?.provider === 'google' && 'Connect your Google account to access Google Business Profile features including reviews.'}
                   {oauthConnectionDialog.connection?.provider === 'facebook' && 'Connect your Facebook account to manage Facebook Pages and linked Instagram accounts.'}
                   {oauthConnectionDialog.connection?.provider === 'instagram' && 'Connect via Facebook to manage your Instagram Business account (Instagram is linked through Facebook).'}
                   {oauthConnectionDialog.connection?.provider === 'tiktok' && 'Connect your TikTok account to manage your TikTok for Business presence.'}
+                  {oauthConnectionDialog.connection?.provider === 'wordpress' && 'Connect your WordPress.com account to manage and publish blog posts to WordPress sites.'}
                 </Typography>
                 <Button
                   variant="contained"
@@ -3305,6 +3428,51 @@ export default function AdminHub() {
                       </Box>
                     </Box>
                     <Button variant="outlined" onClick={() => handleAddResource(fetchResourcesDialog.tiktokAccount, 'tiktok_account')}>Add</Button>
+                  </Box>
+                )}
+              </>
+            )}
+
+            {/* WordPress Content */}
+            {!fetchResourcesDialog.loading && fetchResourcesDialog.provider === 'wordpress' && (
+              <>
+                {fetchResourcesDialog.wordpressSites.length === 0 && (
+                  <Alert severity="info">
+                    No WordPress sites found for this account. Make sure you have sites connected to your WordPress.com account.
+                  </Alert>
+                )}
+
+                {fetchResourcesDialog.wordpressSites.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                      WordPress Sites ({fetchResourcesDialog.wordpressSites.length})
+                    </Typography>
+                    <Stack spacing={1}>
+                      {fetchResourcesDialog.wordpressSites.map((site) => (
+                        <Box
+                          key={site.id}
+                          sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                            {site.icon && (
+                              <Box component="img" src={site.icon} alt="" sx={{ width: 40, height: 40, borderRadius: 1 }} />
+                            )}
+                            <Box>
+                              <Typography variant="body1" fontWeight={500}>
+                                {site.name}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {site.url}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {site.isJetpack ? 'Jetpack Connected' : 'WordPress.com'} • {site.plan}
+                              </Typography>
+                            </Box>
+                          </Box>
+                          <Button variant="outlined" onClick={() => handleAddResource(site, 'wordpress_site')}>Add</Button>
+                        </Box>
+                      ))}
+                    </Stack>
                   </Box>
                 )}
               </>
