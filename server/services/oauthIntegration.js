@@ -858,14 +858,16 @@ export async function saveOAuthConnection(clientId, provider, tokens, profile) {
     : null;
 
   // Parse scope from token response or use defaults
+  // Must be JSON-stringified for JSONB column
   let scopeGranted;
   if (tokens.scope) {
     // Google uses space-separated, Facebook/TikTok may use comma-separated
-    scopeGranted = tokens.scope.includes(',') 
-      ? tokens.scope.split(',') 
-      : tokens.scope.split(' ');
+    const scopeArray = tokens.scope.includes(',') 
+      ? tokens.scope.split(',').map(s => s.trim())
+      : tokens.scope.split(' ').filter(Boolean);
+    scopeGranted = JSON.stringify(scopeArray);
   } else {
-    scopeGranted = getDefaultScopesForProvider(provider);
+    scopeGranted = JSON.stringify(getDefaultScopesForProvider(provider));
   }
 
   if (existing.rows.length > 0) {
