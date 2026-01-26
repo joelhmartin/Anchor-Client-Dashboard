@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS client_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   looker_url TEXT,
   client_package TEXT,
+  -- Google OAuth (per-client)
+  google_client_id TEXT,
+  google_client_secret TEXT,
   -- Client contact + routing info (client-provided)
   call_tracking_main_number TEXT,
   front_desk_emails TEXT,
@@ -576,6 +579,8 @@ ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS ga4_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_ads_account_id TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_client_id TEXT;
+ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS google_client_secret TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS meta_access_status TEXT;
 ALTER TABLE client_profiles ADD COLUMN IF NOT EXISTS website_forms_details_status TEXT;
 -- Access steps enabled/disabled (admin-configured)

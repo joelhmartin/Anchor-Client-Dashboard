@@ -636,6 +636,8 @@ export default function AdminHub() {
         ga4_access_understood: editing.ga4_access_understood,
         google_ads_access_provided: editing.google_ads_access_provided,
         google_ads_access_understood: editing.google_ads_access_understood,
+        google_client_id: editing.google_client_id,
+        google_client_secret: editing.google_client_secret,
         meta_access_provided: editing.meta_access_provided,
         meta_access_understood: editing.meta_access_understood,
         website_forms_details_provided: editing.website_forms_details_provided,
@@ -1116,6 +1118,16 @@ export default function AdminHub() {
         <br />
         1★ = Spam | 2★ = Not a fit | 3★ = Solid lead | 0★ = Voicemail/Unanswered/Neutral | 5★ = Manual only (booked appointment)
       </Typography>
+      <Typography variant="subtitle2" sx={{ mt: 1 }}>
+        Google OAuth (Client)
+      </Typography>
+      <TextField label="Google Client ID" value={editing.google_client_id || ''} onChange={handleEditChange('google_client_id')} />
+      <TextField
+        label="Google Client Secret"
+        value={editing.google_client_secret || ''}
+        onChange={handleEditChange('google_client_secret')}
+        type="password"
+      />
       <TextField label="CTM Account Number" value={editing.ctm_account_number || ''} onChange={handleEditChange('ctm_account_number')} />
       <TextField label="CTM API Key" value={editing.ctm_api_key || ''} onChange={handleEditChange('ctm_api_key')} />
       <TextField label="CTM API Secret" value={editing.ctm_api_secret || ''} onChange={handleEditChange('ctm_api_secret')} />

@@ -1678,6 +1678,8 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
       ga4_access_understood,
       google_ads_access_provided,
       google_ads_access_understood,
+      google_client_id,
+      google_client_secret,
       meta_access_provided,
       meta_access_understood,
       website_forms_details_provided,
@@ -1732,6 +1734,8 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
       ga4_access_understood === undefined ? null : Boolean(ga4_access_understood),
       google_ads_access_provided === undefined ? null : Boolean(google_ads_access_provided),
       google_ads_access_understood === undefined ? null : Boolean(google_ads_access_understood),
+      google_client_id || null,
+      google_client_secret || null,
       meta_access_provided === undefined ? null : Boolean(meta_access_provided),
       meta_access_understood === undefined ? null : Boolean(meta_access_understood),
       website_forms_details_provided === undefined ? null : Boolean(website_forms_details_provided),
@@ -1761,17 +1765,19 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
                ga4_access_understood=COALESCE($26, ga4_access_understood),
                google_ads_access_provided=COALESCE($27, google_ads_access_provided),
                google_ads_access_understood=COALESCE($28, google_ads_access_understood),
-               meta_access_provided=COALESCE($29, meta_access_provided),
-               meta_access_understood=COALESCE($30, meta_access_understood),
-               website_forms_details_provided=COALESCE($31, website_forms_details_provided),
-               website_forms_details_understood=COALESCE($32, website_forms_details_understood),
-               website_forms_uses_third_party=COALESCE($33, website_forms_uses_third_party),
-               website_forms_uses_hipaa=COALESCE($34, website_forms_uses_hipaa),
-               website_forms_connected_crm=COALESCE($35, website_forms_connected_crm),
-               website_forms_custom=COALESCE($36, website_forms_custom),
-               website_forms_notes=COALESCE($37, website_forms_notes),
+               google_client_id=COALESCE($29, google_client_id),
+               google_client_secret=COALESCE($30, google_client_secret),
+               meta_access_provided=COALESCE($31, meta_access_provided),
+               meta_access_understood=COALESCE($32, meta_access_understood),
+               website_forms_details_provided=COALESCE($33, website_forms_details_provided),
+               website_forms_details_understood=COALESCE($34, website_forms_details_understood),
+               website_forms_uses_third_party=COALESCE($35, website_forms_uses_third_party),
+               website_forms_uses_hipaa=COALESCE($36, website_forms_uses_hipaa),
+               website_forms_connected_crm=COALESCE($37, website_forms_connected_crm),
+               website_forms_custom=COALESCE($38, website_forms_custom),
+               website_forms_notes=COALESCE($39, website_forms_notes),
                updated_at=NOW()
-         WHERE user_id=$38`,
+         WHERE user_id=$40`,
         params
       );
     } else {
@@ -1785,13 +1791,14 @@ router.put('/clients/:id', isAdminOrEditor, async (req, res) => {
            website_access_provided,website_access_understood,
            ga4_access_provided,ga4_access_understood,
            google_ads_access_provided,google_ads_access_understood,
+           google_client_id,google_client_secret,
            meta_access_provided,meta_access_understood,
            website_forms_details_provided,website_forms_details_understood,
            website_forms_uses_third_party,website_forms_uses_hipaa,website_forms_connected_crm,website_forms_custom,
            website_forms_notes,
            user_id
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40)`,
         params
       );
     }
