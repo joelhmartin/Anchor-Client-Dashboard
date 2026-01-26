@@ -584,7 +584,7 @@ router.get('/users/:id/avatar', async (req, res) => {
  */
 router.get('/oauth/google/callback', async (req, res) => {
   const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
+  const adminHubUrl = `${baseUrl}/client-hub`;
   
   try {
     const { code, state, error } = req.query;
@@ -646,7 +646,7 @@ router.get('/oauth/google/callback', async (req, res) => {
  */
 router.get('/oauth/facebook/callback', async (req, res) => {
   const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
+  const adminHubUrl = `${baseUrl}/client-hub`;
   
   try {
     const { code, state, error, error_description } = req.query;
@@ -708,7 +708,7 @@ router.get('/oauth/facebook/callback', async (req, res) => {
  */
 router.get('/oauth/tiktok/callback', async (req, res) => {
   const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
+  const adminHubUrl = `${baseUrl}/client-hub`;
   
   try {
     const { code, state, error, error_description } = req.query;
@@ -770,7 +770,7 @@ router.get('/oauth/tiktok/callback', async (req, res) => {
  */
 router.get('/oauth/wordpress/callback', async (req, res) => {
   const baseUrl = resolveBaseUrl(req);
-  const adminHubUrl = `${baseUrl}/admin/hub`;
+  const adminHubUrl = `${baseUrl}/client-hub`;
   
   try {
     const { code, state, error, error_description } = req.query;
