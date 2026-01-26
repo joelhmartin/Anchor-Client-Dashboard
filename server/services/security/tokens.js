@@ -226,6 +226,9 @@ export async function refreshSession(oldRefreshToken, { ipAddress, userAgent }) 
       userId: session.user_id,
       role: session.role,
       email: session.email,
+      first_name: session.first_name,
+      last_name: session.last_name,
+      avatar_url: session.avatar_url,
       deviceId: session.device_id,
       isTrusted: session.is_trusted
     },
