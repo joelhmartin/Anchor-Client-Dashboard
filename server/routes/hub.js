@@ -1676,9 +1676,14 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
   // Revoke any previously-issued (still valid) links so only the newest link works.
-  await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL', [
-    clientId
-  ]);
+  // Also mark all old tokens as "reminder handled" to prevent expiry notifications for superseded links.
+  await query(
+    `UPDATE client_onboarding_tokens 
+     SET revoked_at = COALESCE(revoked_at, NOW()),
+         reminder_sent_at = COALESCE(reminder_sent_at, NOW())
+     WHERE user_id = $1 AND consumed_at IS NULL`,
+    [clientId]
+  );
   await query(
     `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
      VALUES ($1,$2,$3,$4)`,
@@ -1741,9 +1746,14 @@ router.get('/clients/:id/onboarding-link', isAdminOrEditor, async (req, res) => 
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
 
   // Revoke any previously-issued (still valid) links so only the newest link works.
-  await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL', [
-    clientId
-  ]);
+  // Also mark all old tokens as "reminder handled" to prevent expiry notifications for superseded links.
+  await query(
+    `UPDATE client_onboarding_tokens 
+     SET revoked_at = COALESCE(revoked_at, NOW()),
+         reminder_sent_at = COALESCE(reminder_sent_at, NOW())
+     WHERE user_id = $1 AND consumed_at IS NULL`,
+    [clientId]
+  );
   await query(
     `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
      VALUES ($1,$2,$3,$4)`,

@@ -22,6 +22,8 @@ async function findInternalUserIdByEmail(email) {
 
 export async function sendOnboardingExpiryReminders({ baseUrl } = {}) {
   // Find expired, unconsumed, unrevoked tokens that haven't had a reminder sent.
+  // IMPORTANT: Exclude tokens where the user already has a NEWER active token
+  // (prevents sending "expired" notices when a fresh link was sent)
   const { rows } = await query(
     `SELECT
        t.id AS token_id,
@@ -39,7 +41,16 @@ export async function sendOnboardingExpiryReminders({ baseUrl } = {}) {
        AND t.revoked_at IS NULL
        AND t.reminder_sent_at IS NULL
        AND t.expires_at < NOW()
-       AND (cp.onboarding_completed_at IS NULL)`,
+       AND (cp.onboarding_completed_at IS NULL)
+       -- Exclude if user has a newer active (non-expired, non-revoked) token
+       AND NOT EXISTS (
+         SELECT 1 FROM client_onboarding_tokens newer
+         WHERE newer.user_id = t.user_id
+           AND newer.id != t.id
+           AND newer.revoked_at IS NULL
+           AND newer.consumed_at IS NULL
+           AND newer.expires_at > NOW()
+       )`,
     []
   );
 
