@@ -89,7 +89,13 @@ import {
   updateOAuthResource,
   deleteOAuthResource,
   OAUTH_PROVIDERS,
-  getResourceTypesForProvider
+  getResourceTypesForProvider,
+  getOAuthConnectUrl,
+  fetchGoogleBusinessAccounts,
+  fetchGoogleBusinessLocations,
+  fetchFacebookPages,
+  fetchInstagramAccounts,
+  fetchTikTokAccount
 } from 'api/oauth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
@@ -210,6 +216,25 @@ export default function AdminHub() {
   const [savingOauth, setSavingOauth] = useState(false);
   const [expandedConnection, setExpandedConnection] = useState(null);
   const [reclassifyDialog, setReclassifyDialog] = useState({ open: false, limit: 200, force: true, loading: false });
+  // Fetch Resources dialog (supports all providers)
+  const [fetchResourcesDialog, setFetchResourcesDialog] = useState({
+    open: false,
+    connectionId: null,
+    provider: null,
+    loading: false,
+    // Google-specific
+    accounts: [],
+    selectedAccount: null,
+    locations: [],
+    // Facebook-specific
+    pages: [],
+    // Instagram-specific (via Facebook)
+    instagramAccounts: [],
+    // TikTok-specific
+    tiktokAccount: null,
+    // Loading states
+    resourcesLoading: false
+  });
 
   const effectiveRole = user?.effective_role || user?.role;
   const isSuperAdmin = effectiveRole === 'superadmin';
@@ -243,6 +268,28 @@ export default function AdminHub() {
       active = false;
     };
   }, [canAccessHub]);
+
+  // Handle OAuth callback URL parameters (success/error from Google OAuth)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get('oauth');
+    const provider = params.get('provider');
+    const errorMessage = params.get('message');
+    const clientIdFromCallback = params.get('clientId');
+
+    if (oauthStatus === 'success') {
+      toast.success(`${provider === 'google' ? 'Google' : 'OAuth'} account connected successfully!`);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+      // If we have a clientId, reload the connections for that client
+      if (clientIdFromCallback) {
+        loadOAuthConnections(clientIdFromCallback);
+      }
+    } else if (oauthStatus === 'error') {
+      toast.error(`OAuth connection failed: ${errorMessage || 'Unknown error'}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [toast]);
 
   useEffect(() => {
     if (!editing?.monday_board_id) {
@@ -794,6 +841,140 @@ export default function AdminHub() {
     } catch (err) {
       reportError(err, 'Failed to delete resource');
     }
+  };
+
+  // Fetch Resources handlers (supports all providers)
+  const handleOpenFetchResources = async (connectionId, provider) => {
+    const initialState = {
+      open: true,
+      connectionId,
+      provider,
+      loading: true,
+      accounts: [],
+      selectedAccount: null,
+      locations: [],
+      pages: [],
+      instagramAccounts: [],
+      tiktokAccount: null,
+      resourcesLoading: false
+    };
+    setFetchResourcesDialog(initialState);
+
+    try {
+      if (provider === 'google') {
+        const accounts = await fetchGoogleBusinessAccounts(connectionId);
+        setFetchResourcesDialog((prev) => ({ ...prev, loading: false, accounts }));
+      } else if (provider === 'facebook') {
+        const [pages, instagramAccounts] = await Promise.all([
+          fetchFacebookPages(connectionId),
+          fetchInstagramAccounts(connectionId)
+        ]);
+        setFetchResourcesDialog((prev) => ({ ...prev, loading: false, pages, instagramAccounts }));
+      } else if (provider === 'tiktok') {
+        const tiktokAccount = await fetchTikTokAccount(connectionId);
+        setFetchResourcesDialog((prev) => ({ ...prev, loading: false, tiktokAccount }));
+      } else {
+        setFetchResourcesDialog((prev) => ({ ...prev, loading: false }));
+      }
+    } catch (err) {
+      reportError(err, `Failed to fetch ${provider} resources`);
+      setFetchResourcesDialog((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleSelectGoogleAccount = async (accountName) => {
+    if (!fetchResourcesDialog.connectionId || !accountName) return;
+
+    setFetchResourcesDialog((prev) => ({
+      ...prev,
+      selectedAccount: accountName,
+      resourcesLoading: true,
+      locations: []
+    }));
+
+    try {
+      const locations = await fetchGoogleBusinessLocations(fetchResourcesDialog.connectionId, accountName);
+      setFetchResourcesDialog((prev) => ({
+        ...prev,
+        resourcesLoading: false,
+        locations
+      }));
+    } catch (err) {
+      reportError(err, 'Failed to fetch locations');
+      setFetchResourcesDialog((prev) => ({ ...prev, resourcesLoading: false }));
+    }
+  };
+
+  const handleAddResource = async (resource, resourceType) => {
+    if (!fetchResourcesDialog.connectionId) return;
+
+    try {
+      let payload;
+      let displayName;
+      
+      if (resourceType === 'google_location') {
+        const locationId = resource.name.replace('locations/', '');
+        payload = {
+          resource_type: 'google_location',
+          resource_id: locationId,
+          resource_name: resource.title,
+          resource_url: resource.websiteUri || '',
+          is_primary: false
+        };
+        displayName = resource.title;
+      } else if (resourceType === 'facebook_page') {
+        payload = {
+          resource_type: 'facebook_page',
+          resource_id: resource.id,
+          resource_name: resource.name,
+          resource_url: resource.link || '',
+          is_primary: false
+        };
+        displayName = resource.name;
+      } else if (resourceType === 'instagram_account') {
+        payload = {
+          resource_type: 'instagram_account',
+          resource_id: resource.id,
+          resource_name: resource.name || resource.username,
+          resource_username: resource.username,
+          resource_url: `https://instagram.com/${resource.username}`,
+          is_primary: false
+        };
+        displayName = resource.username;
+      } else if (resourceType === 'tiktok_account') {
+        payload = {
+          resource_type: 'tiktok_account',
+          resource_id: resource.id,
+          resource_name: resource.displayName || resource.username,
+          resource_username: resource.username,
+          resource_url: resource.profileUrl || '',
+          is_primary: false
+        };
+        displayName = resource.displayName || resource.username;
+      }
+      
+      await createOAuthResource(fetchResourcesDialog.connectionId, payload);
+      toast.success(`Added: ${displayName}`);
+      await loadOAuthResourcesForConnection(fetchResourcesDialog.connectionId);
+    } catch (err) {
+      reportError(err, 'Failed to add resource');
+    }
+  };
+
+  const handleCloseFetchResources = () => {
+    setFetchResourcesDialog({
+      open: false,
+      connectionId: null,
+      provider: null,
+      loading: false,
+      accounts: [],
+      selectedAccount: null,
+      locations: [],
+      pages: [],
+      instagramAccounts: [],
+      tiktokAccount: null,
+      resourcesLoading: false
+    });
   };
 
   const handleOpenReclassify = () => {
@@ -1591,9 +1772,20 @@ export default function AdminHub() {
                 <Divider />
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Typography variant="subtitle2">Resources (Pages / Locations)</Typography>
-                  <Button size="small" startIcon={<AddIcon />} onClick={() => handleAddOAuthResource(conn.id)}>
-                    Add Resource
-                  </Button>
+                  <Stack direction="row" spacing={1}>
+                    {conn.is_connected && ['google', 'facebook', 'tiktok'].includes(conn.provider) && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleOpenFetchResources(conn.id, conn.provider)}
+                      >
+                        Fetch {conn.provider === 'google' ? 'Locations' : conn.provider === 'facebook' ? 'Pages' : 'Account'}
+                      </Button>
+                    )}
+                    <Button size="small" startIcon={<AddIcon />} onClick={() => handleAddOAuthResource(conn.id)}>
+                      Add Resource
+                    </Button>
+                  </Stack>
                 </Box>
                 {resourcesLoading && <CircularProgress size={16} />}
                 {!resourcesLoading && resources.length === 0 && (
@@ -2730,64 +2922,114 @@ export default function AdminHub() {
                 </MenuItem>
               ))}
             </TextField>
-            <TextField
-              label="Account ID"
-              value={oauthConnectionDialog.connection?.provider_account_id || ''}
-              onChange={(e) =>
-                setOauthConnectionDialog((prev) => ({
-                  ...prev,
-                  connection: { ...prev.connection, provider_account_id: e.target.value }
-                }))
-              }
-              placeholder="e.g., 123456789 (from the platform)"
-              required
-            />
-            <TextField
-              label="Account Name"
-              value={oauthConnectionDialog.connection?.provider_account_name || ''}
-              onChange={(e) =>
-                setOauthConnectionDialog((prev) => ({
-                  ...prev,
-                  connection: { ...prev.connection, provider_account_name: e.target.value }
-                }))
-              }
-              placeholder="Display name for this connection"
-            />
-            <TextField
-              label="Access Token"
-              value={oauthConnectionDialog.connection?.access_token || ''}
-              onChange={(e) =>
-                setOauthConnectionDialog((prev) => ({
-                  ...prev,
-                  connection: { ...prev.connection, access_token: e.target.value }
-                }))
-              }
-              type="password"
-              placeholder="OAuth access token"
-            />
-            <TextField
-              label="Refresh Token"
-              value={oauthConnectionDialog.connection?.refresh_token || ''}
-              onChange={(e) =>
-                setOauthConnectionDialog((prev) => ({
-                  ...prev,
-                  connection: { ...prev.connection, refresh_token: e.target.value }
-                }))
-              }
-              type="password"
-              placeholder="OAuth refresh token (if available)"
-            />
+
+            {/* For new connections with OAuth support, show sign-in button */}
+            {!oauthConnectionDialog.connection?.id && ['google', 'facebook', 'instagram', 'tiktok'].includes(oauthConnectionDialog.connection?.provider) && (
+              <Box sx={{ py: 2, textAlign: 'center' }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  {oauthConnectionDialog.connection?.provider === 'google' && 'Connect your Google account to access Google Business Profile features including reviews.'}
+                  {oauthConnectionDialog.connection?.provider === 'facebook' && 'Connect your Facebook account to manage Facebook Pages and linked Instagram accounts.'}
+                  {oauthConnectionDialog.connection?.provider === 'instagram' && 'Connect via Facebook to manage your Instagram Business account (Instagram is linked through Facebook).'}
+                  {oauthConnectionDialog.connection?.provider === 'tiktok' && 'Connect your TikTok account to manage your TikTok for Business presence.'}
+                </Typography>
+                <Button
+                  variant="contained"
+                  size="large"
+                  onClick={() => {
+                    if (editing?.id) {
+                      const provider = oauthConnectionDialog.connection?.provider;
+                      // Instagram uses Facebook OAuth
+                      const oauthProvider = provider === 'instagram' ? 'facebook' : provider;
+                      window.location.href = getOAuthConnectUrl(oauthProvider, editing.id);
+                    }
+                  }}
+                  disabled={!editing?.id}
+                  sx={{
+                    bgcolor: OAUTH_PROVIDERS[oauthConnectionDialog.connection?.provider]?.color || '#666',
+                    '&:hover': { opacity: 0.9 },
+                    textTransform: 'none',
+                    px: 4,
+                    py: 1.5
+                  }}
+                >
+                  {oauthConnectionDialog.connection?.provider === 'google' && (
+                    <Box component="img" src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" sx={{ width: 20, height: 20, mr: 1.5 }} />
+                  )}
+                  Sign in with {oauthConnectionDialog.connection?.provider === 'instagram' ? 'Facebook (for Instagram)' : OAUTH_PROVIDERS[oauthConnectionDialog.connection?.provider]?.label}
+                </Button>
+                <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
+                  You&apos;ll be redirected to {oauthConnectionDialog.connection?.provider === 'instagram' ? 'Facebook' : OAUTH_PROVIDERS[oauthConnectionDialog.connection?.provider]?.label} to authorize access.
+                </Typography>
+              </Box>
+            )}
+
+            {/* For editing existing connections, show manual entry (read-only for key fields) */}
+            {oauthConnectionDialog.connection?.id && (
+              <>
+                <TextField
+                  label="Account ID"
+                  value={oauthConnectionDialog.connection?.provider_account_id || ''}
+                  onChange={(e) =>
+                    setOauthConnectionDialog((prev) => ({
+                      ...prev,
+                      connection: { ...prev.connection, provider_account_id: e.target.value }
+                    }))
+                  }
+                  placeholder="e.g., 123456789 (from the platform)"
+                  required
+                  disabled={!!oauthConnectionDialog.connection?.id}
+                />
+                <TextField
+                  label="Account Name"
+                  value={oauthConnectionDialog.connection?.provider_account_name || ''}
+                  onChange={(e) =>
+                    setOauthConnectionDialog((prev) => ({
+                      ...prev,
+                      connection: { ...prev.connection, provider_account_name: e.target.value }
+                    }))
+                  }
+                  placeholder="Display name for this connection"
+                />
+                <TextField
+                  label="Access Token"
+                  value={oauthConnectionDialog.connection?.access_token || ''}
+                  onChange={(e) =>
+                    setOauthConnectionDialog((prev) => ({
+                      ...prev,
+                      connection: { ...prev.connection, access_token: e.target.value }
+                    }))
+                  }
+                  type="password"
+                  placeholder="OAuth access token"
+                />
+                <TextField
+                  label="Refresh Token"
+                  value={oauthConnectionDialog.connection?.refresh_token || ''}
+                  onChange={(e) =>
+                    setOauthConnectionDialog((prev) => ({
+                      ...prev,
+                      connection: { ...prev.connection, refresh_token: e.target.value }
+                    }))
+                  }
+                  type="password"
+                  placeholder="OAuth refresh token (if available)"
+                />
+              </>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOauthConnectionDialog({ open: false, connection: null })}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleSaveOAuthConnection}
-            disabled={savingOauth || !oauthConnectionDialog.connection?.provider_account_id}
-          >
-            {savingOauth ? 'Saving…' : 'Save'}
-          </Button>
+          {/* Only show Save button when editing existing connections */}
+          {oauthConnectionDialog.connection?.id && (
+            <Button
+              variant="contained"
+              onClick={handleSaveOAuthConnection}
+              disabled={savingOauth || !oauthConnectionDialog.connection?.provider_account_id}
+            >
+              {savingOauth ? 'Saving…' : 'Save'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
@@ -2896,6 +3138,181 @@ export default function AdminHub() {
           >
             {savingOauth ? 'Saving…' : 'Save'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Fetch Resources Dialog (All Providers) */}
+      <Dialog open={fetchResourcesDialog.open} onClose={handleCloseFetchResources} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Fetch {fetchResourcesDialog.provider === 'google' ? 'Google Business Locations' : 
+                 fetchResourcesDialog.provider === 'facebook' ? 'Facebook Pages & Instagram' : 
+                 fetchResourcesDialog.provider === 'tiktok' ? 'TikTok Account' : 'Resources'}
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {fetchResourcesDialog.loading && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                <CircularProgress />
+              </Box>
+            )}
+
+            {/* Google Content */}
+            {!fetchResourcesDialog.loading && fetchResourcesDialog.provider === 'google' && (
+              <>
+                {fetchResourcesDialog.accounts.length === 0 && (
+                  <Alert severity="warning">
+                    No Google Business accounts found. Make sure your Google account has access to Google Business Profile.
+                  </Alert>
+                )}
+
+                {fetchResourcesDialog.accounts.length > 0 && (
+                  <>
+                    <TextField
+                      label="Select Business Account"
+                      select
+                      value={fetchResourcesDialog.selectedAccount || ''}
+                      onChange={(e) => handleSelectGoogleAccount(e.target.value)}
+                      fullWidth
+                    >
+                      {fetchResourcesDialog.accounts.map((account) => (
+                        <MenuItem key={account.name} value={account.name}>
+                          {account.accountName} ({account.type})
+                        </MenuItem>
+                      ))}
+                    </TextField>
+
+                    {fetchResourcesDialog.resourcesLoading && (
+                      <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                        <CircularProgress size={24} />
+                      </Box>
+                    )}
+
+                    {!fetchResourcesDialog.resourcesLoading && fetchResourcesDialog.selectedAccount && fetchResourcesDialog.locations.length === 0 && (
+                      <Typography variant="body2" color="text.secondary">
+                        No locations found for this account.
+                      </Typography>
+                    )}
+
+                    {fetchResourcesDialog.locations.length > 0 && (
+                      <Stack spacing={1}>
+                        <Typography variant="subtitle2">Available Locations</Typography>
+                        {fetchResourcesDialog.locations.map((location) => (
+                          <Box
+                            key={location.name}
+                            sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                          >
+                            <Box>
+                              <Typography variant="body2" fontWeight={500}>{location.title}</Typography>
+                              {location.address && (
+                                <Typography variant="caption" color="text.secondary">
+                                  {[location.address.locality, location.address.administrativeArea].filter(Boolean).join(', ')}
+                                </Typography>
+                              )}
+                            </Box>
+                            <Button size="small" variant="outlined" onClick={() => handleAddResource(location, 'google_location')}>Add</Button>
+                          </Box>
+                        ))}
+                      </Stack>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* Facebook Content */}
+            {!fetchResourcesDialog.loading && fetchResourcesDialog.provider === 'facebook' && (
+              <>
+                {fetchResourcesDialog.pages.length === 0 && fetchResourcesDialog.instagramAccounts.length === 0 && (
+                  <Alert severity="warning">
+                    No Facebook Pages or Instagram accounts found. Make sure you have admin access to at least one Facebook Page.
+                  </Alert>
+                )}
+
+                {fetchResourcesDialog.pages.length > 0 && (
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle2">Facebook Pages</Typography>
+                    {fetchResourcesDialog.pages.map((page) => (
+                      <Box
+                        key={page.id}
+                        sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {page.picture && <Box component="img" src={page.picture} alt="" sx={{ width: 32, height: 32, borderRadius: 1 }} />}
+                          <Box>
+                            <Typography variant="body2" fontWeight={500}>{page.name}</Typography>
+                            <Typography variant="caption" color="text.secondary">{page.category}</Typography>
+                          </Box>
+                        </Box>
+                        <Button size="small" variant="outlined" onClick={() => handleAddResource(page, 'facebook_page')}>Add</Button>
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+
+                {fetchResourcesDialog.instagramAccounts.length > 0 && (
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle2">Instagram Accounts</Typography>
+                    {fetchResourcesDialog.instagramAccounts.map((account) => (
+                      <Box
+                        key={account.id}
+                        sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {account.picture && <Box component="img" src={account.picture} alt="" sx={{ width: 32, height: 32, borderRadius: '50%' }} />}
+                          <Box>
+                            <Typography variant="body2" fontWeight={500}>@{account.username}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {account.followersCount?.toLocaleString()} followers • Linked to {account.linkedPageName}
+                            </Typography>
+                          </Box>
+                        </Box>
+                        <Button size="small" variant="outlined" onClick={() => handleAddResource(account, 'instagram_account')}>Add</Button>
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+              </>
+            )}
+
+            {/* TikTok Content */}
+            {!fetchResourcesDialog.loading && fetchResourcesDialog.provider === 'tiktok' && (
+              <>
+                {!fetchResourcesDialog.tiktokAccount && (
+                  <Alert severity="warning">
+                    Unable to fetch TikTok account information. Please try reconnecting.
+                  </Alert>
+                )}
+
+                {fetchResourcesDialog.tiktokAccount && (
+                  <Box
+                    sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                      {fetchResourcesDialog.tiktokAccount.picture && (
+                        <Box component="img" src={fetchResourcesDialog.tiktokAccount.picture} alt="" sx={{ width: 48, height: 48, borderRadius: '50%' }} />
+                      )}
+                      <Box>
+                        <Typography variant="body1" fontWeight={500}>
+                          {fetchResourcesDialog.tiktokAccount.displayName}
+                          {fetchResourcesDialog.tiktokAccount.isVerified && ' ✓'}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          @{fetchResourcesDialog.tiktokAccount.username}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {fetchResourcesDialog.tiktokAccount.followerCount?.toLocaleString()} followers • {fetchResourcesDialog.tiktokAccount.videoCount?.toLocaleString()} videos
+                        </Typography>
+                      </Box>
+                    </Box>
+                    <Button variant="outlined" onClick={() => handleAddResource(fetchResourcesDialog.tiktokAccount, 'tiktok_account')}>Add</Button>
+                  </Box>
+                )}
+              </>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseFetchResources}>Close</Button>
         </DialogActions>
       </Dialog>
 

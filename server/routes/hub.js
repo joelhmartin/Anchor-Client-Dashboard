@@ -55,6 +55,40 @@ import {
   markAllNotificationsRead,
   notifyAdminsByEmail
 } from '../services/notifications.js';
+import {
+  createOauthState,
+  createCodeVerifier,
+  createCodeChallenge,
+  // Google
+  getGoogleBusinessOAuthConfig,
+  buildGoogleAuthUrl,
+  exchangeCodeForTokens,
+  fetchGoogleProfile,
+  fetchGoogleBusinessAccounts,
+  fetchGoogleBusinessLocations,
+  refreshGoogleAccessToken,
+  // Facebook/Instagram
+  getFacebookOAuthConfig,
+  buildFacebookAuthUrl,
+  exchangeFacebookCodeForTokens,
+  fetchFacebookProfile,
+  fetchFacebookPages,
+  fetchInstagramAccounts,
+  refreshFacebookAccessToken,
+  // TikTok
+  getTikTokOAuthConfig,
+  buildTikTokAuthUrl,
+  exchangeTikTokCodeForTokens,
+  fetchTikTokProfile,
+  fetchTikTokAccountInfo,
+  refreshTikTokAccessToken,
+  // Shared
+  setOAuthCookies,
+  getOAuthCookies,
+  clearOAuthCookies,
+  saveOAuthConnection,
+  refreshAccessToken
+} from '../services/oauthIntegration.js';
 
 const router = express.Router();
 
@@ -5644,6 +5678,535 @@ router.delete('/oauth-connections/:id', isAdminOrEditor, async (req, res) => {
   } catch (err) {
     console.error('[oauth-connections:delete]', err);
     res.status(500).json({ message: 'Failed to delete OAuth connection' });
+  }
+});
+
+// ============================================================================
+// OAuth Connect Flow (Google Business Profile)
+// ============================================================================
+
+/**
+ * GET /hub/oauth/google/connect
+ * Initiate Google Business Profile OAuth flow for a client
+ * Query params: clientId (required)
+ */
+router.get('/oauth/google/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    
+    if (!clientId) {
+      return res.status(400).json({ message: 'clientId is required' });
+    }
+
+    // Verify client exists
+    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    if (!clientCheck.rows.length) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    // Build redirect URI
+    const baseUrl = resolveBaseUrl(req);
+    const redirectUri = `${baseUrl}/api/hub/oauth/google/callback`;
+    
+    const config = getGoogleBusinessOAuthConfig(redirectUri);
+    
+    if (!config.clientId || !config.clientSecret) {
+      console.error('[oauth:google:connect] Missing GOOGLE_OAUTH_CLIENT_ID or GOOGLE_OAUTH_CLIENT_SECRET');
+      return res.status(500).json({ message: 'Google OAuth not configured. Check server environment variables.' });
+    }
+
+    // Create OAuth state and PKCE verifier
+    const state = createOauthState();
+    const codeVerifier = createCodeVerifier();
+    const codeChallenge = createCodeChallenge(codeVerifier);
+
+    // Store state in cookies
+    setOAuthCookies(res, 'google', {
+      state,
+      verifier: codeVerifier,
+      clientId
+    });
+
+    // Build and redirect to Google auth URL
+    const authUrl = buildGoogleAuthUrl(config, { state, codeChallenge });
+    
+    console.log(`[oauth:google:connect] Redirecting to Google OAuth for client ${clientId}`);
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth:google:connect]', err);
+    res.status(500).json({ message: 'Failed to start OAuth flow' });
+  }
+});
+
+/**
+ * GET /hub/oauth/google/callback
+ * Handle Google OAuth callback, store tokens in oauth_connections
+ */
+router.get('/oauth/google/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error } = req.query;
+
+    // Handle OAuth errors (user cancelled, etc.)
+    if (error) {
+      console.log(`[oauth:google:callback] OAuth error: ${error}`);
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:google:callback] Missing code or state');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    // Get stored cookies
+    const cookies = getOAuthCookies(req, 'google');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:google:callback] State mismatch');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.verifier || !cookies.clientId) {
+      console.log('[oauth:google:callback] Missing verifier or clientId in cookies');
+      clearOAuthCookies(res, 'google');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'google');
+
+    // Exchange code for tokens
+    const redirectUri = `${baseUrl}/api/hub/oauth/google/callback`;
+    const config = getGoogleBusinessOAuthConfig(redirectUri);
+    
+    console.log('[oauth:google:callback] Exchanging code for tokens...');
+    const tokens = await exchangeCodeForTokens(config, code, cookies.verifier);
+    
+    // Fetch Google profile to get account identifier
+    console.log('[oauth:google:callback] Fetching Google profile...');
+    const profile = await fetchGoogleProfile(tokens.access_token);
+    
+    console.log(`[oauth:google:callback] Profile: ${profile.email}`);
+    
+    // Save/update OAuth connection
+    const connection = await saveOAuthConnection(clientId, 'google', tokens, profile);
+    console.log(`[oauth:google:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    // Redirect back to admin hub with success message
+    res.redirect(`${adminHubUrl}?oauth=success&provider=google&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:google:callback]', err);
+    clearOAuthCookies(res, 'google');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/google-accounts
+ * Fetch Google Business accounts for an OAuth connection
+ */
+router.get('/oauth-connections/:id/google-accounts', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    // Get connection with token
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'google']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Google connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    // Refresh token if expired
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:google:accounts] Token expired, refreshing...`);
+      accessToken = await refreshGoogleAccessToken(connectionId);
+    }
+
+    // Fetch accounts
+    const accounts = await fetchGoogleBusinessAccounts(accessToken);
+    res.json({ accounts });
+  } catch (err) {
+    console.error('[oauth:google:accounts]', err);
+    res.status(500).json({ message: 'Failed to fetch Google Business accounts' });
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/google-locations
+ * Fetch Google Business locations for an account
+ * Query params: accountName (required, format: accounts/123456789)
+ */
+router.get('/oauth-connections/:id/google-locations', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    const { accountName } = req.query;
+
+    if (!accountName) {
+      return res.status(400).json({ message: 'accountName is required' });
+    }
+    
+    // Get connection with token
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'google']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Google connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    // Refresh token if expired
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:google:locations] Token expired, refreshing...`);
+      accessToken = await refreshGoogleAccessToken(connectionId);
+    }
+
+    // Fetch locations
+    const locations = await fetchGoogleBusinessLocations(accessToken, accountName);
+    res.json({ locations });
+  } catch (err) {
+    console.error('[oauth:google:locations]', err);
+    res.status(500).json({ message: 'Failed to fetch Google Business locations' });
+  }
+});
+
+// ============================================================================
+// Facebook/Instagram OAuth Connect Flow
+// ============================================================================
+
+/**
+ * GET /hub/oauth/facebook/connect
+ * Initiate Facebook OAuth flow for a client (also covers Instagram)
+ * Query params: clientId (required)
+ */
+router.get('/oauth/facebook/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    
+    if (!clientId) {
+      return res.status(400).json({ message: 'clientId is required' });
+    }
+
+    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    if (!clientCheck.rows.length) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const baseUrl = resolveBaseUrl(req);
+    const redirectUri = `${baseUrl}/api/hub/oauth/facebook/callback`;
+    
+    const config = getFacebookOAuthConfig(redirectUri);
+    
+    if (!config.clientId || !config.clientSecret) {
+      console.error('[oauth:facebook:connect] Missing FACEBOOK_APP_ID or FACEBOOK_APP_SECRET');
+      return res.status(500).json({ message: 'Facebook OAuth not configured. Check server environment variables.' });
+    }
+
+    const state = createOauthState();
+
+    // Facebook doesn't use PKCE, but we still need to track state
+    setOAuthCookies(res, 'facebook', {
+      state,
+      verifier: '', // Not used for Facebook
+      clientId
+    });
+
+    const authUrl = buildFacebookAuthUrl(config, { state });
+    
+    console.log(`[oauth:facebook:connect] Redirecting to Facebook OAuth for client ${clientId}`);
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth:facebook:connect]', err);
+    res.status(500).json({ message: 'Failed to start OAuth flow' });
+  }
+});
+
+/**
+ * GET /hub/oauth/facebook/callback
+ * Handle Facebook OAuth callback
+ */
+router.get('/oauth/facebook/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:facebook:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:facebook:callback] Missing code or state');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'facebook');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:facebook:callback] State mismatch');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.clientId) {
+      console.log('[oauth:facebook:callback] Missing clientId in cookies');
+      clearOAuthCookies(res, 'facebook');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'facebook');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/facebook/callback`;
+    const config = getFacebookOAuthConfig(redirectUri);
+    
+    console.log('[oauth:facebook:callback] Exchanging code for tokens...');
+    const tokens = await exchangeFacebookCodeForTokens(config, code);
+    
+    console.log('[oauth:facebook:callback] Fetching Facebook profile...');
+    const profile = await fetchFacebookProfile(tokens.access_token);
+    
+    console.log(`[oauth:facebook:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'facebook', tokens, profile);
+    console.log(`[oauth:facebook:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=facebook&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:facebook:callback]', err);
+    clearOAuthCookies(res, 'facebook');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/facebook-pages
+ * Fetch Facebook Pages for an OAuth connection
+ */
+router.get('/oauth-connections/:id/facebook-pages', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'facebook']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Facebook connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:facebook:pages] Token expired, refreshing...`);
+      accessToken = await refreshFacebookAccessToken(connectionId);
+    }
+
+    const pages = await fetchFacebookPages(accessToken);
+    res.json({ pages });
+  } catch (err) {
+    console.error('[oauth:facebook:pages]', err);
+    res.status(500).json({ message: 'Failed to fetch Facebook Pages' });
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/instagram-accounts
+ * Fetch Instagram Business Accounts linked to Facebook Pages
+ */
+router.get('/oauth-connections/:id/instagram-accounts', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'facebook']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Facebook connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:instagram:accounts] Token expired, refreshing...`);
+      accessToken = await refreshFacebookAccessToken(connectionId);
+    }
+
+    const accounts = await fetchInstagramAccounts(accessToken);
+    res.json({ accounts });
+  } catch (err) {
+    console.error('[oauth:instagram:accounts]', err);
+    res.status(500).json({ message: 'Failed to fetch Instagram accounts' });
+  }
+});
+
+// ============================================================================
+// TikTok OAuth Connect Flow
+// ============================================================================
+
+/**
+ * GET /hub/oauth/tiktok/connect
+ * Initiate TikTok OAuth flow for a client
+ * Query params: clientId (required)
+ */
+router.get('/oauth/tiktok/connect', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    
+    if (!clientId) {
+      return res.status(400).json({ message: 'clientId is required' });
+    }
+
+    const clientCheck = await query('SELECT id FROM clients WHERE id = $1', [clientId]);
+    if (!clientCheck.rows.length) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const baseUrl = resolveBaseUrl(req);
+    const redirectUri = `${baseUrl}/api/hub/oauth/tiktok/callback`;
+    
+    const config = getTikTokOAuthConfig(redirectUri);
+    
+    if (!config.clientId || !config.clientSecret) {
+      console.error('[oauth:tiktok:connect] Missing TIKTOK_CLIENT_KEY or TIKTOK_CLIENT_SECRET');
+      return res.status(500).json({ message: 'TikTok OAuth not configured. Check server environment variables.' });
+    }
+
+    const state = createOauthState();
+    const codeVerifier = createCodeVerifier();
+    const codeChallenge = createCodeChallenge(codeVerifier);
+
+    setOAuthCookies(res, 'tiktok', {
+      state,
+      verifier: codeVerifier,
+      clientId
+    });
+
+    const authUrl = buildTikTokAuthUrl(config, { state, codeChallenge });
+    
+    console.log(`[oauth:tiktok:connect] Redirecting to TikTok OAuth for client ${clientId}`);
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth:tiktok:connect]', err);
+    res.status(500).json({ message: 'Failed to start OAuth flow' });
+  }
+});
+
+/**
+ * GET /hub/oauth/tiktok/callback
+ * Handle TikTok OAuth callback
+ */
+router.get('/oauth/tiktok/callback', async (req, res) => {
+  const baseUrl = resolveBaseUrl(req);
+  const adminHubUrl = `${baseUrl}/admin/hub`;
+  
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      console.log(`[oauth:tiktok:callback] OAuth error: ${error} - ${error_description}`);
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(error_description || error)}`);
+    }
+
+    if (!code || !state) {
+      console.log('[oauth:tiktok:callback] Missing code or state');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=missing_code`);
+    }
+
+    const cookies = getOAuthCookies(req, 'tiktok');
+    
+    if (!cookies.state || cookies.state !== state) {
+      console.log('[oauth:tiktok:callback] State mismatch');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=state_mismatch`);
+    }
+
+    if (!cookies.verifier || !cookies.clientId) {
+      console.log('[oauth:tiktok:callback] Missing verifier or clientId in cookies');
+      clearOAuthCookies(res, 'tiktok');
+      return res.redirect(`${adminHubUrl}?oauth=error&message=session_expired`);
+    }
+
+    const clientId = cookies.clientId;
+    clearOAuthCookies(res, 'tiktok');
+
+    const redirectUri = `${baseUrl}/api/hub/oauth/tiktok/callback`;
+    const config = getTikTokOAuthConfig(redirectUri);
+    
+    console.log('[oauth:tiktok:callback] Exchanging code for tokens...');
+    const tokens = await exchangeTikTokCodeForTokens(config, code, cookies.verifier);
+    
+    console.log('[oauth:tiktok:callback] Fetching TikTok profile...');
+    const profile = await fetchTikTokProfile(tokens.access_token);
+    
+    console.log(`[oauth:tiktok:callback] Profile: ${profile.name} (${profile.id})`);
+    
+    const connection = await saveOAuthConnection(clientId, 'tiktok', tokens, profile);
+    console.log(`[oauth:tiktok:callback] Saved connection ${connection.id} for client ${clientId}`);
+
+    res.redirect(`${adminHubUrl}?oauth=success&provider=tiktok&clientId=${clientId}`);
+  } catch (err) {
+    console.error('[oauth:tiktok:callback]', err);
+    clearOAuthCookies(res, 'tiktok');
+    res.redirect(`${adminHubUrl}?oauth=error&message=${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/tiktok-account
+ * Fetch TikTok account info for an OAuth connection
+ */
+router.get('/oauth-connections/:id/tiktok-account', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    const { rows } = await query(
+      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'tiktok']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'TikTok connection not found' });
+    }
+
+    let accessToken = rows[0].access_token;
+    const expiresAt = rows[0].expires_at;
+
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      console.log(`[oauth:tiktok:account] Token expired, refreshing...`);
+      accessToken = await refreshTikTokAccessToken(connectionId);
+    }
+
+    const account = await fetchTikTokAccountInfo(accessToken);
+    res.json({ account });
+  } catch (err) {
+    console.error('[oauth:tiktok:account]', err);
+    res.status(500).json({ message: 'Failed to fetch TikTok account info' });
   }
 });
 

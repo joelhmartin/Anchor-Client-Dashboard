@@ -49,6 +49,99 @@ export function deleteOAuthConnection(connectionId) {
 }
 
 // ============================================================================
+// OAuth Connect Flow - Google
+// ============================================================================
+
+/**
+ * Get the URL to initiate Google OAuth for a client
+ * This redirects to Google, so it should be used with window.location.href
+ */
+export function getGoogleOAuthConnectUrl(clientId) {
+  return `/api/hub/oauth/google/connect?clientId=${clientId}`;
+}
+
+/**
+ * Fetch Google Business accounts for an OAuth connection
+ */
+export function fetchGoogleBusinessAccounts(connectionId) {
+  return client.get(`/hub/oauth-connections/${connectionId}/google-accounts`).then((res) => res.data.accounts || []);
+}
+
+/**
+ * Fetch Google Business locations for a specific account
+ */
+export function fetchGoogleBusinessLocations(connectionId, accountName) {
+  return client
+    .get(`/hub/oauth-connections/${connectionId}/google-locations`, { params: { accountName } })
+    .then((res) => res.data.locations || []);
+}
+
+// ============================================================================
+// OAuth Connect Flow - Facebook/Instagram
+// ============================================================================
+
+/**
+ * Get the URL to initiate Facebook OAuth for a client
+ * This covers both Facebook Pages and Instagram (via Facebook Graph API)
+ */
+export function getFacebookOAuthConnectUrl(clientId) {
+  return `/api/hub/oauth/facebook/connect?clientId=${clientId}`;
+}
+
+/**
+ * Fetch Facebook Pages for an OAuth connection
+ */
+export function fetchFacebookPages(connectionId) {
+  return client.get(`/hub/oauth-connections/${connectionId}/facebook-pages`).then((res) => res.data.pages || []);
+}
+
+/**
+ * Fetch Instagram Business accounts linked to Facebook Pages
+ */
+export function fetchInstagramAccounts(connectionId) {
+  return client.get(`/hub/oauth-connections/${connectionId}/instagram-accounts`).then((res) => res.data.accounts || []);
+}
+
+// ============================================================================
+// OAuth Connect Flow - TikTok
+// ============================================================================
+
+/**
+ * Get the URL to initiate TikTok OAuth for a client
+ */
+export function getTikTokOAuthConnectUrl(clientId) {
+  return `/api/hub/oauth/tiktok/connect?clientId=${clientId}`;
+}
+
+/**
+ * Fetch TikTok account info for an OAuth connection
+ */
+export function fetchTikTokAccount(connectionId) {
+  return client.get(`/hub/oauth-connections/${connectionId}/tiktok-account`).then((res) => res.data.account || null);
+}
+
+// ============================================================================
+// Generic OAuth Connect Helper
+// ============================================================================
+
+/**
+ * Get the OAuth connect URL for any supported provider
+ */
+export function getOAuthConnectUrl(provider, clientId) {
+  switch (provider) {
+    case 'google':
+      return getGoogleOAuthConnectUrl(clientId);
+    case 'facebook':
+    case 'instagram':
+      return getFacebookOAuthConnectUrl(clientId);
+    case 'tiktok':
+      return getTikTokOAuthConnectUrl(clientId);
+    default:
+      throw new Error(`Unsupported OAuth provider: ${provider}`);
+  }
+}
+
+// ============================================================================
 // OAuth Resources (Pages/Locations under a connection)
 // ============================================================================
 

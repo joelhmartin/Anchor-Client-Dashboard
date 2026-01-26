@@ -164,30 +164,25 @@ export async function getOAuthConnectionStatus(clientId) {
 
 /**
  * Refresh an expired Google access token
+ * Uses environment variables for OAuth credentials (same as oauthIntegration service)
  */
 async function refreshGoogleToken(connectionId, refreshToken) {
   if (!refreshToken) {
     throw new Error('No refresh token available - reconnection required');
   }
 
-  // Get OAuth provider credentials
-  const { rows: providers } = await query(`
-    SELECT client_id, client_secret 
-    FROM oauth_providers 
-    WHERE provider = 'google' AND is_active = TRUE
-    LIMIT 1
-  `);
+  // Use environment variables for OAuth credentials
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
 
-  if (!providers.length) {
-    throw new Error('Google OAuth provider not configured');
+  if (!clientId || !clientSecret) {
+    throw new Error('Google OAuth not configured - check GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET environment variables');
   }
-
-  const { client_id, client_secret } = providers[0];
 
   try {
     const response = await axios.post('https://oauth2.googleapis.com/token', {
-      client_id,
-      client_secret,
+      client_id: clientId,
+      client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
     });
