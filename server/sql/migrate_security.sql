@@ -239,6 +239,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL D
 ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'local';
 
+-- Backfill existing users: assume pre-existing accounts are verified
+-- (they were created before email verification was required)
+UPDATE users SET email_verified_at = COALESCE(created_at, NOW())
+WHERE email_verified_at IS NULL;
+
 -- Make password_hash nullable for OAuth-only users
 ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 
