@@ -2247,7 +2247,7 @@ export default function AdminHub() {
                           disabled={!isAdmin}
                         />
                       </TableCell>
-                  <TableCell>Display Name</TableCell>
+                  <TableCell>Business Name</TableCell>
                   <TableCell>Email</TableCell>
                   <TableCell>Role</TableCell>
                       <TableCell>Onboarding</TableCell>
@@ -2265,7 +2265,7 @@ export default function AdminHub() {
                             disabled={!isAdmin}
                           />
                         </TableCell>
-                      <TableCell>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
+                      <TableCell>{c.business_name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}</TableCell>
                       <TableCell>{c.email}</TableCell>
                         <TableCell sx={{ textTransform: 'capitalize' }}>{c.role || 'client'}</TableCell>
                       <TableCell>

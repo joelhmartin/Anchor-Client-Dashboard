@@ -1892,9 +1892,11 @@ router.get('/email-logs/:id', isAdminOrEditor, async (req, res) => {
 router.get('/clients', isAdminOrEditor, async (_req, res) => {
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_name, u.email, u.role, cp.*,
-            COALESCE(cp.ai_prompt, $1) as ai_prompt
+            COALESCE(cp.ai_prompt, $1) as ai_prompt,
+            ba.business_name
      FROM users u
      LEFT JOIN client_profiles cp ON cp.user_id = u.id
+     LEFT JOIN brand_assets ba ON ba.user_id = u.id
      WHERE u.role IN ('client', 'editor', 'admin', 'team')
      ORDER BY u.created_at DESC`,
     [DEFAULT_AI_PROMPT]
