@@ -102,7 +102,8 @@ import {
   fetchFacebookPages,
   fetchInstagramAccounts,
   fetchTikTokAccount,
-  fetchWordPressSites
+  fetchWordPressSites,
+  connectWordPress
 } from 'api/oauth';
 import { fetchBoards, fetchGroups, fetchPeople } from 'api/monday';
 import { fetchTaskWorkspaces } from 'api/tasks';
@@ -783,6 +784,16 @@ export default function AdminHub() {
       if (conn.id) {
         await updateOAuthConnection(conn.id, conn);
         toast.success('Connection updated');
+      } else if (conn.provider === 'wordpress') {
+        // WordPress uses Application Passwords instead of OAuth
+        const { wordpress_site_url, wordpress_username, wordpress_app_password } = conn;
+        if (!wordpress_site_url || !wordpress_username || !wordpress_app_password) {
+          toast.error('Please fill in all WordPress fields');
+          setSavingOauth(false);
+          return;
+        }
+        const result = await connectWordPress(editing.id, wordpress_site_url, wordpress_username, wordpress_app_password);
+        toast.success(result.message || 'WordPress connected successfully');
       } else {
         await createOAuthConnection(editing.id, conn);
         toast.success('Connection created');
@@ -1354,7 +1365,13 @@ export default function AdminHub() {
       setSuccess('Onboarding link copied to clipboard');
       toast.success('Onboarding link copied!');
     } catch (err) {
-      setError(err.message || 'Unable to generate onboarding link');
+      // Check if error is "no active link" - suggest sending email first
+      const errorData = err?.response?.data;
+      if (errorData?.noActiveLink) {
+        toast.error('No active link. Send an onboarding email first to generate a link.');
+      } else {
+        toast.error(errorData?.message || err.message || 'Unable to get onboarding link');
+      }
     } finally {
       setCopyingLinkForId('');
     }
@@ -3296,15 +3313,14 @@ export default function AdminHub() {
               ))}
             </TextField>
 
-            {/* For new connections with OAuth support, show sign-in button */}
-            {!oauthConnectionDialog.connection?.id && ['google', 'facebook', 'instagram', 'tiktok', 'wordpress'].includes(oauthConnectionDialog.connection?.provider) && (
+            {/* For new connections with OAuth support (Google, Facebook, Instagram, TikTok), show sign-in button */}
+            {!oauthConnectionDialog.connection?.id && ['google', 'facebook', 'instagram', 'tiktok'].includes(oauthConnectionDialog.connection?.provider) && (
               <Box sx={{ py: 2, textAlign: 'center' }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   {oauthConnectionDialog.connection?.provider === 'google' && 'Connect your Google account to access Google Business Profile features including reviews.'}
                   {oauthConnectionDialog.connection?.provider === 'facebook' && 'Connect your Facebook account to manage Facebook Pages and linked Instagram accounts.'}
                   {oauthConnectionDialog.connection?.provider === 'instagram' && 'Connect via Facebook to manage your Instagram Business account (Instagram is linked through Facebook).'}
                   {oauthConnectionDialog.connection?.provider === 'tiktok' && 'Connect your TikTok account to manage your TikTok for Business presence.'}
-                  {oauthConnectionDialog.connection?.provider === 'wordpress' && 'Connect your WordPress.com account to manage and publish blog posts to WordPress sites.'}
                 </Typography>
                 <Button
                   variant="contained"
@@ -3344,6 +3360,60 @@ export default function AdminHub() {
                 <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
                   You&apos;ll be redirected to {oauthConnectionDialog.connection?.provider === 'instagram' ? 'Facebook' : OAUTH_PROVIDERS[oauthConnectionDialog.connection?.provider]?.label} to authorize access.
                 </Typography>
+              </Box>
+            )}
+
+            {/* WordPress uses Application Passwords instead of OAuth */}
+            {!oauthConnectionDialog.connection?.id && oauthConnectionDialog.connection?.provider === 'wordpress' && (
+              <Box sx={{ py: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Connect your self-hosted WordPress site using Application Passwords. 
+                  <Box component="span" sx={{ display: 'block', mt: 1, fontSize: '0.75rem' }}>
+                    To create an Application Password: Go to WordPress Admin → Users → Profile → Application Passwords
+                  </Box>
+                </Typography>
+                <Stack spacing={2}>
+                  <TextField
+                    label="WordPress Site URL"
+                    value={oauthConnectionDialog.connection?.wordpress_site_url || ''}
+                    onChange={(e) =>
+                      setOauthConnectionDialog((prev) => ({
+                        ...prev,
+                        connection: { ...prev.connection, wordpress_site_url: e.target.value }
+                      }))
+                    }
+                    placeholder="https://example.com"
+                    required
+                    helperText="The full URL of your WordPress site"
+                  />
+                  <TextField
+                    label="WordPress Username"
+                    value={oauthConnectionDialog.connection?.wordpress_username || ''}
+                    onChange={(e) =>
+                      setOauthConnectionDialog((prev) => ({
+                        ...prev,
+                        connection: { ...prev.connection, wordpress_username: e.target.value }
+                      }))
+                    }
+                    placeholder="admin"
+                    required
+                    helperText="Your WordPress admin username"
+                  />
+                  <TextField
+                    label="Application Password"
+                    value={oauthConnectionDialog.connection?.wordpress_app_password || ''}
+                    onChange={(e) =>
+                      setOauthConnectionDialog((prev) => ({
+                        ...prev,
+                        connection: { ...prev.connection, wordpress_app_password: e.target.value }
+                      }))
+                    }
+                    type="password"
+                    placeholder="xxxx xxxx xxxx xxxx xxxx xxxx"
+                    required
+                    helperText="The application password from WordPress (spaces are OK)"
+                  />
+                </Stack>
               </Box>
             )}
 
@@ -3404,14 +3474,21 @@ export default function AdminHub() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOauthConnectionDialog({ open: false, connection: null })}>Cancel</Button>
-          {/* Only show Save button when editing existing connections */}
-          {oauthConnectionDialog.connection?.id && (
+          {/* Show Save button when editing existing connections OR when adding WordPress (which uses form instead of OAuth) */}
+          {(oauthConnectionDialog.connection?.id || oauthConnectionDialog.connection?.provider === 'wordpress') && (
             <Button
               variant="contained"
               onClick={handleSaveOAuthConnection}
-              disabled={savingOauth || !oauthConnectionDialog.connection?.provider_account_id}
+              disabled={
+                savingOauth || 
+                (oauthConnectionDialog.connection?.id && !oauthConnectionDialog.connection?.provider_account_id) ||
+                (oauthConnectionDialog.connection?.provider === 'wordpress' && !oauthConnectionDialog.connection?.id && 
+                  (!oauthConnectionDialog.connection?.wordpress_site_url || 
+                   !oauthConnectionDialog.connection?.wordpress_username || 
+                   !oauthConnectionDialog.connection?.wordpress_app_password))
+              }
             >
-              {savingOauth ? 'Saving…' : 'Save'}
+              {savingOauth ? 'Connecting…' : oauthConnectionDialog.connection?.id ? 'Save' : 'Connect WordPress'}
             </Button>
           )}
         </DialogActions>

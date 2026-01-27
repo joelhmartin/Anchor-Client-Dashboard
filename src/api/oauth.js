@@ -127,11 +127,35 @@ export function fetchTikTokAccount(connectionId) {
 // ============================================================================
 
 /**
- * Initiate WordPress OAuth for a client
+ * Initiate WordPress OAuth for a client (WordPress.com hosted sites)
  * Returns { authUrl } - frontend should redirect to this URL
  */
 export function initiateWordPressOAuth(clientId) {
   return client.post('/hub/oauth/wordpress/connect', { clientId }).then((res) => res.data);
+}
+
+/**
+ * Connect WordPress using Application Passwords (self-hosted WordPress sites)
+ * @param {string} clientId - The client ID
+ * @param {string} siteUrl - The WordPress site URL (e.g., https://example.com)
+ * @param {string} username - The WordPress username
+ * @param {string} applicationPassword - The application password from WordPress
+ * @returns {Promise} - Resolves to { connection, message }
+ */
+export function connectWordPress(clientId, siteUrl, username, applicationPassword) {
+  return client.post('/hub/wordpress/connect', { 
+    clientId, 
+    siteUrl, 
+    username, 
+    applicationPassword 
+  }).then((res) => res.data);
+}
+
+/**
+ * Test an existing WordPress connection
+ */
+export function testWordPressConnection(connectionId) {
+  return client.post('/hub/wordpress/test', { connectionId }).then((res) => res.data);
 }
 
 /**

@@ -262,6 +262,22 @@ async function maybeRunSecurityMigration() {
   }
 }
 
+// Run onboarding token value migration (idempotent, uses IF NOT EXISTS)
+async function maybeRunOnboardingTokenMigration() {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const sqlPath = path.join(__dirname, 'sql', 'migrate_onboarding_token_value.sql');
+    const sql = await readFile(sqlPath, 'utf8');
+    await query(sql);
+    // eslint-disable-next-line no-console
+    console.log('[migrations] ran migrate_onboarding_token_value.sql');
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // file not present; skip
+    throw err;
+  }
+}
+
 // Automatic service redaction after 90 days
 async function redactOldServices() {
   try {
@@ -359,6 +375,7 @@ maybeRunMigrations()
   .then(maybeRunFormsMigration)
   .then(maybeRunReviewsMigration)
   .then(maybeRunSecurityMigration)
+  .then(maybeRunOnboardingTokenMigration)
   .catch((err) => {
     console.error('[migrations] failed', err);
     process.exit(1);

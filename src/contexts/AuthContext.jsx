@@ -73,6 +73,15 @@ export function AuthProvider({ children }) {
         updateActingClient(null);
         return res.user;
       },
+      // Set auth state directly (used after onboarding activation when tokens are returned without MFA)
+      setAuthState: ({ user: newUser, accessToken }) => {
+        if (accessToken) {
+          setAccessToken(accessToken);
+        }
+        setUser(newUser || null);
+        setImpersonator(null);
+        updateActingClient(null);
+      },
       register: async (payload) => {
         const res = await authApi.register(payload);
         if (res?.accessToken) {

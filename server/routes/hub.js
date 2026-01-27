@@ -1675,7 +1675,10 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
   const token = uuidv4();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
-  // Revoke any previously-issued (still valid) links so only the newest link works.
+  console.log(`[hub:onboarding-email] Creating new token for client ${clientId}: ${token}`);
+  // Revoke any previously-issued (still valid) links so only the newest EMAILED link works.
+  // Note: This is intentional - when sending a new email, we want to invalidate any old links
+  // (including manually copied ones) to ensure only the emailed link is valid.
   // Also mark all old tokens as "reminder handled" to prevent expiry notifications for superseded links.
   await query(
     `UPDATE client_onboarding_tokens 
@@ -1684,10 +1687,11 @@ router.post('/clients/:id/onboarding-email', isAdminOrEditor, async (req, res) =
      WHERE user_id = $1 AND consumed_at IS NULL`,
     [clientId]
   );
+  // Store both the hash (for validation) and the token value (for copy link retrieval)
   await query(
-    `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
-     VALUES ($1,$2,$3,$4)`,
-    [clientId, tokenHash, expiresAt, JSON.stringify({ created_by: req.user.id })]
+    `INSERT INTO client_onboarding_tokens (user_id, token_hash, token_value, expires_at, metadata)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [clientId, tokenHash, token, expiresAt, JSON.stringify({ created_by: req.user.id })]
   );
 
   const baseUrl = resolveBaseUrl(req);
@@ -1725,7 +1729,8 @@ If you were not expecting this email, ignore it.`;
   res.json({ message: 'Onboarding email sent' });
 });
 
-// Get or generate onboarding link without sending email (for manual sharing)
+// Get the current active onboarding link without generating a new one.
+// This endpoint only retrieves the existing active token - use "Send Onboarding Email" to create new tokens.
 router.get('/clients/:id/onboarding-link', isAdminOrEditor, async (req, res) => {
   const clientId = req.params.id;
   const { rows } = await query('SELECT id, email, first_name, last_name, role FROM users WHERE id = $1', [clientId]);
@@ -1735,33 +1740,33 @@ router.get('/clients/:id/onboarding-link', isAdminOrEditor, async (req, res) => 
     return res.status(400).json({ message: 'Onboarding links are only for client accounts.' });
   }
 
-  // If onboarding is already completed, don't issue links.
+  // If onboarding is already completed, no link available.
   const { rows: profileRows } = await query('SELECT onboarding_completed_at FROM client_profiles WHERE user_id = $1 LIMIT 1', [clientId]);
   if (profileRows[0]?.onboarding_completed_at) {
     return res.status(400).json({ message: 'Client onboarding is already completed.' });
   }
 
-  const token = uuidv4();
-  const tokenHash = hashToken(token);
-  const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_HOURS * 60 * 60 * 1000);
-
-  // Revoke any previously-issued (still valid) links so only the newest link works.
-  // Also mark all old tokens as "reminder handled" to prevent expiry notifications for superseded links.
-  await query(
-    `UPDATE client_onboarding_tokens 
-     SET revoked_at = COALESCE(revoked_at, NOW()),
-         reminder_sent_at = COALESCE(reminder_sent_at, NOW())
-     WHERE user_id = $1 AND consumed_at IS NULL`,
+  // Get the most recent valid token (must have token_value stored)
+  const { rows: existingTokens } = await query(
+    `SELECT id, token_value, expires_at FROM client_onboarding_tokens 
+     WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW() AND token_value IS NOT NULL
+     ORDER BY created_at DESC LIMIT 1`,
     [clientId]
   );
-  await query(
-    `INSERT INTO client_onboarding_tokens (user_id, token_hash, expires_at, metadata)
-     VALUES ($1,$2,$3,$4)`,
-    [clientId, tokenHash, expiresAt, JSON.stringify({ created_by: req.user.id, source: 'manual_copy' })]
-  );
+
+  if (!existingTokens.length || !existingTokens[0].token_value) {
+    return res.status(404).json({ 
+      message: 'No active onboarding link found. Click "Send Onboarding Email" to generate one.',
+      noActiveLink: true 
+    });
+  }
+
+  const token = existingTokens[0].token_value;
+  const expiresAt = existingTokens[0].expires_at;
 
   const baseUrl = resolveBaseUrl(req);
   const onboardingUrl = `${baseUrl}/onboarding/${token}`;
+  console.log(`[hub:onboarding-link] Returning existing link for client ${clientId}`);
 
   logEvent('onboarding:link-generated', 'Onboarding link generated for manual sharing', { clientId, email: clientUser.email });
   res.json({
@@ -6020,7 +6025,7 @@ router.get('/oauth-connections/:id/google-accounts', requireAuth, isAdminOrEdito
     
     // Get connection with token
     const { rows } = await query(
-      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      'SELECT access_token, refresh_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
       [connectionId, 'google']
     );
     
@@ -6029,12 +6034,25 @@ router.get('/oauth-connections/:id/google-accounts', requireAuth, isAdminOrEdito
     }
 
     let accessToken = rows[0].access_token;
+    const refreshToken = rows[0].refresh_token;
     const expiresAt = rows[0].expires_at;
+
+    if (!accessToken) {
+      return res.status(400).json({ message: 'No access token stored for this connection' });
+    }
 
     // Refresh token if expired
     if (expiresAt && new Date(expiresAt) < new Date()) {
       console.log(`[oauth:google:accounts] Token expired, refreshing...`);
-      accessToken = await refreshGoogleAccessToken(connectionId);
+      if (!refreshToken) {
+        return res.status(400).json({ message: 'Token expired and no refresh token available. Please reconnect.' });
+      }
+      try {
+        accessToken = await refreshGoogleAccessToken(connectionId);
+      } catch (refreshErr) {
+        console.error('[oauth:google:accounts] Token refresh failed:', refreshErr);
+        return res.status(401).json({ message: 'Token refresh failed. Please reconnect your Google account.' });
+      }
     }
 
     // Fetch accounts
@@ -6042,7 +6060,8 @@ router.get('/oauth-connections/:id/google-accounts', requireAuth, isAdminOrEdito
     res.json({ accounts });
   } catch (err) {
     console.error('[oauth:google:accounts]', err);
-    res.status(500).json({ message: 'Failed to fetch Google Business accounts' });
+    // Return the actual error message for debugging
+    res.status(500).json({ message: err.message || 'Failed to fetch Google Business accounts' });
   }
 });
 
@@ -6342,15 +6361,105 @@ router.post('/oauth/wordpress/connect', requireAuth, isAdminOrEditor, async (req
 });
 
 /**
- * GET /hub/oauth-connections/:id/wordpress-sites
- * Fetch WordPress sites for an OAuth connection
+ * POST /hub/wordpress/connect
+ * Connect WordPress using Application Passwords (for self-hosted WordPress sites)
+ * Body: { clientId, siteUrl, username, applicationPassword }
  */
-router.get('/oauth-connections/:id/wordpress-sites', requireAuth, isAdminOrEditor, async (req, res) => {
+router.post('/wordpress/connect', requireAuth, isAdminOrEditor, async (req, res) => {
   try {
-    const connectionId = req.params.id;
+    const { clientId, siteUrl, username, applicationPassword } = req.body;
     
+    if (!clientId || !siteUrl || !username || !applicationPassword) {
+      return res.status(400).json({ message: 'clientId, siteUrl, username, and applicationPassword are required' });
+    }
+
+    // Normalize site URL
+    let normalizedUrl = siteUrl.trim();
+    if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+      normalizedUrl = 'https://' + normalizedUrl;
+    }
+    normalizedUrl = normalizedUrl.replace(/\/$/, ''); // Remove trailing slash
+
+    // Test the connection by making a request to the WordPress REST API
+    const testUrl = `${normalizedUrl}/wp-json/wp/v2/users/me`;
+    const auth = Buffer.from(`${username}:${applicationPassword}`).toString('base64');
+    
+    console.log(`[wordpress:connect] Testing connection to ${testUrl}`);
+    
+    const testResponse = await fetch(testUrl, {
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!testResponse.ok) {
+      const errorText = await testResponse.text();
+      console.error(`[wordpress:connect] Connection test failed (${testResponse.status}):`, errorText);
+      
+      if (testResponse.status === 401) {
+        return res.status(401).json({ message: 'Invalid username or application password. Make sure you created an Application Password in WordPress (Users → Profile → Application Passwords).' });
+      }
+      if (testResponse.status === 404) {
+        return res.status(404).json({ message: 'WordPress REST API not found. Make sure your site has the REST API enabled and the URL is correct.' });
+      }
+      return res.status(400).json({ message: `Failed to connect: ${errorText}` });
+    }
+
+    const userInfo = await testResponse.json();
+    console.log(`[wordpress:connect] Connected as user: ${userInfo.name} (${userInfo.slug})`);
+
+    // Store the connection
+    // We'll store the credentials in a way that can be used for Basic Auth
+    // The "access_token" field will hold the base64-encoded auth string
     const { rows } = await query(
-      'SELECT access_token, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      `INSERT INTO oauth_connections 
+       (client_id, provider, provider_account_id, provider_account_name, access_token, token_type, scope_granted, status, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        clientId,
+        'wordpress',
+        userInfo.id.toString(),
+        userInfo.name || userInfo.slug,
+        auth, // Base64-encoded credentials
+        'Basic',
+        JSON.stringify(['read', 'write']),
+        'active',
+        JSON.stringify({ 
+          site_url: normalizedUrl, 
+          username: username,
+          user_email: userInfo.email,
+          user_roles: userInfo.roles
+        })
+      ]
+    );
+
+    console.log(`[wordpress:connect] Saved connection ${rows[0].id} for client ${clientId}`);
+    res.json({ 
+      connection: rows[0],
+      message: `Successfully connected to WordPress as ${userInfo.name}`
+    });
+  } catch (err) {
+    console.error('[wordpress:connect]', err);
+    res.status(500).json({ message: err.message || 'Failed to connect WordPress' });
+  }
+});
+
+/**
+ * POST /hub/wordpress/test
+ * Test WordPress connection for an existing connection
+ */
+router.post('/wordpress/test', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const { connectionId } = req.body;
+    
+    if (!connectionId) {
+      return res.status(400).json({ message: 'connectionId is required' });
+    }
+
+    const { rows } = await query(
+      'SELECT access_token, metadata FROM oauth_connections WHERE id = $1 AND provider = $2',
       [connectionId, 'wordpress']
     );
     
@@ -6358,7 +6467,69 @@ router.get('/oauth-connections/:id/wordpress-sites', requireAuth, isAdminOrEdito
       return res.status(404).json({ message: 'WordPress connection not found' });
     }
 
-    let accessToken = rows[0].access_token;
+    const { access_token: auth, metadata } = rows[0];
+    const siteUrl = metadata?.site_url;
+
+    if (!siteUrl) {
+      return res.status(400).json({ message: 'Site URL not found in connection metadata' });
+    }
+
+    const testUrl = `${siteUrl}/wp-json/wp/v2/users/me`;
+    const testResponse = await fetch(testUrl, {
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!testResponse.ok) {
+      return res.status(testResponse.status).json({ message: 'Connection test failed. The credentials may have been revoked.' });
+    }
+
+    const userInfo = await testResponse.json();
+    res.json({ 
+      success: true, 
+      message: `Connected as ${userInfo.name}`,
+      user: { id: userInfo.id, name: userInfo.name, email: userInfo.email }
+    });
+  } catch (err) {
+    console.error('[wordpress:test]', err);
+    res.status(500).json({ message: 'Failed to test connection' });
+  }
+});
+
+/**
+ * GET /hub/oauth-connections/:id/wordpress-sites
+ * Fetch WordPress sites for an OAuth connection (for WordPress.com OAuth - kept for compatibility)
+ */
+router.get('/oauth-connections/:id/wordpress-sites', requireAuth, isAdminOrEditor, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    
+    const { rows } = await query(
+      'SELECT access_token, token_type, metadata, expires_at FROM oauth_connections WHERE id = $1 AND provider = $2',
+      [connectionId, 'wordpress']
+    );
+    
+    if (!rows.length) {
+      return res.status(404).json({ message: 'WordPress connection not found' });
+    }
+
+    const { access_token, token_type, metadata } = rows[0];
+
+    // If this is a Basic auth connection (self-hosted), return the site from metadata
+    if (token_type === 'Basic' && metadata?.site_url) {
+      return res.json({ 
+        sites: [{
+          id: metadata.site_url,
+          name: metadata.site_url.replace(/^https?:\/\//, ''),
+          url: metadata.site_url
+        }]
+      });
+    }
+
+    // Otherwise, try WordPress.com OAuth flow
+    let accessToken = access_token;
     const expiresAt = rows[0].expires_at;
 
     if (expiresAt && new Date(expiresAt) < new Date()) {

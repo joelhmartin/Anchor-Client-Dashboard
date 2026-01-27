@@ -12,6 +12,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { createNotificationsForAdmins, notifyAdminsByEmail } from '../services/notifications.js';
 import { isMailgunConfigured, sendMailgunMessageWithLogging } from '../services/mailgun.js';
 import { generateClientOnboardingPdf } from '../services/onboardingPdf.js';
+import { createAuthenticatedSession, trustDevice, extractDeviceInfo } from '../services/security/index.js';
 
 const router = express.Router();
 
@@ -673,6 +674,7 @@ router.post('/:token/draft', async (req, res) => {
 });
 
 // POST /api/onboarding/:token/activate - step 1 completion: set password + revoke all links (no completion email/notifications)
+// This endpoint returns session tokens directly, bypassing MFA, since the onboarding token itself serves as verification.
 router.post('/:token/activate', async (req, res) => {
   try {
     const record = await getTokenRecord(req.params.token);
@@ -695,7 +697,50 @@ router.post('/:token/activate', async (req, res) => {
     // Revoke ALL onboarding tokens for this user (disables live links)
     await query('UPDATE client_onboarding_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL', [record.user_id]);
 
-    res.json({ success: true, user_id: record.user_id });
+    // Fetch the updated user for session creation
+    const { rows: userRows } = await query(
+      'SELECT id, email, first_name, last_name, role, avatar_url FROM users WHERE id = $1',
+      [record.user_id]
+    );
+    const user = userRows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'User not found after activation' });
+    }
+
+    // Create session directly (bypassing MFA since onboarding token already verified identity)
+    const deviceInfo = extractDeviceInfo(req);
+    const ipAddress = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    
+    const session = await createAuthenticatedSession(user, deviceInfo, {
+      trustDevice: true, // Trust this device since they just came through a verified onboarding link
+      ipAddress,
+      userAgent: req.headers['user-agent'],
+      skipMfa: true // Signal that MFA was bypassed due to onboarding token verification
+    });
+
+    // Trust the device for future logins
+    await trustDevice(user.id, deviceInfo, { ipAddress, userAgent: req.headers['user-agent'] });
+
+    // Set refresh token cookie
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('refresh_token', session.refreshToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'strict' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      path: '/'
+    });
+
+    console.log(`[onboarding:activate] User ${user.email} activated and logged in via onboarding token`);
+
+    res.json({ 
+      success: true, 
+      user_id: record.user_id,
+      // Return session info so frontend can use it directly without calling login
+      user: session.user,
+      accessToken: session.accessToken,
+      expiresIn: session.expiresIn
+    });
   } catch (err) {
     console.error('[onboarding:activate]', err);
     res.status(500).json({ message: err.message || 'Unable to activate account' });

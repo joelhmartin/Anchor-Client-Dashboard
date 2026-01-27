@@ -493,21 +493,40 @@ export async function fetchWordPressProfile(accessToken, tokenData = {}) {
  * Fetch Google Business accounts for the authenticated user
  */
 export async function fetchGoogleBusinessAccounts(accessToken) {
+  console.log('[oauthIntegration:fetchAccounts] Fetching accounts...');
   const res = await fetch(GOOGLE_BUSINESS_ACCOUNTS_URL, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
 
   if (!res.ok) {
     const text = await res.text();
-    console.error('[oauthIntegration:fetchAccounts] Failed:', text);
-    // Return empty if no accounts or no permission
-    if (res.status === 404 || res.status === 403) {
+    console.error(`[oauthIntegration:fetchAccounts] Failed (${res.status}):`, text);
+    
+    // Parse error for better messaging
+    let errorDetail = text;
+    try {
+      const errorJson = JSON.parse(text);
+      errorDetail = errorJson.error?.message || errorJson.error?.status || text;
+    } catch (e) {
+      // text is not JSON
+    }
+
+    // Check for specific error conditions
+    if (res.status === 403) {
+      throw new Error(`Access denied: ${errorDetail}. Make sure the "My Business Account Management API" is enabled in your Google Cloud project.`);
+    }
+    if (res.status === 404) {
+      // No accounts found - return empty array
       return [];
     }
-    throw new Error(`Failed to fetch Google Business accounts: ${text}`);
+    if (res.status === 401) {
+      throw new Error('Access token is invalid or expired. Please reconnect your Google account.');
+    }
+    throw new Error(`Google API error (${res.status}): ${errorDetail}`);
   }
 
   const data = await res.json();
+  console.log(`[oauthIntegration:fetchAccounts] Found ${data.accounts?.length || 0} accounts`);
   return (data.accounts || []).map((account) => ({
     name: account.name, // format: accounts/123456789
     accountName: account.accountName,

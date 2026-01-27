@@ -98,7 +98,7 @@ export default function ClientOnboardingPage() {
   const { token } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { user: authUser, login: authLogin, refreshUser } = useAuth();
+  const { user: authUser, setAuthState, refreshUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -549,8 +549,12 @@ export default function ClientOnboardingPage() {
         setSubmitting(true);
         // Save draft first so we can land back on step 2 if they return later.
         await saveOnboardingDraft(token, { ...buildDraft(), activeStep: Math.min(activeStep + 1, stepConfig.length - 1) });
-        await activateOnboardingFromToken(token, { display_name: form.display_name.trim(), password: form.password });
-        await authLogin({ email: data.user.email, password: form.password });
+        // Activate returns session tokens directly (bypassing MFA since onboarding token already verified identity)
+        const activationResult = await activateOnboardingFromToken(token, { display_name: form.display_name.trim(), password: form.password });
+        // Set auth state directly without calling login (avoids MFA trigger for new devices)
+        if (activationResult?.user && activationResult?.accessToken) {
+          setAuthState({ user: activationResult.user, accessToken: activationResult.accessToken });
+        }
         // No redirect - continue to next step on same page
       } catch (err) {
         toast.error(getErrorMessage(err, 'Unable to activate your account'));
