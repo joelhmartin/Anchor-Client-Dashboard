@@ -191,30 +191,7 @@ The Anchor Client Dashboard is a comprehensive CRM and client management platfor
 
 ---
 
-### 8. Forms Management
-
-**Form Builder**
-
-- Visual form builder with Monaco Editor
-- Custom field types
-- Conditional logic support
-- Multi-step forms
-
-**Form Embedding**
-
-- Embeddable form scripts
-- Cross-origin support
-- Custom styling per embed
-
-**Form Submissions**
-
-- Submission processing with AI
-- Email notifications
-- PDF generation of submissions
-
----
-
-### 9. Blog/Content Management
+### 8. Blog/Content Management
 
 **Blog Editor**
 
@@ -385,7 +362,7 @@ The Anchor Client Dashboard is a comprehensive CRM and client management platfor
 | ------------ | ------------------------------------------ |
 | `superadmin` | Full system access, all admin features     |
 | `admin`      | Client management, settings, act-as-client |
-| `team`       | Task management, forms, limited admin      |
+| `team`       | Task management, limited admin             |
 | `editor`     | Content editing, client view               |
 | `client`     | Own portal access only                     |
 

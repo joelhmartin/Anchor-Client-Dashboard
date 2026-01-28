@@ -241,7 +241,6 @@ Additional migrations in `server/sql/`:
 |------|---------|
 | `init.sql` | Main schema (users, clients, calls, journeys, etc.) |
 | `migrate_security.sql` | Session management, MFA, audit logging |
-| `migrate_forms_platform.sql` | Forms builder schema |
 | `migrate_reviews.sql` | Review management schema |
 | `migrate_onboarding_token_value.sql` | Onboarding token updates |
 | `migrate_wordpress_oauth.sql` | WordPress OAuth provider |

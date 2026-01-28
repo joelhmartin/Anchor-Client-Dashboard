@@ -22,9 +22,7 @@ import { useLocation } from 'react-router-dom';
 import portalMenu from 'menu-items/portal';
 import portalOnboardingMenu from 'menu-items/portalOnboarding';
 import tasksMenu from 'menu-items/tasks';
-import formsMenu from 'menu-items/forms';
 import TaskSidebarPanel from './TaskSidebarPanel';
-import FormsSidebarPanel from './FormsSidebarPanel';
 
 // ==============================|| SIDEBAR DRAWER ||============================== //
 
@@ -39,7 +37,6 @@ function Sidebar() {
   // Use portal menu for regular clients or when admin is viewing portal
   const isPortal = user?.role === 'client' || Boolean(actingClientId) || location.pathname.startsWith('/portal');
   const isTasks = location.pathname.startsWith('/tasks');
-  const isForms = location.pathname.startsWith('/forms');
   const onboardingPending = user?.role === 'client' && !user?.onboarding_completed_at;
 
   const {
@@ -57,11 +54,9 @@ function Sidebar() {
 
   const drawer = useMemo(() => {
     let drawerContent = null;
-    
+
     if (!isPortal) {
-      if (isForms) {
-        drawerContent = <FormsSidebarPanel />;
-      } else if (isTasks) {
+      if (isTasks) {
         drawerContent = <TaskSidebarPanel />;
       } else {
         drawerContent = (
@@ -76,7 +71,7 @@ function Sidebar() {
     }
 
     // Determine which menu config to use
-    const menuConfig = isPortal ? (onboardingPending ? portalOnboardingMenu : portalMenu) : isForms ? formsMenu : isTasks ? tasksMenu : undefined;
+    const menuConfig = isPortal ? (onboardingPending ? portalOnboardingMenu : portalMenu) : isTasks ? tasksMenu : undefined;
 
     let drawerSX = { paddingLeft: '0px', paddingRight: '0px', marginTop: '20px' };
     if (drawerOpen) drawerSX = { paddingLeft: '16px', paddingRight: '16px', marginTop: '0px' };
@@ -101,7 +96,6 @@ function Sidebar() {
     drawerOpen,
     isPortal,
     isTasks,
-    isForms,
     onboardingPending,
     location.pathname,
     user?.role,

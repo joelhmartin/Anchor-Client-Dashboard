@@ -14,13 +14,10 @@ import { query } from './db.js';
 import hubRouter from './routes/hub.js';
 import onboardingRouter from './routes/onboarding.js';
 import tasksRouter from './routes/tasks.js';
-import formsRouter from './routes/forms.js';
-import formsPublicRouter from './routes/formsPublic.js';
 import reviewsRouter from './routes/reviews.js';
 import webhooksRouter from './routes/webhooks.js';
 import { sendOnboardingExpiryReminders } from './services/onboardingReminders.js';
 import { purgeArchivedTasks } from './services/taskCleanup.js';
-import { processSubmissionJobs } from './services/formSubmissionJobs.js';
 import { runDueDateAutomations } from './services/taskAutomations.js';
 
 const app = express();
@@ -67,21 +64,6 @@ const baseCspDirectives = {
   'child-src': ["'self'", 'blob:'],
   'frame-src': ["'self'", ...CSP_FRAME_SRC]
 };
-
-// Relaxed CSP for Monaco Editor routes (Forms Manager)
-// Monaco requires unsafe-inline and unsafe-eval to function
-const monacoCspDirectives = {
-  ...baseCspDirectives,
-  'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.jsdelivr.net'],
-  'script-src-elem': ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.jsdelivr.net']
-};
-
-// Helper to build CSP header string from directives object
-function buildCspHeader(directives) {
-  return Object.entries(directives)
-    .map(([key, values]) => `${key} ${values.join(' ')}`)
-    .join('; ');
-}
 
 function normalizeOrigin(raw) {
   const s = String(raw || '').trim();
@@ -133,19 +115,6 @@ app.use('/api/onboarding', onboardingRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/reviews', reviewsRouter);
 app.use('/api/webhooks', webhooksRouter); // Public webhook endpoints (Mailgun, etc.)
-
-// Forms Manager uses Monaco Editor which requires unsafe-inline/eval
-// Apply relaxed CSP only to this route to keep other routes secure
-app.use(
-  '/api/forms',
-  (req, res, next) => {
-    res.setHeader('Content-Security-Policy', buildCspHeader(monacoCspDirectives));
-    next();
-  },
-  formsRouter
-);
-
-app.use('/embed', formsPublicRouter);
 app.use('/uploads', express.static(UPLOAD_DIR));
 app.use('/email-assets', express.static(EMAIL_ASSETS_DIR));
 
@@ -182,14 +151,7 @@ if (NODE_ENV === 'production') {
 app.get('/api/health', (req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
 
 if (NODE_ENV === 'production') {
-  // Forms Manager page needs relaxed CSP for Monaco Editor
-  app.get('/forms*', (req, res) => {
-    res.setHeader('Content-Security-Policy', buildCspHeader(monacoCspDirectives));
-    res.setHeader('Cache-Control', 'no-store');
-    res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
-  });
-
-  // All other client routes use the secure default CSP (set by helmet)
+  // All client routes use the secure default CSP (set by helmet)
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.setHeader('Cache-Control', 'no-store');
@@ -212,22 +174,6 @@ async function maybeRunMigrations() {
   await query(sql);
   // eslint-disable-next-line no-console
   console.log('[migrations] ran init.sql');
-}
-
-// Run additional forms migration (idempotent, uses IF NOT EXISTS)
-async function maybeRunFormsMigration() {
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const sqlPath = path.join(__dirname, 'sql', 'migrate_forms_platform.sql');
-    const sql = await readFile(sqlPath, 'utf8');
-    await query(sql);
-    // eslint-disable-next-line no-console
-    console.log('[migrations] ran migrate_forms_platform.sql');
-  } catch (err) {
-    if (err.code === 'ENOENT') return; // file not present; skip
-    throw err;
-  }
 }
 
 // Run reviews migration (idempotent, uses IF NOT EXISTS)
@@ -359,20 +305,7 @@ cron.schedule(
   }
 );
 
-// Process form submission jobs (CTM, emails) every 30 seconds
-cron.schedule('*/30 * * * * *', async () => {
-  try {
-    const result = await processSubmissionJobs();
-    if (result?.processed) {
-      console.log(`[cron:form-jobs] processed ${result.processed} job(s)`);
-    }
-  } catch (err) {
-    console.error('[cron:form-jobs] failed', err.message);
-  }
-});
-
 maybeRunMigrations()
-  .then(maybeRunFormsMigration)
   .then(maybeRunReviewsMigration)
   .then(maybeRunSecurityMigration)
   .then(maybeRunOnboardingTokenMigration)

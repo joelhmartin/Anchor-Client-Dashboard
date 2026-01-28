@@ -79,11 +79,9 @@ This architecture enables efficient parallel development by splitting work acros
 ```
 server/routes/hub.js        # Main CRM endpoints
 server/routes/tasks.js      # Task management
-server/routes/forms.js      # Form builder
 server/routes/reviews.js    # Review management
 server/routes/onboarding.js # Client onboarding
 server/routes/webhooks.js   # External webhooks
-server/routes/formsPublic.js# Public form embeds
 server/auth.js              # Authentication endpoints
 ```
 
@@ -187,7 +185,6 @@ server/middleware/rateLimit.js
 src/views/admin/           # Admin hub views
 src/views/client/          # Client portal views
 src/views/tasks/           # Task manager views
-src/views/forms/           # Form builder views
 src/views/pages/           # Auth & onboarding pages
 src/layout/MainLayout/     # Main app layout
 src/layout/MinimalLayout/  # Auth layout
@@ -220,7 +217,6 @@ src/api/client.js          # Base axios client
 src/api/tokenStore.js      # JWT storage
 src/api/auth.js            # Auth endpoints
 src/api/tasks.js           # Task API
-src/api/forms.js           # Forms API
 src/api/reviews.js         # Reviews API
 src/api/clients.js         # Client management
 src/api/onboarding.js      # Onboarding API

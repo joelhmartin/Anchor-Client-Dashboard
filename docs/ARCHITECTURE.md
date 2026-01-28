@@ -105,8 +105,6 @@ server/
 │   ├── hub.js            # Main CRM endpoints (/api/hub/*)
 │   ├── onboarding.js     # Client onboarding (/api/onboarding/*)
 │   ├── tasks.js          # Task management (/api/tasks/*)
-│   ├── forms.js          # Form builder (/api/forms/*)
-│   ├── formsPublic.js    # Public form endpoints (/embed/*)
 │   ├── reviews.js        # Review management (/api/reviews/*)
 │   └── webhooks.js       # Webhook handlers (/api/webhooks/*)
 │
@@ -119,9 +117,6 @@ server/
 │   ├── reviews.js        # Google Business Profile reviews
 │   ├── notifications.js  # In-app notifications
 │   ├── emailTemplate.js  # Email HTML templates
-│   ├── formAI.js         # Form AI processing
-│   ├── formPDF.js        # Form PDF generation
-│   ├── formSubmissionJobs.js  # Form submission queue
 │   ├── onboardingPdf.js  # Onboarding PDF generation
 │   ├── onboardingReminders.js # Expiry reminders
 │   ├── taskAutomations.js     # Task automation engine
@@ -132,7 +127,6 @@ server/
 │       ├── audit.js      # Security audit logging
 │       ├── deviceFingerprint.js # Device tracking
 │       ├── mfa.js        # Multi-factor authentication
-│       ├── oauth.js      # OAuth login (Google/Microsoft)
 │       ├── passwordPolicy.js   # Password validation
 │       ├── rateLimit.js  # Auth rate limiting
 │       ├── sessions.js   # Session management
@@ -141,7 +135,6 @@ server/
 ├── sql/
 │   ├── init.sql          # Main database schema
 │   ├── migrate_security.sql   # Security tables
-│   ├── migrate_forms_platform.sql # Forms schema
 │   ├── migrate_reviews.sql    # Reviews schema
 │   └── migrate_*.sql     # Other migrations
 │
@@ -167,7 +160,6 @@ src/
 │   ├── profile.js        # User profile
 │   ├── brand.js          # Brand assets
 │   ├── documents.js      # Document management
-│   ├── forms.js          # Form builder
 │   ├── tasks.js          # Task management
 │   ├── reviews.js        # Review management
 │   ├── emailLogs.js      # Email logs
@@ -205,8 +197,7 @@ src/
 │   ├── index.js          # Menu aggregator
 │   ├── portal.js         # Client portal menu
 │   ├── clientHub.js      # Admin hub menu
-│   ├── tasks.js          # Tasks menu
-│   └── forms.js          # Forms menu
+│   └── tasks.js          # Tasks menu
 │
 ├── routes/
 │   ├── index.jsx         # Route configuration
@@ -248,9 +239,6 @@ src/
     │   ├── ClientPortal.jsx # Main client dashboard
     │   ├── BlogEditor.jsx   # Blog management
     │   └── ReviewsPanel.jsx # Review responses
-    │
-    ├── forms/
-    │   └── FormsManager.jsx # Form builder
     │
     ├── tasks/
     │   ├── TaskManager.jsx  # Task board
@@ -493,12 +481,10 @@ flowchart LR
 
 | Router | Mount Path | Purpose |
 |--------|------------|---------|
-| `auth.js` | `/api/auth` | Authentication (login, logout, register, MFA) |
+| `auth.js` | `/api/auth` | Authentication (login, logout, MFA) |
 | `hub.js` | `/api/hub` | Main CRM operations (clients, calls, journeys) |
 | `onboarding.js` | `/api/onboarding` | Client onboarding wizard |
 | `tasks.js` | `/api/tasks` | Task management system |
-| `forms.js` | `/api/forms` | Form builder (protected) |
-| `formsPublic.js` | `/embed` | Public form embeds |
 | `reviews.js` | `/api/reviews` | Review management |
 | `webhooks.js` | `/api/webhooks` | External webhooks (Mailgun) |
 

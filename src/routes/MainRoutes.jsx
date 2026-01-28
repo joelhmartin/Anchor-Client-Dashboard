@@ -19,7 +19,6 @@ const SharedDocuments = Loadable(lazy(() => import('views/admin/SharedDocuments'
 const ClientPortal = Loadable(lazy(() => import('views/client/ClientPortal')));
 const BlogEditor = Loadable(lazy(() => import('views/client/BlogEditor')));
 const TaskManager = Loadable(lazy(() => import('views/tasks/TaskManager')));
-const FormsManager = Loadable(lazy(() => import('views/forms/FormsManager')));
 const ClientOnboarding = Loadable(lazy(() => import('views/pages/onboarding/ClientOnboarding')));
 
 function AdminRoute({ children }) {
@@ -45,17 +44,6 @@ function PortalRoute({ children }) {
 }
 
 function TaskRoute({ children }) {
-  const { user, initializing } = useAuth();
-  if (initializing) return <Loader />;
-  const role = user?.effective_role || user?.role;
-  return (
-    <SuspendedRoute allow={role === 'superadmin' || role === 'admin' || role === 'team'}>
-      {children}
-    </SuspendedRoute>
-  );
-}
-
-function FormsRoute({ children }) {
   const { user, initializing } = useAuth();
   if (initializing) return <Loader />;
   const role = user?.effective_role || user?.role;
@@ -164,14 +152,6 @@ const MainRoutes = {
         <TaskRoute>
           <TaskManager />
         </TaskRoute>
-      )
-    },
-    {
-      path: 'forms',
-      element: (
-        <FormsRoute>
-          <FormsManager />
-        </FormsRoute>
       )
     }
   ]

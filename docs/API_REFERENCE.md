@@ -19,7 +19,7 @@ Complete documentation of all REST API endpoints in the Anchor Client Dashboard.
 3. [Hub Routes](#hub-routes-apihub)
 4. [Onboarding Routes](#onboarding-routes-apionboarding)
 5. [Tasks Routes](#tasks-routes-apitasks)
-6. [Forms Routes](#forms-routes-apiforms)
+6. [Reviews Routes](#reviews-routes-apireviews)
 7. [Reviews Routes](#reviews-routes-apireviews)
 8. [Webhooks Routes](#webhooks-routes-apiwebhooks)
 9. [Public Routes](#public-routes-embed)
@@ -74,7 +74,7 @@ All responses are JSON:
 |------|--------------|
 | `superadmin` | Full access |
 | `admin` | Client management, act-as-client |
-| `team` | Tasks, forms, limited admin |
+| `team` | Tasks, limited admin |
 | `editor` | Content editing |
 | `client` | Own data only |
 
@@ -1271,66 +1271,6 @@ Generate AI summary for item.
 #### GET `/api/tasks/daily-overview`
 
 Get AI daily overview.
-
----
-
-## Forms Routes (`/api/forms`)
-
-Form builder and management. Requires `team` role or higher.
-
-### GET `/api/forms`
-
-List all forms.
-
----
-
-### POST `/api/forms`
-
-Create form.
-
-**Request:**
-```json
-{
-  "name": "Contact Form",
-  "schema": {
-    "fields": [
-      { "name": "name", "type": "text", "required": true },
-      { "name": "email", "type": "email", "required": true },
-      { "name": "message", "type": "textarea" }
-    ]
-  }
-}
-```
-
----
-
-### GET `/api/forms/:id`
-
-Get form details.
-
----
-
-### PUT `/api/forms/:id`
-
-Update form.
-
----
-
-### DELETE `/api/forms/:id`
-
-Delete form.
-
----
-
-### GET `/api/forms/:id/submissions`
-
-Get form submissions.
-
----
-
-### POST `/api/forms/:id/ai-generate`
-
-AI-generate form based on description.
 
 ---
 

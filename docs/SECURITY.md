@@ -371,7 +371,7 @@ graph TD
 |------|-------------|
 | `superadmin` | All system access, user management, settings |
 | `admin` | Client management, act-as-client, most features |
-| `team` | Tasks, forms, limited admin features |
+| `team` | Tasks, limited admin features |
 | `editor` | Content editing, read access |
 | `client` | Own data only |
 
@@ -460,14 +460,6 @@ app.use(helmet({
   }
 }));
 ```
-
-### CSP Exceptions
-
-The Forms Manager route requires relaxed CSP for Monaco Editor:
-- `'unsafe-inline'` for scripts
-- `'unsafe-eval'` for scripts
-
-This is applied only to `/forms*` routes.
 
 ### CORS Configuration
 
