@@ -1,5 +1,13 @@
 # Development Environment Setup
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - Required Node.js/Yarn versions change
+> - New environment variables are added
+> - Database setup process changes
+> - New migration files are added to `server/sql/`
+> - Dependencies with native build requirements change
+> - Development workflow or scripts change
+
 This guide walks through setting up the Anchor Client Dashboard for local development.
 
 ---

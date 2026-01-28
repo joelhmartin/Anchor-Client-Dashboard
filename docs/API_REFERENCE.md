@@ -1,5 +1,13 @@
 # API Reference
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - New API endpoints are added to any router in `server/routes/`
+> - Existing endpoint request/response schemas change
+> - Authentication requirements change for endpoints
+> - New query parameters or filters are added
+> - Error response codes change
+> - New route files are created
+
 Complete documentation of all REST API endpoints in the Anchor Client Dashboard.
 
 ---

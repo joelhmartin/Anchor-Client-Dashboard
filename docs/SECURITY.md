@@ -1,5 +1,15 @@
 # Security Architecture
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - Authentication flow changes (login, MFA, sessions)
+> - Token management logic is modified
+> - Password policies change
+> - Role-based access control is updated
+> - Rate limiting rules change
+> - Security headers or CSP policies change
+> - Audit logging events are added
+> - Files in `server/services/security/` are modified
+
 This document describes the authentication, authorization, and security infrastructure of the Anchor Client Dashboard.
 
 ---

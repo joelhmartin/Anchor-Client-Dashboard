@@ -1,5 +1,12 @@
 # Anchor Client Dashboard
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - Project structure changes (new folders, reorganization)
+> - Tech stack versions are upgraded (React, Vite, MUI, etc.)
+> - New major features are added
+> - Available scripts in `package.json` change
+> - Deployment process changes
+
 A comprehensive CRM and client management platform designed for service businesses. Integrates call tracking, lead management, client onboarding, task management, content creation, and review management into a unified dashboard.
 
 ---

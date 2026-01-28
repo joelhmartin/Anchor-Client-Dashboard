@@ -1,5 +1,13 @@
 # Third-Party Integrations
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - New third-party service integrations are added
+> - Integration configuration or environment variables change
+> - OAuth providers are added or modified
+> - API keys or credentials requirements change
+> - Integration service files in `server/services/` are modified
+> - Webhook endpoints are added or changed
+
 This document describes all external service integrations in the Anchor Client Dashboard.
 
 ---

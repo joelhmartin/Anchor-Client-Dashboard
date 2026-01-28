@@ -1,5 +1,14 @@
 # System Architecture
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - New service files are added to `server/services/`
+> - New route files are added to `server/routes/`
+> - Frontend folder structure changes in `src/`
+> - Middleware chain is modified
+> - Database architecture changes (new table relationships)
+> - Deployment architecture changes
+> - New scheduled jobs are added
+
 This document describes the overall architecture of the Anchor Client Dashboard application.
 
 ---
@@ -373,6 +382,14 @@ graph TB
 - Server state fetched via API calls, stored locally in components
 - `actingClientId` in sessionStorage for admin "view as client" mode
 - No Redux - uses React Context + local state
+
+**CRITICAL - Immediate UI Feedback:**
+All state-changing actions (button clicks, form submissions, toggles, activations, deletions, etc.) must immediately update the UI to reflect the change. Do not wait for a full refetch. Use server-returned data to update local state optimistically. This pattern:
+- Prevents users from triggering duplicate actions
+- Provides clear confirmation that actions succeeded
+- Ensures the UI always reflects the current state
+
+Example: When activating a client, use the `client` object returned by the API to update `setClients()` immediately, rather than requiring a page refresh.
 
 ### Backend State
 

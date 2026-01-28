@@ -1353,12 +1353,15 @@ export default function AdminHub() {
     setSuccess('');
     try {
       const result = await activateClient(clientId);
+      const updatedClient = result.client;
       setSuccess(result.message || 'Account activated successfully');
-      // Update the client in the list with the new activated_at
-      setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, activated_at: new Date().toISOString() } : c)));
-      // Also update editing if this client is being edited
-      if (editing?.id === clientId) {
-        setEditing((prev) => ({ ...prev, activated_at: new Date().toISOString() }));
+      // Immediately update the client in the list with server-returned data
+      if (updatedClient) {
+        setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, ...updatedClient } : c)));
+        // Also update editing if this client is being edited
+        if (editing?.id === clientId) {
+          setEditing((prev) => ({ ...prev, ...updatedClient }));
+        }
       }
     } catch (err) {
       setError(err.message || 'Unable to activate account');

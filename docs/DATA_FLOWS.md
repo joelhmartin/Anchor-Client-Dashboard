@@ -1,5 +1,13 @@
 # Business Workflows & Data Flows
 
+> **MAINTENANCE DIRECTIVE**: Update this file when:
+> - Business workflow logic changes (onboarding, leads, journeys, tasks)
+> - State machines or status transitions are modified
+> - New integration data flows are added
+> - Email notification triggers change
+> - Lead classification categories change
+> - Journey or task lifecycle stages change
+
 This document describes the key business processes and data flows in the Anchor Client Dashboard.
 
 ---

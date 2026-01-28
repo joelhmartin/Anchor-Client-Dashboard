@@ -4453,7 +4453,8 @@ router.get('/monday/people', isAdminOrEditor, async (_req, res) => {
       : [];
     res.json({ success: true, people: shaped });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || 'Unable to load people' });
+    console.error('[monday:people:error]', err.message);
+    res.json({ success: true, people: [], warning: 'Monday.com is not responding' });
   }
 });
 
