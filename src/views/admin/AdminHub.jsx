@@ -237,7 +237,6 @@ export default function AdminHub() {
   const [oauthResourceDialog, setOauthResourceDialog] = useState({ open: false, connectionId: null, resource: null });
   const [savingOauth, setSavingOauth] = useState(false);
   const [expandedConnection, setExpandedConnection] = useState(null);
-  const [reclassifyDialog, setReclassifyDialog] = useState({ open: false, limit: 200, force: true, loading: false });
   // Fetch Resources dialog (supports all providers)
   const [fetchResourcesDialog, setFetchResourcesDialog] = useState({
     open: false,
@@ -1042,36 +1041,6 @@ export default function AdminHub() {
     });
   };
 
-  const handleOpenReclassify = () => {
-    setReclassifyDialog((prev) => ({ ...prev, open: true }));
-  };
-
-  const handleRunReclassify = async () => {
-    if (!editing?.id) return;
-    setReclassifyDialog((prev) => ({ ...prev, loading: true }));
-    try {
-      const resp = await client
-        .post(`/hub/clients/${editing.id}/reclassify-leads`, {
-          limit: reclassifyDialog.limit,
-          force: reclassifyDialog.force
-        })
-        .then((r) => r.data);
-      toast.success(`Reclassified ${resp.updated} lead(s)`);
-      setReclassifyDialog((prev) => ({ ...prev, open: false, loading: false }));
-    } catch (err) {
-      // If backend isn't running the latest revision, Express returns an HTML 404 like:
-      // "Cannot POST /api/hub/clients/:id/reclassify-leads"
-      const status = err?.response?.status;
-      const body = typeof err?.response?.data === 'string' ? err.response.data : '';
-      if (status === 404 && body.includes('Cannot POST') && body.includes('/reclassify-leads')) {
-        toast.error('Reclassify endpoint not found. The API server likely needs a restart/redeploy.');
-      } else {
-        reportError(err, 'Failed to reclassify leads');
-      }
-      setReclassifyDialog((prev) => ({ ...prev, loading: false }));
-    }
-  };
-
   const startEdit = (clientData) => {
     const displayName = [clientData.first_name, clientData.last_name].filter(Boolean).join(' ').trim();
     const accessRequirements = {
@@ -1826,9 +1795,6 @@ export default function AdminHub() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="subtitle1">OAuth Connections</Typography>
         <Stack direction="row" spacing={1}>
-          <Button size="small" variant="outlined" onClick={handleOpenReclassify}>
-            Reclassify Leads
-          </Button>
           <Button size="small" startIcon={<AddIcon />} onClick={handleAddOAuthConnection}>
             Add Connection
           </Button>
@@ -3823,42 +3789,6 @@ export default function AdminHub() {
       </Dialog>
 
       {/* Reclassify Leads Dialog */}
-      <Dialog open={reclassifyDialog.open} onClose={() => setReclassifyDialog((p) => ({ ...p, open: false }))} maxWidth="xs" fullWidth>
-        <DialogTitle>Reclassify Leads</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Alert severity="warning">
-              This will re-run AI classification on cached call transcripts/messages and update lead categories/summaries in the database.
-              CTM star ratings (if present) will still determine the final category.
-            </Alert>
-            <TextField
-              label="How many recent calls?"
-              type="number"
-              value={reclassifyDialog.limit}
-              onChange={(e) => setReclassifyDialog((p) => ({ ...p, limit: Number(e.target.value || 0) }))}
-              inputProps={{ min: 1, max: 5000 }}
-              helperText="Max 5000"
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={reclassifyDialog.force}
-                  onChange={(e) => setReclassifyDialog((p) => ({ ...p, force: e.target.checked }))}
-                />
-              }
-              label="Force reclassify even if already classified"
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setReclassifyDialog((p) => ({ ...p, open: false }))} disabled={reclassifyDialog.loading}>
-            Cancel
-          </Button>
-          <Button variant="contained" onClick={handleRunReclassify} disabled={reclassifyDialog.loading}>
-            {reclassifyDialog.loading ? 'Reclassifying…' : 'Run Reclassify'}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </MainCard>
   );
 }

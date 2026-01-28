@@ -137,11 +137,14 @@ const JOURNEY_STATUS_OPTIONS = ['pending', 'in_progress', 'active_client', 'won'
 
 // Category color mapping for visual distinction
 const CATEGORY_COLORS = {
-  converted: { bg: '#d1fae5', text: '#047857', border: '#34d399' }, // Green - successful conversion
+  converted: { bg: '#d1fae5', text: '#047857', border: '#34d399' }, // Green - successful conversion (manual only)
+  active_client: { bg: '#dbeafe', text: '#1e40af', border: '#60a5fa' }, // Blue - existing customer
+  returning_customer: { bg: '#e0e7ff', text: '#4338ca', border: '#818cf8' }, // Indigo - past customer returning
   warm: { bg: '#dcfce7', text: '#166534', border: '#86efac' },
   very_good: { bg: '#bbf7d0', text: '#065f46', border: '#6ee7b7' },
-  applicant: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
+  applicant: { bg: '#fef3c7', text: '#92400e', border: '#fbbf24' }, // Job applicant
   needs_attention: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' },
+  voicemail: { bg: '#f5f5f5', text: '#525252', border: '#d4d4d4' },
   unanswered: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' },
   not_a_fit: { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' },
   spam: { bg: '#fce7f3', text: '#9d174d', border: '#f9a8d4' },
@@ -242,6 +245,7 @@ export default function ClientPortal() {
   const [callFilters, setCallFilters] = useState({ type: 'all', source: 'all', category: 'all', callerType: 'all' });
   const [clearCallsDialogOpen, setClearCallsDialogOpen] = useState(false);
   const [ratingPending, setRatingPending] = useState({});
+  const [reclassifyDialog, setReclassifyDialog] = useState({ open: false, loading: false, limit: 200 });
 
   // CRM Enhancement State
   const [leadStats, setLeadStats] = useState(null);
@@ -668,6 +672,24 @@ export default function ClientPortal() {
       return { ...prev, [callId]: true };
     });
   }, []);
+
+  // Reclassify leads - admin only function
+  const handleReclassifyLeads = useCallback(async () => {
+    if (!actingClientId) return;
+    setReclassifyDialog((prev) => ({ ...prev, loading: true }));
+    try {
+      const resp = await client.post(`/hub/clients/${actingClientId}/reclassify-leads`, {
+        limit: reclassifyDialog.limit,
+        force: true
+      });
+      triggerMessage('success', resp.data.message || 'Leads reclassified successfully');
+      loadCalls(); // Refresh leads list
+    } catch (err) {
+      triggerMessage('error', err.response?.data?.message || 'Failed to reclassify leads');
+    } finally {
+      setReclassifyDialog({ open: false, loading: false, limit: 200 });
+    }
+  }, [actingClientId, reclassifyDialog.limit, triggerMessage, loadCalls]);
 
   const handleClearAndReloadCalls = useCallback(async () => {
     setClearCallsDialogOpen(false);
@@ -2141,6 +2163,19 @@ export default function ClientPortal() {
               <Button variant="outlined" color="error" onClick={() => setClearCallsDialogOpen(true)} size="small">
                 Clear All
               </Button>
+              {/* Reclassify button - only visible to admins viewing client portal */}
+              {actingClientId && (
+                <Tooltip title="Re-run AI classification on all leads">
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => setReclassifyDialog({ open: true, loading: false, limit: 200 })}
+                    size="small"
+                  >
+                    Reclassify
+                  </Button>
+                </Tooltip>
+              )}
               {ctmSyncing && <Chip label="Syncing..." size="small" color="info" variant="outlined" />}
             </Stack>
 
@@ -3645,6 +3680,42 @@ export default function ClientPortal() {
           <Button onClick={() => setClearCallsDialogOpen(false)}>Cancel</Button>
           <Button variant="contained" color="error" onClick={handleClearAndReloadCalls}>
             Yes, Clear & Reload
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reclassify Leads Dialog - Admin only */}
+      <Dialog
+        open={reclassifyDialog.open}
+        onClose={() => !reclassifyDialog.loading && setReclassifyDialog({ open: false, loading: false, limit: 200 })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Reclassify Leads</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            This will re-run AI classification on leads in the database. Existing ratings and manual classifications will be preserved.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Only leads without a manual rating (1-5 stars) will be reclassified. This helps correct any AI misclassifications.
+          </Typography>
+          <TextField
+            label="Maximum leads to process"
+            type="number"
+            value={reclassifyDialog.limit}
+            onChange={(e) => setReclassifyDialog((prev) => ({ ...prev, limit: parseInt(e.target.value, 10) || 200 }))}
+            size="small"
+            fullWidth
+            inputProps={{ min: 1, max: 1000 }}
+            helperText="Processing many leads may take a few minutes"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReclassifyDialog({ open: false, loading: false, limit: 200 })} disabled={reclassifyDialog.loading}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleReclassifyLeads} disabled={reclassifyDialog.loading}>
+            {reclassifyDialog.loading ? 'Reclassifying...' : 'Reclassify Leads'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -5,11 +5,11 @@ const CTM_BASE = process.env.CTM_API_BASE || 'https://api.calltrackingmetrics.co
 
 // Canonical category definitions - ALWAYS appended to any prompt during classification
 // This ensures consistent categories regardless of custom business prompts
+// NOTE: "converted" is NOT in this list - it's assigned manually when user marks 5 stars
 export const CATEGORY_DEFINITIONS = `
 CATEGORIES (use exactly these values):
-- converted: Caller explicitly agreed to purchase/book a service
-- warm: Promising lead interested in services
-- very_hot: Ready to book/buy now, high intent
+- very_hot: Ready to book/buy now, high intent, explicitly interested
+- warm: Promising lead interested in services, needs follow-up
 - needs_attention: Left voicemail requesting callback or follow-up
 - voicemail: Voicemail with no actionable details
 - unanswered: No conversation occurred, no message left
@@ -17,6 +17,10 @@ CATEGORIES (use exactly these values):
 - spam: Telemarketer, robocall, wrong number, or irrelevant sales call
 - neutral: General inquiry or information request, unclear intent
 - applicant: ONLY use if caller explicitly asks about jobs, careers, employment, or applying for a position at the company. Do NOT use for service inquiries.
+- active_client: Caller is an existing customer calling about their account, appointment, or ongoing service (NOT a new lead)
+
+IMPORTANT: Do NOT use "converted" - that category is assigned manually by staff when a lead agrees to service.
+If someone is calling to confirm an appointment or check on existing service, use "active_client".
 
 Respond ONLY with JSON: {"category":"<category>","summary":"One sentence summary"}
 `.trim();
@@ -28,7 +32,7 @@ export const DEFAULT_AI_PROMPT =
 const MAX_CALLS = Number(process.env.CTM_MAX_CALLS || 200);
 const CLASSIFY_LIMIT = Number(process.env.CTM_CLASSIFY_LIMIT || 40);
 const CATEGORY_MAP = {
-  converted: 'converted',
+  converted: 'converted', // Only from manual 5-star rating
   warm: 'warm',
   very_hot: 'very_good',
   'very-hot': 'very_good',
@@ -39,7 +43,9 @@ const CATEGORY_MAP = {
   unanswered: 'unanswered',
   not_a_fit: 'not_a_fit',
   spam: 'spam',
-  neutral: 'neutral'
+  neutral: 'neutral',
+  active_client: 'active_client', // Existing customer calling about their account
+  returning_customer: 'returning_customer' // Past client calling back
 };
 
 /**
@@ -56,11 +62,15 @@ function getAutoStarRating(category) {
     case 'spam':
       return 1;
     case 'not_a_fit':
+    case 'applicant':
       return 2;
     case 'warm':
     case 'very_good':
     case 'needs_attention':
       return 3;
+    case 'active_client':
+    case 'returning_customer':
+      return 0; // Existing clients don't get auto-scored as leads
     case 'voicemail':
     case 'unanswered':
     case 'neutral':
@@ -905,27 +915,41 @@ export async function fetchPhoneInteractionSources(credentials, phoneNumber, per
  */
 export async function enrichCallerType(query, userId, phoneNumber, currentCallId = null) {
   if (!phoneNumber) {
-    return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
+    return { callerType: 'new', activeClientId: null, journeyId: null, callSequence: 1, previousCalls: [] };
   }
 
   const normalized = normalizePhoneNumber(phoneNumber);
   if (!normalized || normalized.length < 7) {
-    return { callerType: 'new', activeClientId: null, callSequence: 1, previousCalls: [] };
+    return { callerType: 'new', activeClientId: null, journeyId: null, callSequence: 1, previousCalls: [] };
   }
 
-  // 1. Check active_clients for exact phone match
+  // 1. Check active_clients for exact phone match (active clients = current customers)
   const clientResult = await query(
     `SELECT id, client_name, client_email, status 
      FROM active_clients 
      WHERE owner_user_id = $1 
        AND client_phone IS NOT NULL 
        AND REGEXP_REPLACE(client_phone, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')
-       AND (archived_at IS NULL OR archived_at > NOW())
+     ORDER BY archived_at NULLS FIRST, created_at DESC
      LIMIT 1`,
     [userId, normalized]
   );
 
-  // 2. Get previous calls from this phone number
+  // 2. Check client_journeys for phone match (both active and archived journeys)
+  const journeyResult = await query(
+    `SELECT cj.id, cj.client_name, cj.client_phone, cj.status, cj.archived_at,
+            ac.id as active_client_id, ac.client_name as active_client_name
+     FROM client_journeys cj
+     LEFT JOIN active_clients ac ON cj.active_client_id = ac.id
+     WHERE cj.owner_user_id = $1 
+       AND cj.client_phone IS NOT NULL 
+       AND REGEXP_REPLACE(cj.client_phone, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')
+     ORDER BY cj.archived_at NULLS FIRST, cj.created_at DESC
+     LIMIT 1`,
+    [userId, normalized]
+  );
+
+  // 3. Get previous calls from this phone number
   let callFilter = `owner_user_id = $1 
     AND from_number IS NOT NULL 
     AND REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') = REGEXP_REPLACE($2, '[^0-9]', '', 'g')`;
@@ -949,22 +973,53 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
   const previousCalls = previousCallsResult?.rows || [];
   const callSequence = previousCalls.length + 1;
 
-  // 3. Determine caller type
-  if (clientResult?.rows?.length > 0) {
-    const client = clientResult.rows[0];
+  // 4. Determine caller type based on matches
+  const activeClient = clientResult?.rows?.[0];
+  const journey = journeyResult?.rows?.[0];
+
+  // Active client takes priority (they're a current customer)
+  if (activeClient && !activeClient.archived_at) {
     return {
-      callerType: 'returning_customer',
-      activeClientId: client.id,
-      activeClient: client,
+      callerType: 'active_client',
+      activeClientId: activeClient.id,
+      activeClient,
+      journeyId: journey?.id || null,
       callSequence,
       previousCalls
     };
   }
 
+  // Has a journey (active or archived) = returning customer
+  if (journey) {
+    return {
+      callerType: journey.archived_at ? 'returning_customer' : 'active_client',
+      activeClientId: journey.active_client_id || activeClient?.id || null,
+      activeClient: activeClient || null,
+      journeyId: journey.id,
+      journey,
+      callSequence,
+      previousCalls
+    };
+  }
+
+  // Archived active client = returning customer
+  if (activeClient?.archived_at) {
+    return {
+      callerType: 'returning_customer',
+      activeClientId: activeClient.id,
+      activeClient,
+      journeyId: null,
+      callSequence,
+      previousCalls
+    };
+  }
+
+  // Has previous calls but no journey/client = repeat caller
   if (previousCalls.length > 0) {
     return {
       callerType: 'repeat',
       activeClientId: null,
+      journeyId: null,
       callSequence,
       previousCalls
     };
@@ -973,6 +1028,7 @@ export async function enrichCallerType(query, userId, phoneNumber, currentCallId
   return {
     callerType: 'new',
     activeClientId: null,
+    journeyId: null,
     callSequence: 1,
     previousCalls: []
   };

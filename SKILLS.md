@@ -10,6 +10,20 @@ The Anchor Client Dashboard is a comprehensive CRM and client management platfor
 
 ---
 
+## 📚 Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | Project overview and quick start |
+| [docs/SETUP.md](docs/SETUP.md) | Development environment setup |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture and design patterns |
+| [docs/DATA_FLOWS.md](docs/DATA_FLOWS.md) | Business workflow documentation |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Complete API endpoint documentation |
+| [docs/SECURITY.md](docs/SECURITY.md) | Authentication and security architecture |
+| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Third-party integration guides |
+
+---
+
 ## 🎯 Core Capabilities
 
 ### 1. Lead Management (CTM Integration)
@@ -22,18 +36,22 @@ The Anchor Client Dashboard is a comprehensive CRM and client management platfor
 - Manual classification override capability
 
 **Lead Categories**
-| Category | Description | Star Rating |
-|----------|-------------|-------------|
-| `converted` | Agreed to purchase/book service | ⭐⭐⭐⭐⭐ |
-| `warm` | Promising lead interested in services | ⭐⭐⭐ |
-| `very_hot` | Ready to book/buy now | ⭐⭐⭐ |
-| `needs_attention` | Left voicemail requesting callback | ⭐⭐⭐ |
-| `voicemail` | Voicemail with no actionable details | — |
-| `unanswered` | No conversation occurred | — |
-| `not_a_fit` | Not a fit for services | ⭐⭐ |
-| `spam` | Telemarketer, robocall, irrelevant | ⭐ |
-| `neutral` | General inquiry, unclear intent | — |
-| `applicant` | Job/employment inquiry only | — |
+
+> **Note:** The `converted` category is **manual only** - it is not assigned by AI classification. It is set when a user marks a lead as 5 stars or uses "Agreed to Service".
+
+| Category | Description | Star Rating | AI-Assigned? |
+|----------|-------------|-------------|--------------|
+| `converted` | Agreed to purchase/book service | ⭐⭐⭐⭐⭐ | ❌ Manual only |
+| `warm` | Promising lead interested in services | ⭐⭐⭐ | ✅ |
+| `very_good` | Ready to book/buy now | ⭐⭐⭐⭐ | ✅ |
+| `needs_attention` | Left voicemail requesting callback | ⭐⭐⭐ | ✅ |
+| `voicemail` | Voicemail with no actionable details | — | ✅ |
+| `unanswered` | No conversation occurred | — | ✅ |
+| `not_a_fit` | Not a fit for services | ⭐⭐ | ✅ |
+| `spam` | Telemarketer, robocall, irrelevant | ⭐ | ✅ |
+| `neutral` | General inquiry, unclear intent | — | ✅ |
+| `applicant` | Job/employment inquiry only | — | ✅ |
+| `unreviewed` | Default state, not yet classified | — | ✅ (default) |
 
 **Lead Features**
 
@@ -46,6 +64,7 @@ The Anchor Client Dashboard is a comprehensive CRM and client management platfor
 - Saved filter views
 - CSV export
 - Pipeline stage management
+- **Reclassify Leads**: Admin feature to re-run AI classification on existing leads without re-fetching from CTM (visible in leads list when admin is in client view mode)
 
 ---
 
@@ -1456,4 +1475,21 @@ Global application settings (key-value).
 
 ---
 
-_Last updated: January 2026 (Security infrastructure added: sessions, MFA, audit logging)_
+## Quick Links
+
+- **Get Started**: [README.md](README.md) | [docs/SETUP.md](docs/SETUP.md)
+- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **APIs**: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+- **Security**: [docs/SECURITY.md](docs/SECURITY.md)
+- **Integrations**: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
+- **Workflows**: [docs/DATA_FLOWS.md](docs/DATA_FLOWS.md)
+
+---
+
+_Last updated: January 2026_
+
+**Recent updates:**
+- Documentation suite added (README, SETUP, ARCHITECTURE, DATA_FLOWS, API_REFERENCE, SECURITY, INTEGRATIONS)
+- Lead categories: `converted` is now manual-only (not AI-assigned)
+- Reclassify Leads feature added for admins
+- Security infrastructure: sessions, MFA, audit logging
