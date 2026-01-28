@@ -34,10 +34,6 @@ export function login(payload) {
   return request('/auth/login', { method: 'POST', body: payload });
 }
 
-export function register(payload) {
-  return request('/auth/register', { method: 'POST', body: payload });
-}
-
 export function refreshSession() {
   return request('/auth/refresh', { method: 'POST' });
 }

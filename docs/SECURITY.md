@@ -26,7 +26,7 @@ This document describes the authentication, authorization, and security infrastr
 8. [Rate Limiting](#rate-limiting)
 9. [Security Headers](#security-headers)
 10. [Audit Logging](#audit-logging)
-11. [OAuth Integration](#oauth-integration)
+11. [OAuth Integration (Business Integrations Only)](#oauth-integration-business-integrations-only)
 
 ---
 
@@ -51,7 +51,6 @@ The security architecture is designed around these principles:
 | Rate Limiting | `server/services/security/rateLimit.js` | Brute force protection |
 | Audit Logging | `server/services/security/audit.js` | Security event logging |
 | Device Tracking | `server/services/security/deviceFingerprint.js` | Device identification |
-| OAuth | `server/services/security/oauth.js` | Google/Microsoft login |
 
 ---
 
@@ -539,64 +538,56 @@ await logSecurityEvent({
 
 ---
 
-## OAuth Integration
+## OAuth Integration (Business Integrations Only)
+
+> **Note**: OAuth is used ONLY for connecting client business accounts to external services (Google Business Profile, Facebook, etc.). User authentication is handled exclusively via username/password + MFA for HIPAA compliance.
 
 ### Supported Providers
 
 | Provider | Use Case |
 |----------|----------|
-| Google | User login, Google Business Profile |
-| Microsoft | User login, Microsoft 365 |
+| Google | Google Business Profile management |
 | Facebook | Business page management |
 | Instagram | Business account management |
 | TikTok | Business account management |
 | WordPress | Blog publishing |
 
-### OAuth Login Flow
+### Integration OAuth Service
+
+OAuth for integrations is handled by `server/services/oauthIntegration.js` with routes in `server/routes/hub.js`.
+
+### Integration OAuth Flow
 
 ```mermaid
 sequenceDiagram
-    participant User
+    participant Admin
     participant App
     participant Provider as OAuth Provider
     participant DB
 
-    User->>App: Click "Sign in with Google"
+    Admin->>App: Click "Connect Google Business"
     App->>App: Generate state + PKCE verifier
-    App->>App: Store in HTTP-only cookies
-    App->>User: Redirect to provider auth URL
+    App->>App: Store in HTTP-only cookies (oauth_int_* prefix)
+    App->>Admin: Redirect to provider auth URL
 
-    User->>Provider: Authorize
+    Admin->>Provider: Authorize business access
     Provider->>App: Callback with code
 
     App->>App: Verify state from cookie
     App->>Provider: Exchange code for tokens
-    Provider->>App: { access_token, id_token }
+    Provider->>App: { access_token, refresh_token }
 
-    App->>Provider: Fetch user profile
-    Provider->>App: { email, name, picture }
-
-    App->>DB: Find or create user
-    App->>DB: Link OAuth identity
-    App->>App: Create session (no MFA required)
-    App->>User: Redirect to dashboard
+    App->>DB: Store connection in oauth_connections
+    App->>Admin: Redirect to integrations page
 ```
-
-### OAuth State Management
-
-PKCE (Proof Key for Code Exchange) is used:
-1. Generate random `code_verifier`
-2. Hash to create `code_challenge`
-3. Store verifier in HTTP-only cookie
-4. Send challenge in auth request
-5. Send verifier in token exchange
 
 ### OAuth Security Considerations
 
-- OAuth users skip app-level MFA (provider handles 2FA)
-- Tokens are encrypted before storage
+- Integration tokens are stored separately from user auth
+- Tokens are encrypted before storage in `oauth_connections` table
 - Refresh tokens are rotated when possible
-- Failed refreshes fall back to re-authorization
+- Failed refreshes prompt re-authorization
+- PKCE (Proof Key for Code Exchange) protects all OAuth flows
 
 ---
 

@@ -82,16 +82,6 @@ export function AuthProvider({ children }) {
         setImpersonator(null);
         updateActingClient(null);
       },
-      register: async (payload) => {
-        const res = await authApi.register(payload);
-        if (res?.accessToken) {
-          setAccessToken(res.accessToken);
-        }
-        setUser(res.user || null);
-        setImpersonator(null);
-        updateActingClient(null);
-        return res.user;
-      },
       impersonate: async (userId) => {
         const res = await authApi.impersonate(userId);
         if (res?.accessToken) {

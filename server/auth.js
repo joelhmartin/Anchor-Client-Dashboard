@@ -47,7 +47,6 @@ import {
   hasPendingChallenge,
   resendOtp,
   getMfaSettings,
-  enableEmailOtp,
   // Device
   extractDeviceInfo,
   trustDevice,
@@ -59,15 +58,6 @@ import {
   SecurityEventCategories,
   logLoginAttempt
 } from './services/security/index.js';
-import {
-  buildAuthUrl,
-  createCodeChallenge,
-  createCodeVerifier,
-  createOauthState,
-  exchangeCodeForTokens,
-  fetchProviderProfile,
-  getOauthConfig
-} from './services/security/oauth.js';
 import { isMailgunConfigured, sendMailgunMessageWithLogging } from './services/mailgun.js';
 import { getEffectiveRole } from './utils/roles.js';
 
@@ -90,19 +80,6 @@ const userSchema = z.object({
   onboarding_completed_at: z.preprocess(dateToString, z.string().optional().nullable()),
   activated_at: z.preprocess(dateToString, z.string().optional().nullable()),
   created_at: z.preprocess(dateToString, z.string())
-});
-
-const nameSchema = z
-  .string()
-  .min(1, 'Required')
-  .max(60, 'Too long')
-  .regex(/^[^<>]+$/, 'Invalid characters');
-
-const registerSchema = z.object({
-  firstName: nameSchema,
-  lastName: nameSchema,
-  email: z.string().email(),
-  password: z.string().min(12, 'Password must be at least 12 characters')
 });
 
 const loginSchema = z.object({
@@ -138,13 +115,8 @@ const emailVerificationSchema = z.object({
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 const IMPERSONATOR_COOKIE = 'impersonator';
-const OAUTH_STATE_PREFIX = 'oauth_state_';
-const OAUTH_VERIFIER_PREFIX = 'oauth_verifier_';
-const OAUTH_RETURN_PREFIX = 'oauth_return_';
 const REFRESH_COOKIE_MAX_AGE = 1000 * 60 * 60 * 24 * 30; // 30 days
 const PASSWORD_RESET_TTL_MINUTES = parseInt(process.env.PASSWORD_RESET_TTL_MINUTES || '60', 10);
-const OAUTH_COOKIE_MAX_AGE = 1000 * 60 * 10; // 10 minutes
-const OAUTH_PROVIDERS = new Set(['google', 'microsoft']);
 
 function setRefreshCookie(res, token) {
   const isProd = process.env.NODE_ENV === 'production';
@@ -171,23 +143,6 @@ function setImpersonatorCookie(res, userId) {
 function clearAuthCookies(res) {
   res.clearCookie(REFRESH_COOKIE_NAME, { httpOnly: true, sameSite: 'lax', path: '/' });
   res.clearCookie(IMPERSONATOR_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/' });
-}
-
-function setOauthCookie(res, name, value) {
-  const isProd = process.env.NODE_ENV === 'production';
-  res.cookie(name, value, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'lax' : 'lax',
-    maxAge: OAUTH_COOKIE_MAX_AGE,
-    path: '/api/auth/oauth'
-  });
-}
-
-function clearOauthCookies(res, provider) {
-  res.clearCookie(`${OAUTH_STATE_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
-  res.clearCookie(`${OAUTH_VERIFIER_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
-  res.clearCookie(`${OAUTH_RETURN_PREFIX}${provider}`, { httpOnly: true, sameSite: 'lax', path: '/api/auth/oauth' });
 }
 
 // ============================================================================
@@ -224,12 +179,6 @@ function resolveAppBaseUrl(req) {
   return 'http://localhost:3000';
 }
 
-function getReturnPath(value) {
-  if (typeof value !== 'string') return '/';
-  if (!value.startsWith('/')) return '/';
-  return value;
-}
-
 async function findUserByEmail(email) {
   const { rows } = await query(
     `SELECT u.*, cp.onboarding_completed_at, cp.activated_at
@@ -252,69 +201,6 @@ async function findUserById(id) {
     [id]
   );
   return rows[0] || null;
-}
-
-async function upsertOauthIdentity(provider, profile) {
-  const normalizedEmail = profile.email.toLowerCase();
-
-  const { rows: identityRows } = await query(
-    `SELECT id, user_id FROM user_oauth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1`,
-    [provider, profile.providerUserId]
-  );
-
-  if (identityRows.length > 0) {
-    const identity = identityRows[0];
-    await query(
-      `UPDATE user_oauth_identities
-       SET provider_email = $1,
-           provider_email_verified = $2,
-           provider_name = $3,
-           provider_picture = $4,
-           last_login_at = NOW()
-       WHERE id = $5`,
-      [normalizedEmail, profile.emailVerified, profile.name || null, profile.picture || null, identity.id]
-    );
-
-    return identity.user_id;
-  }
-
-  const { rows: userRows } = await query(`SELECT * FROM users WHERE email = $1 LIMIT 1`, [normalizedEmail]);
-
-  let userId = userRows[0]?.id;
-  if (!userId) {
-    const firstName = profile.firstName || profile.name?.split(' ')[0] || 'User';
-    const lastName = profile.lastName || profile.name?.split(' ').slice(1).join(' ') || '';
-    const { rows } = await query(
-      `INSERT INTO users (first_name, last_name, email, password_hash, role, auth_provider, email_verified_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
-       RETURNING id`,
-      [firstName, lastName || 'User', normalizedEmail, null, 'client', provider]
-    );
-    userId = rows[0].id;
-  } else {
-    await query(
-      `UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = $1`,
-      [userId]
-    );
-  }
-
-  await query(
-    `INSERT INTO user_oauth_identities (
-      user_id, provider, provider_user_id, provider_email, provider_email_verified,
-      provider_name, provider_picture, created_at, last_login_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
-    [
-      userId,
-      provider,
-      profile.providerUserId,
-      normalizedEmail,
-      profile.emailVerified,
-      profile.name || null,
-      profile.picture || null
-    ]
-  );
-
-  return userId;
 }
 
 async function pruneExpiredResetTokens(userId) {
@@ -475,137 +361,6 @@ If you did not request this, you can safely ignore this email.`,
 // ============================================================================
 
 /**
- * GET /api/auth/oauth/:provider
- * Begin OAuth login flow (Google/Microsoft)
- */
-router.get('/oauth/:provider', async (req, res) => {
-  try {
-    const provider = String(req.params.provider || '').toLowerCase();
-    if (!OAUTH_PROVIDERS.has(provider)) {
-      return res.status(404).json({ message: 'Provider not supported', code: 'OAUTH_PROVIDER_NOT_SUPPORTED' });
-    }
-
-    const baseUrl = resolveAppBaseUrl(req);
-    const redirectUri = `${baseUrl}/api/auth/oauth/${provider}/callback`;
-    const config = getOauthConfig(provider, redirectUri);
-
-    if (!config?.clientId || !config?.clientSecret) {
-      const loginRedirect = `${baseUrl}/pages/login?oauth=not_configured`;
-      const accept = req.headers.accept || '';
-      console.warn(`[oauth:start] Missing ${provider} OAuth env vars`);
-      if (accept.includes('text/html')) {
-        return res.redirect(loginRedirect);
-      }
-      return res.status(500).json({ message: 'OAuth not configured', code: 'OAUTH_NOT_CONFIGURED' });
-    }
-
-    const state = createOauthState();
-    const codeVerifier = createCodeVerifier();
-    const codeChallenge = createCodeChallenge(codeVerifier);
-    const returnTo = getReturnPath(req.query.returnTo);
-
-    setOauthCookie(res, `${OAUTH_STATE_PREFIX}${provider}`, state);
-    setOauthCookie(res, `${OAUTH_VERIFIER_PREFIX}${provider}`, codeVerifier);
-    setOauthCookie(res, `${OAUTH_RETURN_PREFIX}${provider}`, returnTo);
-
-    const authUrl = buildAuthUrl(provider, config, { state, codeChallenge });
-    res.redirect(authUrl);
-  } catch (err) {
-    console.error('[oauth:start]', err);
-    res.status(500).json({ message: 'Unable to start OAuth flow', code: 'OAUTH_START_FAILED' });
-  }
-});
-
-/**
- * GET /api/auth/oauth/:provider/callback
- * OAuth provider callback
- */
-router.get('/oauth/:provider/callback', async (req, res) => {
-  const provider = String(req.params.provider || '').toLowerCase();
-  console.log(`[oauth:callback:${provider}] Starting callback handler`);
-  
-  if (!OAUTH_PROVIDERS.has(provider)) {
-    return res.status(404).json({ message: 'Provider not supported', code: 'OAUTH_PROVIDER_NOT_SUPPORTED' });
-  }
-
-  const baseUrl = resolveAppBaseUrl(req);
-  const loginRedirect = `${baseUrl}/pages/login`;
-
-  try {
-    const { code, state } = req.query;
-    console.log(`[oauth:callback:${provider}] code=${code ? 'present' : 'missing'}, state=${state ? 'present' : 'missing'}`);
-    
-    if (!code || !state) {
-      console.log(`[oauth:callback:${provider}] Missing code or state, redirecting with missing_code`);
-      return res.redirect(`${loginRedirect}?oauth=missing_code`);
-    }
-
-    const expectedState = req.cookies?.[`${OAUTH_STATE_PREFIX}${provider}`];
-    const codeVerifier = req.cookies?.[`${OAUTH_VERIFIER_PREFIX}${provider}`];
-    const returnTo = getReturnPath(req.cookies?.[`${OAUTH_RETURN_PREFIX}${provider}`]);
-    
-    console.log(`[oauth:callback:${provider}] expectedState=${expectedState ? 'present' : 'missing'}, codeVerifier=${codeVerifier ? 'present' : 'missing'}, returnTo=${returnTo}`);
-
-    clearOauthCookies(res, provider);
-
-    if (!expectedState || expectedState !== state || !codeVerifier) {
-      console.log(`[oauth:callback:${provider}] State mismatch or missing verifier. expected=${expectedState}, received=${state}`);
-      return res.redirect(`${loginRedirect}?oauth=state_mismatch`);
-    }
-
-    const redirectUri = `${baseUrl}/api/auth/oauth/${provider}/callback`;
-    const config = getOauthConfig(provider, redirectUri);
-    if (!config?.clientId || !config?.clientSecret) {
-      return res.redirect(`${loginRedirect}?oauth=not_configured`);
-    }
-
-    console.log(`[oauth:callback:${provider}] Exchanging code for tokens...`);
-    const tokens = await exchangeCodeForTokens(provider, config, code, codeVerifier);
-    console.log(`[oauth:callback:${provider}] Got tokens, fetching profile...`);
-    const profile = await fetchProviderProfile(provider, tokens);
-    console.log(`[oauth:callback:${provider}] Profile: email=${profile.email}, verified=${profile.emailVerified}`);
-
-    if (!profile.email || !profile.emailVerified) {
-      console.log(`[oauth:callback:${provider}] Email not verified, redirecting`);
-      return res.redirect(`${loginRedirect}?oauth=email_unverified`);
-    }
-
-    console.log(`[oauth:callback:${provider}] Upserting OAuth identity...`);
-    const userId = await upsertOauthIdentity(provider, profile);
-    console.log(`[oauth:callback:${provider}] User ID: ${userId}`);
-    const user = await findUserById(userId);
-
-    const deviceInfo = extractDeviceInfo(req);
-    console.log(`[oauth:callback:${provider}] Creating session...`);
-    const session = await createAuthenticatedSession(user, deviceInfo, {
-      ipAddress: getClientIp(req),
-      userAgent: req.headers['user-agent']
-    });
-    console.log(`[oauth:callback:${provider}] Session created, setting cookies...`);
-
-    setRefreshCookie(res, session.refreshToken);
-    setImpersonatorCookie(res, '');
-
-    await logSecurityEvent({
-      userId: user.id,
-      eventType: SecurityEventTypes.OAUTH_LOGIN,
-      eventCategory: SecurityEventCategories.OAUTH,
-      ipAddress: getClientIp(req),
-      userAgent: req.headers['user-agent'],
-      deviceId: deviceInfo.deviceId,
-      success: true,
-      details: { provider }
-    });
-
-    console.log(`[oauth:callback:${provider}] Success! Redirecting to ${baseUrl}${returnTo}`);
-    res.redirect(`${baseUrl}${returnTo}`);
-  } catch (err) {
-    console.error('[oauth:callback]', err);
-    res.redirect(`${loginRedirect}?oauth=failed`);
-  }
-});
-
-/**
  * GET /api/auth/me
  * Get current user from access token (via Authorization header)
  */
@@ -643,83 +398,6 @@ router.get('/me', async (req, res) => {
   } catch (err) {
     console.error('[auth/me]', err);
     res.status(401).json({ message: 'Session expired or invalid', code: 'SESSION_ERROR' });
-  }
-});
-
-/**
- * POST /api/auth/register
- * Register a new user account
- */
-router.post('/register', loginRateLimiter(), async (req, res) => {
-  try {
-    const payload = registerSchema.parse(req.body);
-
-    // Validate password strength
-    const passwordValidation = validatePassword(payload.password, {
-      email: payload.email,
-      firstName: payload.firstName,
-      lastName: payload.lastName
-    });
-
-    if (!passwordValidation.valid) {
-      return res.status(400).json({
-        message: passwordValidation.errors[0],
-        errors: passwordValidation.errors,
-        code: 'WEAK_PASSWORD'
-      });
-    }
-
-    const existing = await findUserByEmail(payload.email);
-    if (existing) {
-      return res.status(409).json({ message: 'Email already in use', code: 'EMAIL_EXISTS' });
-    }
-
-    // Hash password with Argon2
-    const passwordHash = await hashPassword(payload.password);
-
-    const { rows } = await query(
-      `INSERT INTO users (first_name, last_name, email, password_hash, role, auth_provider)
-       VALUES ($1, $2, $3, $4, $5, 'local') RETURNING *`,
-      [payload.firstName.trim(), payload.lastName.trim(), payload.email.toLowerCase(), passwordHash, 'client']
-    );
-
-    const user = rows[0];
-
-    // Enable email OTP by default for password users
-    await enableEmailOtp(user.id);
-
-    const ipAddress = getClientIp(req);
-
-    // Send email verification
-    const appBaseUrl = resolveAppBaseUrl(req);
-    const { token } = await createEmailVerificationToken(user.id, user.email);
-    const { verifyUrl } = await sendEmailVerificationEmail(user, token, appBaseUrl);
-
-    // Clear rate limits on successful registration
-    await clearRateLimit('login_ip', ipAddress);
-    await clearRateLimit('login_user', payload.email.toLowerCase());
-
-    await logSecurityEvent({
-      userId: user.id,
-      eventType: SecurityEventTypes.ACCOUNT_CREATED,
-      eventCategory: SecurityEventCategories.ACCOUNT,
-      ipAddress,
-      userAgent: req.headers['user-agent'],
-      success: true,
-      details: { authProvider: 'local' }
-    });
-
-    res.status(201).json({
-      message: 'Account created. Please verify your email before signing in.',
-      email: user.email,
-      ...(isMailgunConfigured() || process.env.NODE_ENV === 'production' ? {} : { verifyUrl })
-    });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.issues[0]?.message || 'Invalid payload', code: 'VALIDATION_ERROR' });
-    }
-    console.error('[register]', err);
-    res.status(500).json({ message: 'Unable to register right now', code: 'SERVER_ERROR' });
   }
 });
 

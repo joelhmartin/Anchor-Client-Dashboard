@@ -52,11 +52,7 @@ export default function AuthLogin() {
     } else if (params.get('verified') === '0') {
       setInfoMessage('Verification link expired or invalid. Request a new email.');
     }
-    if (params.has('oauth')) {
-      setInfoMessage('OAuth sign-in failed. Please try again.');
-    }
   }, [location.search]);
-  const oauthBase = import.meta.env.VITE_APP_API_BASE || '/api';
   const handleClickShowPassword = () => {
     setShowPassword(!showPassword);
   };
@@ -139,31 +135,6 @@ export default function AuthLogin() {
         <Typography variant="caption" color="text.secondary">
           {infoMessage}
         </Typography>
-      ) : null}
-
-      {!mfaChallenge ? (
-        <>
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={() => {
-              const returnTo = location.state?.from?.pathname || '/';
-              window.location.href = `${oauthBase}/auth/oauth/google?returnTo=${encodeURIComponent(returnTo)}`;
-            }}
-          >
-            Continue with Google
-          </Button>
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={() => {
-              const returnTo = location.state?.from?.pathname || '/';
-              window.location.href = `${oauthBase}/auth/oauth/microsoft?returnTo=${encodeURIComponent(returnTo)}`;
-            }}
-          >
-            Continue with Microsoft
-          </Button>
-        </>
       ) : null}
 
       {mfaChallenge ? (

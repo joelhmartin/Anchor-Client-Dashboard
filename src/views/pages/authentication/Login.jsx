@@ -1,7 +1,4 @@
-import { Link } from 'react-router-dom';
-
 import useMediaQuery from '@mui/material/useMediaQuery';
-import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
@@ -42,12 +39,6 @@ export default function Login() {
                 <Box sx={{ width: 1 }}>
                   <AuthLogin />
                 </Box>
-                <Divider sx={{ width: 1 }} />
-                <Stack sx={{ alignItems: 'center' }}>
-                  <Typography component={Link} to="/pages/register" variant="subtitle1" sx={{ textDecoration: 'none' }}>
-                    Don&apos;t have an account?
-                  </Typography>
-                </Stack>
               </Stack>
             </AuthCardWrapper>
           </Box>
